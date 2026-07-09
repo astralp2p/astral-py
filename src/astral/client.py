@@ -165,7 +165,7 @@ class Client:
     @property
     def apphost(self):
         if self._apphost is None:
-            from .protocols.apphost import Apphost
+            from .api.apphost import Apphost
 
             self._apphost = Apphost(self)
         return self._apphost
@@ -173,7 +173,7 @@ class Client:
     @property
     def dir(self):
         if self._dir is None:
-            from .protocols.dir import Dir
+            from .api.dir import Dir
 
             self._dir = Dir(self)
         return self._dir
@@ -181,7 +181,7 @@ class Client:
     @property
     def tree(self):
         if self._tree is None:
-            from .protocols.tree import Tree
+            from .api.tree import Tree
 
             self._tree = Tree(self)
         return self._tree
@@ -189,7 +189,7 @@ class Client:
     @property
     def crypto(self):
         if self._crypto is None:
-            from .protocols.crypto import Crypto
+            from .api.crypto import Crypto
 
             self._crypto = Crypto(self)
         return self._crypto
@@ -197,7 +197,7 @@ class Client:
     @property
     def objects(self):
         if self._objects is None:
-            from .protocols.objects import Objects
+            from .api.objects import Objects
 
             self._objects = Objects(self)
         return self._objects

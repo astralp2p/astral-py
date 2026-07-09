@@ -1,11 +1,16 @@
-"""Typed convenience wrappers around common astral protocols.
+"""The ``api`` package: typed per-protocol client helpers.
 
-Each helper is exposed as an attribute of :class:`~astral.client.Client`
+Each protocol lives in its own module (``api/apphost.py``, ``api/dir.py``, …);
+its helper is exposed as an attribute of :class:`~astral.client.Client`
 (``client.dir``, ``client.tree``, ``client.crypto``, ``client.objects``,
 ``client.apphost``). Helpers that return scalar common types work over every
 transport; helpers that return structured objects (e.g. ``apphost.access_token``)
 decode over both the binary channel (via the record registry) and the JSON
 transports (HTTP/WebSocket).
+
+Importing a protocol module fires its ``@register`` decorators, so this package
+doubles as the record-registration aggregator (the astral-go ``pub.go`` analogue):
+importing every submodule below makes their records decodable over binary IPC.
 """
 
 from __future__ import annotations

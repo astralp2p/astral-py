@@ -18,7 +18,7 @@ from astral.codec import BinaryReader, BinaryWriter
 from astral.payload import decode_payload
 from astral.record import Record
 from astral.registry import record_for, registered_types
-from astral.protocols.apphost import AccessToken  # importing registers the record
+from astral.api.apphost import AccessToken  # importing registers the record
 
 # A valid 33-byte (66-hex) compressed public key, from the docs examples.
 IDENTITY = "0282fee8775757cdd8fda8b220195f5b8611312cd145c5a1a3aa55df210e779b2c"
