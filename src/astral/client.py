@@ -53,6 +53,7 @@ class Client:
         self._tree = None
         self._crypto = None
         self._objects = None
+        self._ip = None
 
     # -- identity -----------------------------------------------------------
     @property
@@ -201,6 +202,14 @@ class Client:
 
             self._objects = Objects(self)
         return self._objects
+
+    @property
+    def ip(self):
+        if self._ip is None:
+            from .api.ip import Ip
+
+            self._ip = Ip(self)
+        return self._ip
 
     # -- lifecycle ----------------------------------------------------------
     def close(self) -> None:
