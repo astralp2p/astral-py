@@ -9,8 +9,8 @@ before changing wire code.
 
 Layered, transport-agnostic core with three interchangeable transports:
 
-- `codec.py` / `payload.py` / `objectid.py` / `encoding.py` / `messages.py` —
-  pure wire format (binary, JSON, text). No I/O.
+- `codec.py` / `payload.py` / `objectid.py` / `encoding.py` / `messages.py` /
+  `record.py` / `registry.py` — pure wire format (binary, JSON, text). No I/O.
 - `transport/base.py` — `Channel` (frames objects) and `Transport` ABCs.
 - `transport/session.py` — `ChannelTransport` implements the apphost session
   (handshake → query/register/attach) **once**; binary and WebSocket only
@@ -20,6 +20,14 @@ Layered, transport-agnostic core with three interchangeable transports:
 Key invariant: `Channel.recv()` returns a `messages.Message` for known
 `mod.apphost.*` control types and an `AstralObject` for everything else. Both
 the binary and WebSocket channels honour this via `messages.REGISTRY`.
+
+Structured records: `record.py`'s `Record` base carries a `(python_attr,
+wire_name, kind)` `FIELDS` schema and decodes over **both** framings — binary via
+`read_from`/`write_to` (dispatched from `payload.decode_payload` through the
+name-keyed `registry.py`) and JSON via `from_value(dict)`. `@register(type)` adds
+a record so binary decode yields a typed value instead of raw bytes (mirrors
+astral-go's Blueprints). This is how structured objects decode over binary IPC,
+not only over JSON.
 
 ## Two distinct framings (do not conflate)
 
@@ -33,8 +41,9 @@ the binary and WebSocket channels honour this via `messages.REGISTRY`.
 
 ## Transports & when each works
 
-- **binary** (`unix:`/`tcp:`) — canonical, full features. JSON-undecodable
-  structured results come back as raw bytes (no per-type schemas).
+- **binary** (`unix:`/`tcp:`) — canonical, full features. Structured results
+  decode to typed `Record`s when their type is registered (`registry.py`);
+  unregistered/unknown structured types still come back as raw bytes.
 - **websocket** (`ws://`) — full features, JSON envelopes (self-describing).
   Auto-injects `in=json&out=json`. Text-only: no raw-byte output ops.
 - **http** (`http://`) — request/response only; no input streaming, no serving.
@@ -69,4 +78,6 @@ examples (`00000003010203`, `0575696e743815`, etc.) — keep those exact.
 - stdlib only; no runtime deps. Sync API; serving uses daemon threads.
 - New protocol helpers go in `protocols/`, wrap `client.call*`, return Python
   values. Register them as lazy properties on `Client`.
+- Structured wire types are `Record` subclasses declaring `TYPE` + `FIELDS` and
+  decorated with `@register(type)`; they decode over binary and JSON alike.
 - `ack`/`eos` may appear as `astral.ack` / `astral.eos`; use `obj.is_ack/is_eos`.

@@ -4,7 +4,8 @@ Each helper is exposed as an attribute of :class:`~astral.client.Client`
 (``client.dir``, ``client.tree``, ``client.crypto``, ``client.objects``,
 ``client.apphost``). Helpers that return scalar common types work over every
 transport; helpers that return structured objects (e.g. ``apphost.access_token``)
-decode cleanly over the JSON transports (HTTP/WebSocket).
+decode over both the binary channel (via the record registry) and the JSON
+transports (HTTP/WebSocket).
 """
 
 from __future__ import annotations

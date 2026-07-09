@@ -20,6 +20,7 @@ from .codec import BinaryReader, BinaryWriter
 from .errors import EncodingError
 from .objectid import ObjectID
 from .objects import AstralObject
+from .registry import record_for
 
 __all__ = ["encode_payload", "decode_payload"]
 
@@ -137,6 +138,13 @@ def decode_payload(obj_type: str, payload: bytes) -> Any:
     if obj_type == "object":
         inner_type = reader.string8()
         return AstralObject(inner_type, decode_payload(inner_type, reader.remaining()))
+
+    # Registered structured type: decode it to a typed Record over the binary
+    # channel (``reader`` is positioned at the start of the payload). This is
+    # what lets structured objects decode over binary IPC, not only over JSON.
+    record_cls = record_for(obj_type)
+    if record_cls is not None:
+        return record_cls.read_from(reader)
 
     # Unknown/structured type: hand back the raw payload bytes.
     return payload
