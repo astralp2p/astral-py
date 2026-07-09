@@ -76,8 +76,9 @@ examples (`00000003010203`, `0575696e743815`, etc.) — keep those exact.
 ## Conventions
 
 - stdlib only; no runtime deps. Sync API; serving uses daemon threads.
-- New protocol helpers go in `protocols/`, wrap `client.call*`, return Python
-  values. Register them as lazy properties on `Client`.
+- New protocol helpers go in `api/` (one module per protocol, e.g. `api/dir.py`),
+  wrap `client.call*`, return Python values, and attach as lazy properties on
+  `Client`. Importing `api/<p>.py` registers that protocol's records.
 - Structured wire types are `Record` subclasses declaring `TYPE` + `FIELDS` and
   decorated with `@register(type)`; they decode over binary and JSON alike.
 - `ack`/`eos` may appear as `astral.ack` / `astral.eos`; use `obj.is_ack/is_eos`.
