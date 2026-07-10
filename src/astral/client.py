@@ -43,7 +43,7 @@ class Client:
     Construct one with :func:`connect`. The client routes outbound queries and,
     on the binary/WebSocket transports, serves inbound ones. Protocol helpers
     are available as attributes (``client.dir``, ``client.tree``,
-    ``client.crypto``, ``client.objects``, ``client.apphost``).
+    ``client.crypto``, ``client.objects``, ``client.apphost``, ``client.user``).
     """
 
     def __init__(self, transport: Transport) -> None:
@@ -55,6 +55,7 @@ class Client:
         self._objects = None
         self._ip = None
         self._auth = None
+        self._user = None
 
     # -- identity -----------------------------------------------------------
     @property
@@ -219,6 +220,14 @@ class Client:
 
             self._auth = Auth(self)
         return self._auth
+
+    @property
+    def user(self):
+        if self._user is None:
+            from .api.user import User
+
+            self._user = User(self)
+        return self._user
 
     # -- lifecycle ----------------------------------------------------------
     def close(self) -> None:
