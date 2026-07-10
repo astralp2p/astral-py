@@ -21,11 +21,12 @@ attribute is snake_case (the friendly SDK API), the wire name is the PascalCase
 JSON/object key, and ``kind`` is either a scalar common-type tag (``common-types/``,
 the same vocabulary :mod:`astral.messages` uses for the apphost control messages) or
 a COMPOSITE tuple that recurses into an element/inner kind or nested :class:`Record`
-class — ``("array", elem_kind)``, ``("record", RecordClass)``, ``("bytes", nbits)``
-and ``("ptr", inner_kind)``. Composite kinds let structured astral-go objects with
-slices, embedded structs, byte fields and nullable pointers (``mod.auth.contract``,
-``mod.auth.signed_contract``, ``mod.crypto.signature``) decode over both framings;
-see the ``Kind`` note below for the exact wire layouts.
+class — ``("array", elem_kind)``, ``("record", RecordClass)``, ``("bytes", nbits)``,
+``("ptr", inner_kind)`` and the OPAQUE ``("bundle",)``. Composite kinds let structured
+astral-go objects with slices, embedded structs, byte fields, nullable pointers and
+opaque bundles (``mod.auth.contract``, ``mod.auth.signed_contract``,
+``mod.crypto.signature``, ``mod.auth.permit``) decode over both framings; see the
+``Kind`` note below for the exact wire layouts.
 """
 
 from __future__ import annotations
@@ -57,6 +58,12 @@ __all__ = ["Record"]
 # * ``("ptr", inner_kind)`` — a Go nullable pointer field: a ``bool`` presence flag
 #   (``0x01`` then the inner value, or a single ``0x00`` when nil), matching
 #   astral-go ``ptrValue``. JSON ``None`` means nil.
+# * ``("bundle",)`` — an OPAQUE ``astral.Bundle`` (astral-go ``astral/bundle.go``):
+#   ``uint32`` count then each contained object as a ``bytes32``-framed blob. This
+#   codec is a PASSTHROUGH: it preserves the framed blobs for a byte-exact
+#   round-trip but does NOT decode the inner objects (a faithful decode needs the
+#   whole Blueprint/registry path). The Python value is a ``list[bytes]`` of the raw
+#   per-object blobs; JSON carries the same list through unchanged.
 Kind = Union[str, tuple]
 
 # kind -> (BinaryWriter method, BinaryReader method) for the fixed-width integer
@@ -137,6 +144,13 @@ def _write_field(writer: BinaryWriter, kind: Kind, value: Any) -> None:
             else:
                 writer.u8(1)
                 _write_field(writer, inner_kind, value)
+        elif tag == "bundle":
+            # OPAQUE astral.Bundle: uint32(count) then each object as a
+            # bytes32-framed blob. Passthrough — each item is a raw blob.
+            items = value or []
+            writer.u32(len(items))
+            for blob in items:
+                writer.bytes32(blob)
         else:
             raise ProtocolError(f"record field: unknown composite kind {tag!r}")
         return
@@ -186,6 +200,11 @@ def _read_field(reader: BinaryReader, kind: Kind) -> Any:
             if reader.u8() == 0:
                 return None
             return _read_field(reader, kind[1])
+        if tag == "bundle":
+            # OPAQUE astral.Bundle: uint32(count) then each object as a
+            # bytes32-framed blob. Passthrough — return the raw blobs.
+            count = reader.u32()
+            return [reader.bytes32() for _ in range(count)]
         raise ProtocolError(f"record field: unknown composite kind {tag!r}")
     if kind in _INT_RW:
         return getattr(reader, _INT_RW[kind][1])()
@@ -220,6 +239,10 @@ def _field_from_json(kind: Kind, value: Any) -> Any:
             return _to_bytes(value) if value is not None else b""
         if tag == "ptr":
             return _field_from_json(kind[1], value) if value is not None else None
+        if tag == "bundle":
+            # OPAQUE passthrough: the inner objects are not decoded, so pass the
+            # list through as-is (missing -> empty list).
+            return list(value) if value is not None else []
         raise ProtocolError(f"record field: unknown composite kind {tag!r}")
     if kind in _INT_RW:
         return int(value) if value is not None else 0
@@ -243,6 +266,9 @@ def _field_to_json(kind: Kind, value: Any) -> Any:
             return base64.b64encode(_to_bytes(value)).decode("ascii")
         if tag == "ptr":
             return _field_to_json(kind[1], value) if value is not None else None
+        if tag == "bundle":
+            # OPAQUE passthrough: emit the list of blobs unchanged (see above).
+            return list(value) if value is not None else []
         raise ProtocolError(f"record field: unknown composite kind {tag!r}")
     return value
 

@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import astral
 from astral.api.apphost import AccessToken
+from astral.api.auth import Contract, Permit, SignedContract
+from astral.api.crypto import Signature
 from astral.messages import (
     AuthSuccessMsg,
     AuthTokenMsg,
@@ -38,6 +40,35 @@ HOST_ID = "02" + "ab" * 32
 ID_A = "03" + "cd" * 32
 BIND_TOKEN = "00112233aabbccdd"  # 16-hex nonce64
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+# The app-contract ops return mod.auth.contract / mod.auth.signed_contract objects;
+# now that api/auth.py registers those types, they decode to typed records over the
+# binary channel (apphost.py returns the decoded value verbatim). These builders
+# produce the wire bytes the mock node sends and the records the tests assert on.
+def _apphost_contract():
+    return Contract(
+        issuer=HOST_ID,
+        subject=ID_A,
+        permits=[Permit(action="mod.storage.read", constraints=None, delegation=0)],
+        expires_at=1927848000,
+    )
+
+
+def _apphost_signed():
+    return SignedContract(
+        contract=_apphost_contract(),
+        issuer_sig=Signature(scheme="asn1", data=b"\x01\x02\x03\x04"),
+        subject_sig=Signature(scheme="asn1", data=b"\x05\x06\x07\x08"),
+    )
+
+
+def _contract_bytes():
+    return _apphost_contract().encode_binary()
+
+
+def _signed_bytes():
+    return _apphost_signed().encode_binary()
 
 
 # ======================================================================
@@ -145,16 +176,16 @@ class ApphostMockNode:
             while ch.recv() is not None:  # hold the binding open until client closes
                 pass
         elif op == "apphost.new_app_contract":
-            ch.send(AstralObject("mod.auth.contract", b"\x01\x02contract"))
+            ch.send(AstralObject("mod.auth.contract", _contract_bytes()))
             ch.send(eos())
         elif op == "apphost.install_app":
-            ch.send(AstralObject("mod.auth.signed_contract", b"\x05\x06signed"))
+            ch.send(AstralObject("mod.auth.signed_contract", _signed_bytes()))
             ch.send(eos())
         elif op == "apphost.sign_app_contract":
             # The client sends exactly one contract object on the body (no eos,
             # matching the astral-go client); we read it, then reply.
             self.signed_input = ch.recv()
-            ch.send(AstralObject("mod.auth.signed_contract", b"\x03\x04signed"))
+            ch.send(AstralObject("mod.auth.signed_contract", _signed_bytes()))
             ch.send(eos())
         else:
             ch.send(eos())
@@ -269,25 +300,29 @@ class ApphostBinaryTest(unittest.TestCase):
                 self.assertTrue(self.node.bind_event.wait(timeout=5), "bind_msg not received")
                 self.assertEqual(self.node.bind_token, BIND_TOKEN)
 
-    # -- app contracts (untyped, Path A) ------------------------------------
-    def test_new_app_contract_untyped_bytes_over_binary(self):
+    # -- app contracts (now typed over binary via api/auth.py registration) --
+    # apphost.py is unchanged (returns call_one's value verbatim); the value is now
+    # a typed Contract / SignedContract because those types are registered.
+    def test_new_app_contract_typed_record_over_binary(self):
         with self.connect() as c:
             contract = c.apphost.new_app_contract(ID_A, duration="8760h")
-        self.assertEqual(contract, b"\x01\x02contract")
+        self.assertEqual(contract, _apphost_contract())
         self.assertIn(f"apphost.new_app_contract?id={ID_A}&duration=8760h", self.node.seen)
 
-    def test_install_app_untyped_bytes_over_binary(self):
+    def test_install_app_typed_record_over_binary(self):
         with self.connect() as c:
             signed = c.apphost.install_app(ID_A)
-        self.assertEqual(signed, b"\x05\x06signed")
+        self.assertEqual(signed, _apphost_signed())
 
     def test_sign_app_contract_sends_body_and_returns_signed(self):
+        contract = _apphost_contract()
         with self.connect() as c:
-            signed = c.apphost.sign_app_contract(b"mycontract")
-        self.assertEqual(signed, b"\x03\x04signed")
+            signed = c.apphost.sign_app_contract(contract.encode_binary())
+        self.assertEqual(signed, _apphost_signed())
         self.assertIsInstance(self.node.signed_input, AstralObject)
         self.assertEqual(self.node.signed_input.type, "mod.auth.contract")
-        self.assertEqual(self.node.signed_input.value, b"mycontract")
+        # The body crossed the wire as a mod.auth.contract; its bytes decode back.
+        self.assertEqual(Contract.from_value(self.node.signed_input.value), contract)
 
 
 # ======================================================================

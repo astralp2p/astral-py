@@ -27,7 +27,11 @@ wire_name, kind)` `FIELDS` schema and decodes over **both** framings — binary 
 name-keyed `registry.py`) and JSON via `from_value(dict)`. `@register(type)` adds
 a record so binary decode yields a typed value instead of raw bytes (mirrors
 astral-go's Blueprints). This is how structured objects decode over binary IPC,
-not only over JSON.
+not only over JSON. Sending is symmetric: a registered `Record` value wrapped in
+an `AstralObject` is encoded via `write_to` (binary, `payload.encode_payload`) or
+`encode_json` (`encoding.to_json_envelope`), so typed records can be sent, not
+just received. Beyond scalars, `FIELDS` kinds compose: `("array", …)`,
+`("record", …)`, `("bytes", n)`, `("ptr", …)`, and an opaque `("bundle",)`.
 
 ## Two distinct framings (do not conflate)
 

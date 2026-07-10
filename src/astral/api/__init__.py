@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..client import Client
 
-__all__ = ["Protocol", "Apphost", "Dir", "Tree", "Crypto", "Objects", "Ip"]
+__all__ = ["Protocol", "Apphost", "Dir", "Tree", "Crypto", "Objects", "Ip", "Auth"]
 
 
 class Protocol:
@@ -31,6 +31,7 @@ class Protocol:
 
 
 from .apphost import Apphost  # noqa: E402
+from .auth import Auth  # noqa: E402
 from .crypto import Crypto  # noqa: E402
 from .dir import Dir  # noqa: E402
 from .ip import Ip  # noqa: E402
