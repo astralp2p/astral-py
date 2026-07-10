@@ -3,7 +3,9 @@
 Exercises all 13 ops on the native binary transport (the target transport) —
 record decode over binary (list_tokens -> AccessToken, list_held_objects ->
 ObjectID), arg wiring, ack/error paths, the bind body-send — and adds JSON/ws
-parity tests for the transport-dependent Path-A app-contract ops (dict over JSON).
+parity tests for the app-contract ops, which now return typed Contract /
+SignedContract records over both transports (binary via the registry, JSON via
+from_value).
 """
 
 import base64
@@ -428,7 +430,8 @@ class ApphostWsMock:
                 self.signed_input = json.loads(ws.recv_text())  # the body contract
                 _ws_send(conn, {"Type": "mod.auth.signed_contract",
                                 "Object": {"Contract": self.signed_input.get("Object"),
-                                           "IssuerSig": "ed25519:AAA", "SubjectSig": "ed25519:BBB"}})
+                                           "IssuerSig": "ed25519:AQIDBA==",
+                                           "SubjectSig": "ed25519:BQYHCA=="}})
                 _ws_send(conn, {"Type": "eos", "Object": None})
             else:
                 _ws_send(conn, {"Type": "eos", "Object": None})
@@ -460,24 +463,29 @@ class ApphostJsonParityTest(unittest.TestCase):
         # over JSON, expires_at is the RFC3339 string (not the binary uint64)
         self.assertEqual(toks[0].expires_at, "2027-01-01T00:00:00Z")
 
-    def test_new_app_contract_returns_dict_over_json(self):
+    def test_new_app_contract_typed_record_over_json(self):
         with astral.connect(self.ws.url) as c:
             contract = c.apphost.new_app_contract(ID_A)
-        self.assertIsInstance(contract, dict)
-        self.assertEqual(contract["Issuer"], HOST_ID)
-        self.assertEqual(contract["Subject"], ID_A)
-        self.assertEqual(contract["Permits"], [])
+        self.assertIsInstance(contract, Contract)
+        self.assertEqual(contract.issuer, HOST_ID)
+        self.assertEqual(contract.subject, ID_A)
+        self.assertEqual(contract.permits, [])
+        # over JSON, expires_at is the RFC3339 string (not the binary uint64)
+        self.assertEqual(contract.expires_at, "2027-01-01T00:00:00Z")
 
-    def test_sign_app_contract_dict_body_and_return_over_json(self):
-        body = {"Issuer": HOST_ID, "Subject": ID_A, "Permits": [],
-                "ExpiresAt": "2027-01-01T00:00:00Z"}
+    def test_sign_app_contract_typed_body_and_return_over_json(self):
+        body = Contract(issuer=HOST_ID, subject=ID_A, permits=[],
+                        expires_at="2027-01-01T00:00:00Z")
         with astral.connect(self.ws.url) as c:
             signed = c.apphost.sign_app_contract(body)
-        self.assertIsInstance(signed, dict)
-        self.assertIn("IssuerSig", signed)
-        # the contract crossed the wire on the body as a mod.auth.contract object
+        self.assertIsInstance(signed, SignedContract)
+        self.assertEqual(signed.contract, body)
+        self.assertEqual(signed.issuer_sig, Signature(scheme="ed25519", data=b"\x01\x02\x03\x04"))
+        self.assertEqual(signed.subject_sig, Signature(scheme="ed25519", data=b"\x05\x06\x07\x08"))
+        # the contract crossed the wire on the body as a mod.auth.contract object,
+        # JSON-encoded from the typed record (the record send path)
         self.assertEqual(self.ws.signed_input["Type"], "mod.auth.contract")
-        self.assertEqual(self.ws.signed_input["Object"], body)
+        self.assertEqual(self.ws.signed_input["Object"], body.encode_json())
 
 
 if __name__ == "__main__":
