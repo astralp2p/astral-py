@@ -81,6 +81,10 @@ def encode_payload(obj_type: str, value: Any) -> bytes:
     if obj_type == "time":
         return writer.u64(int(value)).getvalue()
 
+    if obj_type == "duration":
+        # astral.Duration: signed int64 nanoseconds (distinct from unsigned time).
+        return writer.i64(int(value)).getvalue()
+
     if obj_type in _OBJECT_ID_TYPES:
         oid = value if isinstance(value, ObjectID) else ObjectID.parse(str(value))
         return oid.to_bytes()
@@ -137,6 +141,9 @@ def decode_payload(obj_type: str, payload: bytes) -> Any:
 
     if obj_type == "time":
         return reader.u64()
+
+    if obj_type == "duration":
+        return reader.i64()
 
     if obj_type in _OBJECT_ID_TYPES:
         return ObjectID(reader.u64(), reader.raw(32))

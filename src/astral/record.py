@@ -38,6 +38,8 @@ from typing import Any, ClassVar, Tuple, Union
 from .codec import BinaryReader, BinaryWriter
 from .errors import ProtocolError
 from .objectid import ObjectID
+from .objects import AstralObject
+from .registry import record_for
 
 __all__ = ["Record"]
 
@@ -64,6 +66,18 @@ __all__ = ["Record"]
 #   round-trip but does NOT decode the inner objects (a faithful decode needs the
 #   whole Blueprint/registry path). The Python value is a ``list[bytes]`` of the raw
 #   per-object blobs; JSON carries the same list through unchanged.
+# * ``("object",)`` / ``("object", allowed_set)`` — a POLYMORPHIC self-describing
+#   interface field (astral-go ``interfaceValue``): ``string8(type) ++ inner.WriteTo``
+#   with NO length prefix, so it is self-delimiting only because the concrete inner
+#   type knows its own length — which means a MID-STRUCT ``("object",)`` field can
+#   only decode when its inner type is registered (unlike the last-field-only
+#   ``payload.decode_payload`` path that can lean on ``remaining()``). ``nil`` is the
+#   empty type string, encoded as a single ``string8("") == 0x00``, so this kind is
+#   SELF-NULLING and must NOT be wrapped in ``("ptr", …)``. The Python value is an
+#   :class:`~astral.objects.AstralObject` ``(type, value)``; the inner ``value`` is a
+#   :class:`Record` (for a registered type) or raw ``bytes``. ``allowed_set`` (a set
+#   of accepted type strings) rejects out-of-set types. JSON is astral-go's
+#   ``JSONAdapter``: ``{"Type": <type>, "Object": <inner-json>}`` (``None`` for nil).
 Kind = Union[str, tuple]
 
 # kind -> (BinaryWriter method, BinaryReader method) for the fixed-width integer
@@ -115,9 +129,11 @@ def _elem_needs_presence(elem_kind: "Kind") -> bool:
 
     Mirrors astral-go's ``elemNeedsPresenceFlag`` (``objectify.go`` / ``slice_value.go``):
     value-kind elements get the byte; ``("ptr", …)`` elements frame themselves with
-    their own nil-flag and are exempt, so ``[]T`` and ``[]*T`` share one wire form.
+    their own nil-flag and ``("object", …)`` elements frame themselves with their own
+    type tag (both are exempt), so ``[]T``, ``[]*T`` and ``[]interface`` share one wire
+    form.
     """
-    return not (isinstance(elem_kind, tuple) and elem_kind[0] == "ptr")
+    return not (isinstance(elem_kind, tuple) and elem_kind[0] in ("ptr", "object"))
 
 
 def _write_field(writer: BinaryWriter, kind: Kind, value: Any) -> None:
@@ -151,6 +167,32 @@ def _write_field(writer: BinaryWriter, kind: Kind, value: Any) -> None:
             writer.u32(len(items))
             for blob in items:
                 writer.bytes32(blob)
+        elif tag == "object":
+            # POLYMORPHIC interfaceValue: string8(type) ++ inner.WriteTo, no length
+            # prefix. nil == string8("") == 0x00 (self-nulling).
+            if value is None:
+                writer.string8("")
+                return
+            if not isinstance(value, AstralObject):
+                raise ProtocolError(
+                    "'object' field requires an AstralObject value"
+                )
+            allowed = kind[1] if len(kind) > 1 else None
+            if allowed is not None and value.type not in allowed:
+                raise ProtocolError(
+                    f"'object' field: type {value.type!r} not in allowed set {sorted(allowed)}"
+                )
+            writer.string8(value.type)
+            inner = value.value
+            if isinstance(inner, Record):
+                inner.write_to(writer)
+            elif isinstance(inner, (bytes, bytearray)):
+                writer.raw(bytes(inner))
+            else:
+                raise ProtocolError(
+                    "'object' field: inner value must be a Record or raw bytes, "
+                    f"got {type(inner).__name__}"
+                )
         else:
             raise ProtocolError(f"record field: unknown composite kind {tag!r}")
         return
@@ -168,6 +210,10 @@ def _write_field(writer: BinaryWriter, kind: Kind, value: Any) -> None:
         # The ``time`` common type is encoded as a uint64 (as assumed in
         # astral.payload); the units are not yet confirmed against a live node.
         writer.u64(int(value or 0))
+    elif kind == "duration":
+        # astral.Duration is a SIGNED int64 of nanoseconds (distinct from the
+        # unsigned ``time``). Matches astral-go ``astral.Duration``.
+        writer.i64(int(value or 0))
     elif kind in _OBJECT_ID_KINDS:
         oid = value if isinstance(value, ObjectID) else ObjectID.parse(str(value))
         writer.raw(oid.to_bytes())
@@ -205,6 +251,27 @@ def _read_field(reader: BinaryReader, kind: Kind) -> Any:
             # bytes32-framed blob. Passthrough — return the raw blobs.
             count = reader.u32()
             return [reader.bytes32() for _ in range(count)]
+        if tag == "object":
+            # POLYMORPHIC interfaceValue: string8(type) ++ inner. nil == "".
+            inner_type = reader.string8()
+            if inner_type == "":
+                return None
+            allowed = kind[1] if len(kind) > 1 else None
+            if allowed is not None and inner_type not in allowed:
+                raise ProtocolError(
+                    f"'object' field: type {inner_type!r} not in allowed set {sorted(allowed)}"
+                )
+            record_cls = record_for(inner_type)
+            if record_cls is None:
+                # A mid-struct polymorphic field is self-delimiting only via the
+                # inner type's own length, so an unregistered inner type cannot be
+                # bounded here (unlike the last-field payload.decode_payload path,
+                # which can fall back on remaining()).
+                raise ProtocolError(
+                    f"'object' field: type {inner_type!r} not registered; a mid-struct "
+                    "polymorphic field needs its inner record registered to bound the read"
+                )
+            return AstralObject(inner_type, record_cls.read_from(reader))
         raise ProtocolError(f"record field: unknown composite kind {tag!r}")
     if kind in _INT_RW:
         return getattr(reader, _INT_RW[kind][1])()
@@ -218,6 +285,8 @@ def _read_field(reader: BinaryReader, kind: Kind) -> Any:
         return reader.nonce()
     if kind == "time":
         return reader.u64()
+    if kind == "duration":
+        return reader.i64()
     if kind in _OBJECT_ID_KINDS:
         return ObjectID(reader.u64(), reader.raw(32))
     raise ProtocolError(f"record field: cannot binary-decode kind {kind!r}")
@@ -243,8 +312,24 @@ def _field_from_json(kind: Kind, value: Any) -> Any:
             # OPAQUE passthrough: the inner objects are not decoded, so pass the
             # list through as-is (missing -> empty list).
             return list(value) if value is not None else []
+        if tag == "object":
+            # astral-go JSONAdapter: {"Type": <type>, "Object": <inner-json>}.
+            # nil -> None.
+            if value is None:
+                return None
+            if not isinstance(value, dict) or "Type" not in value:
+                raise ProtocolError(
+                    "'object' field: JSON must be a {'Type', 'Object'} object"
+                )
+            inner_type = value["Type"]
+            inner = value.get("Object")
+            record_cls = record_for(inner_type)
+            if record_cls is not None:
+                return AstralObject(inner_type, record_cls.from_value(inner))
+            # Unregistered inner type: keep the opaque JSON value.
+            return AstralObject(inner_type, inner)
         raise ProtocolError(f"record field: unknown composite kind {tag!r}")
-    if kind in _INT_RW:
+    if kind in _INT_RW or kind == "duration":
         return int(value) if value is not None else 0
     if kind == "bool":
         return bool(value)
@@ -269,6 +354,13 @@ def _field_to_json(kind: Kind, value: Any) -> Any:
         if tag == "bundle":
             # OPAQUE passthrough: emit the list of blobs unchanged (see above).
             return list(value) if value is not None else []
+        if tag == "object":
+            # astral-go JSONAdapter: {"Type": <type>, "Object": <inner-json>}.
+            if value is None:
+                return None
+            if isinstance(value.value, Record):
+                return {"Type": value.type, "Object": value.value.encode_json()}
+            return {"Type": value.type, "Object": value.value}
         raise ProtocolError(f"record field: unknown composite kind {tag!r}")
     return value
 
