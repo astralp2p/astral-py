@@ -56,6 +56,7 @@ class Client:
         self._ip = None
         self._auth = None
         self._user = None
+        self._services = None
 
     # -- identity -----------------------------------------------------------
     @property
@@ -228,6 +229,14 @@ class Client:
 
             self._user = User(self)
         return self._user
+
+    @property
+    def services(self):
+        if self._services is None:
+            from .api.services import Services
+
+            self._services = Services(self)
+        return self._services
 
     # -- lifecycle ----------------------------------------------------------
     def close(self) -> None:
