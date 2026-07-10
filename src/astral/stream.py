@@ -110,6 +110,38 @@ class Stream:
         """Read every object up to ``eos`` into a list."""
         return list(self)
 
+    def follow(self) -> Iterator[AstralObject]:
+        """Iterate a *follow-mode* op's objects across the snapshot separator.
+
+        Follow-mode ops (``tree.get`` with ``follow``, ``services.discover``
+        with ``follow``) send an initial snapshot, then a single ``eos`` that
+        acts as a snapshot/live *separator* — not a terminator — and then keep
+        streaming live updates on the same channel until it closes.
+
+        Unlike :meth:`__iter__` (which stops at the first ``eos`` and marks the
+        stream ended), this generator treats that first ``eos`` as a separator:
+        it does **not** stop and does **not** end the stream. It keeps yielding
+        objects until the channel closes (``recv`` returns ``None``) or the
+        caller breaks out. Like :meth:`results`, an ``error_message`` object
+        raises :class:`~astral.errors.RemoteError`.
+
+        The snapshot/live boundary is not surfaced here; a caller that needs it
+        can drain the snapshot with the default iterator first and then call
+        :meth:`follow` for the live tail (``recv`` past the first ``eos`` works
+        because this method reads the channel directly rather than through the
+        ``_ended`` gate).
+        """
+        while True:
+            item = self._channel.recv()
+            if item is None:  # channel closed: end of the follow stream
+                self._ended = True
+                return
+            obj = item.to_object() if isinstance(item, Message) else item
+            if obj.is_eos:  # separator, not a terminator — keep reading live updates
+                continue
+            obj.raise_for_error()
+            yield obj
+
     def value(self) -> Any:
         """Return the value of the first object (raising on ``error_message``).
 
