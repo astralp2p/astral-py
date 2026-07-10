@@ -32,6 +32,7 @@ __all__ = [
     "User",
     "Services",
     "Nodes",
+    "Nat",
     "TcpEndpoint",
     "TorEndpoint",
     "GatewayEndpoint",
@@ -51,6 +52,7 @@ from .crypto import Crypto  # noqa: E402
 from .dir import Dir  # noqa: E402
 from .exonet import GatewayEndpoint, TcpEndpoint, TorEndpoint  # noqa: E402,F401
 from .ip import Ip  # noqa: E402
+from .nat import Nat  # noqa: E402
 from .nodes import Nodes  # noqa: E402
 from .objects import Objects  # noqa: E402
 from .services import Services  # noqa: E402

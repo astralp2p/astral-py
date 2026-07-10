@@ -59,6 +59,7 @@ class Client:
         self._user = None
         self._services = None
         self._nodes = None
+        self._nat = None
 
     # -- identity -----------------------------------------------------------
     @property
@@ -247,6 +248,14 @@ class Client:
 
             self._nodes = Nodes(self)
         return self._nodes
+
+    @property
+    def nat(self):
+        if self._nat is None:
+            from .api.nat import Nat
+
+            self._nat = Nat(self)
+        return self._nat
 
     # -- lifecycle ----------------------------------------------------------
     def close(self) -> None:
