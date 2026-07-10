@@ -1,7 +1,7 @@
 # astral-py
 
 A Python client library for **astrald** — the node daemon of the
-[Astral Network](https://github.com/cryptopunkscc/astral-docs). It speaks the
+[Astral Network](https://github.com/astralp2p/astral-docs). It speaks the
 `apphost` IPC protocol so local apps and agents can route queries through the
 node, serve inbound queries for identities they own, read/write the config
 tree, resolve aliases, sign data, fetch objects, and more.

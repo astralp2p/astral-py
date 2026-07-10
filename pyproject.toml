@@ -22,7 +22,7 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Documentation = "https://github.com/cryptopunkscc/astral-docs"
+Documentation = "https://github.com/astralp2p/astral-docs"
 
 [project.scripts]
 astral-query = "astral.cli:main"
