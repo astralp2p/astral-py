@@ -54,6 +54,7 @@ class Client:
         self._crypto = None
         self._objects = None
         self._ip = None
+        self._auth = None
 
     # -- identity -----------------------------------------------------------
     @property
@@ -210,6 +211,14 @@ class Client:
 
             self._ip = Ip(self)
         return self._ip
+
+    @property
+    def auth(self):
+        if self._auth is None:
+            from .api.auth import Auth
+
+            self._auth = Auth(self)
+        return self._auth
 
     # -- lifecycle ----------------------------------------------------------
     def close(self) -> None:

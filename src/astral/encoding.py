@@ -139,6 +139,10 @@ def to_json_envelope(obj: AstralObject) -> dict:
     value = obj.value
     if obj.is_ack or obj.is_eos or value is None:
         return {"Type": obj.type, "Object": None}
+    if hasattr(value, "encode_json") and hasattr(value, "FIELDS"):
+        # A typed Record: serialize to its JSON value form — the send counterpart
+        # of Record.from_value on decode.
+        return {"Type": obj.type, "Object": value.encode_json()}
     if isinstance(value, (bytes, bytearray)):
         raise EncodingError(
             f"cannot JSON-encode raw bytes for type {obj.type!r}; "

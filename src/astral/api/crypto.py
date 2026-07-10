@@ -20,11 +20,57 @@ Two caveats apply to every op here:
 
 from __future__ import annotations
 
-from typing import Optional
+import base64
+from dataclasses import dataclass
+from typing import Any, Optional
 
+from ..record import Record
+from ..registry import register
 from . import Protocol
 
-__all__ = ["Crypto"]
+__all__ = ["Crypto", "Signature"]
+
+
+@register("mod.crypto.signature")
+@dataclass(frozen=True)
+class Signature(Record):
+    """A ``mod.crypto.signature`` object: a scheme tag plus opaque signature bytes.
+
+    Wire type ``mod.crypto.signature`` (astral-go ``api/crypto/signature.go``):
+    ``Scheme`` (string8), ``Data`` (bytes16). Via the :class:`~astral.record.Record`
+    base and the registry it decodes over the binary channel (``read_from`` /
+    ``write_to``) and the JSON transports (``from_value``) alike.
+
+    JSON ambiguity (flagged): a signature also has a compact TEXT form
+    ``"<scheme>:<base64>"`` — the same token the ``crypto`` string helpers pass
+    through. :meth:`from_value` therefore accepts BOTH the object form
+    (``{"Scheme": ..., "Data": ...}``) AND that plain ``str`` (split on the first
+    ``":"``, base64-decode the tail). Which form an op emits over JSON is
+    UNCONFIRMED against a live node.
+    """
+
+    TYPE = "mod.crypto.signature"
+    FIELDS = (
+        ("scheme", "Scheme", "string8"),
+        ("data", "Data", ("bytes", 16)),
+    )
+
+    scheme: str = ""
+    data: bytes = b""
+
+    @classmethod
+    def from_value(cls, value: Any) -> "Signature":
+        """Decode a signature from the object form OR the ``"scheme:base64"`` text.
+
+        Adds the compact-text case to the base :meth:`Record.from_value` (dict /
+        binary / passthrough): a plain ``str`` is split on the first ``":"`` and its
+        tail base64-decoded into :attr:`data` (an empty/``":"``-less string yields an
+        empty signature). Everything else defers to the base decoder.
+        """
+        if isinstance(value, str):
+            scheme, sep, b64 = value.partition(":")
+            return cls(scheme=scheme if sep else "", data=base64.b64decode(b64) if b64 else b"")
+        return super().from_value(value)
 
 
 class Crypto(Protocol):

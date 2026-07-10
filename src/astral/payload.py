@@ -93,6 +93,12 @@ def encode_payload(obj_type: str, value: Any) -> bytes:
             + encode_payload(value.type, value.value)
         )
 
+    # Registered structured type: encode a typed Record via its own write_to —
+    # the send counterpart of decode_payload's read_from dispatch.
+    record_cls = record_for(obj_type)
+    if record_cls is not None and isinstance(value, record_cls):
+        return value.encode_binary()
+
     # Unknown/structured type: accept pre-encoded raw bytes.
     if isinstance(value, (bytes, bytearray)):
         return bytes(value)
