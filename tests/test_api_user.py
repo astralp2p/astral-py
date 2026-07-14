@@ -12,11 +12,13 @@ Two layers, mirroring ``test_api_auth.py``:
   ``IssuerSig``) form astral-go marshals. The imported cross-protocol records
   (``Contract``/``SignedContract``/``Signature``) are exercised only as nested
   fields — they are NOT re-registered here (pinned below).
-* **Ops over a binary MockNode** — all 14 ops. Pins the swarm_status PLURAL type,
+* **Ops over a binary MockNode** — all 15 ops. Pins the swarm_status PLURAL type,
   the ``sync_assets`` NON-EOS terminator (a bare ``uint64`` ends the stream with no
   ``eos``; the explicit ``recv`` loop must stop on it), the ``accept_membership``
   2-send input body (contract THEN issuer signature, reply is the subject sig, no
-  ``eos``), and ``new_node_contract`` returning an UNSIGNED ``Contract``.
+  ``eos``), the ``accept_contract`` 1-send input body (a signed contract streamed
+  on the body then ``eos``, reply is a single ``ack``), and ``new_node_contract``
+  returning an UNSIGNED ``Contract``.
 
 Plus registry resolution for the five net-new types, and that the imported
 cross-protocol types keep their own record classes (no double-registration).
@@ -277,7 +279,7 @@ class RegistryTest(unittest.TestCase):
 # Ops over a binary MockNode
 # ======================================================================
 class UserMockNode:
-    """A minimal binary apphost server tailored to the 14 user ops."""
+    """A minimal binary apphost server tailored to the 15 user ops."""
 
     def __init__(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -287,6 +289,8 @@ class UserMockNode:
         self._stop = False
         self.seen = []  # every query string received
         self.accept_body = []  # objects streamed to accept_membership
+        self.accept_contract_body = None  # the signed contract streamed to accept_contract
+        self.accept_error = None  # when set, accept_contract streams this error_message
 
     @property
     def endpoint(self):
@@ -434,6 +438,18 @@ class UserMockNode:
             ch.send(AstralObject("mod.crypto.signature", subject_sig.encode_binary()))
             # No eos — end-of-input is the reply-read and channel close.
 
+        elif op == "user.accept_contract":
+            # INPUT-BODY: read the streamed signed contract (then the caller's
+            # eos), then reply with a single ack — or an error_message when the
+            # node is told to fail validation (mirrors op_accept_contract.go).
+            self.accept_contract_body = ch.recv()
+            ch.recv()  # the caller's eos
+            if self.accept_error is not None:
+                ch.send(AstralObject("error_message", self.accept_error))
+            else:
+                ch.send(ack())
+            ch.send(eos())
+
         else:
             ch.send(eos())
 
@@ -451,6 +467,8 @@ class UserOpsBinaryTest(unittest.TestCase):
     def setUp(self):
         self.node.seen = []
         self.node.accept_body = []
+        self.node.accept_contract_body = None
+        self.node.accept_error = None
 
     def connect(self):
         return astral.connect(self.node.endpoint)
@@ -606,6 +624,26 @@ class UserOpsBinaryTest(unittest.TestCase):
         self.assertEqual(Signature.from_value(second.value), issuer_sig)
         # The query itself carried no args.
         self.assertIn("user.accept_membership", self.node.seen)
+
+    def test_accept_contract_streams_signed_on_body_and_acks(self):
+        signed = _signed_contract()
+        with self.connect() as c:
+            self.assertIsNone(c.user.accept_contract(signed))
+        # The signed contract crossed the wire on the body (not as a query arg).
+        self.assertIsInstance(self.node.accept_contract_body, AstralObject)
+        self.assertEqual(self.node.accept_contract_body.type, "mod.auth.signed_contract")
+        self.assertEqual(
+            SignedContract.from_value(self.node.accept_contract_body.value), signed
+        )
+        # The query itself carried no args.
+        self.assertIn("user.accept_contract", self.node.seen)
+
+    def test_accept_contract_validation_error_raises(self):
+        # A node that fails validation streams an error_message → RemoteError.
+        self.node.accept_error = "contract validation failed"
+        with self.connect() as c:
+            with self.assertRaises(astral.RemoteError):
+                c.user.accept_contract(_signed_contract())
 
 
 # ======================================================================

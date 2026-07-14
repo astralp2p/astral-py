@@ -8,12 +8,12 @@ issued by that user; once it does it can describe the user (``user.info``),
 enumerate the swarm (``user.swarm_status`` / ``user.list_siblings``), keep a
 synchronised asset list (``user.assets`` / ``add_asset`` / ``remove_asset`` /
 ``sync_assets`` / ``sync_with``), and take part in the membership ceremony
-(``adopt`` / ``request_membership`` / ``accept_membership`` / ``expel`` /
-``list_expelled`` / ``new_node_contract``).
+(``adopt`` / ``request_membership`` / ``accept_membership`` /
+``accept_contract`` / ``expel`` / ``list_expelled`` / ``new_node_contract``).
 
 This module lands the net-new ``user`` records — ``mod.user.info``,
 ``mod.users.swarm_member`` (note the PLURAL ``users``), ``mod.user.expulsion`` /
-``mod.user.signed_expulsion``, and ``mod.user.op_update`` — plus the 14 ops. It
+``mod.user.signed_expulsion``, and ``mod.user.op_update`` — plus the 15 ops. It
 IMPORTS the cross-protocol records it references (``Contract`` /
 ``SignedContract`` from :mod:`astral.api.auth`, ``Signature`` from
 :mod:`astral.api.crypto`) rather than re-registering them. Via the
@@ -221,13 +221,14 @@ class OpUpdate(Record):
 
 
 class User(Protocol):
-    """Typed helpers for the ``user`` protocol (all 14 documented ops).
+    """Typed helpers for the ``user`` protocol (all 15 documented ops).
 
     Grounded in ``protocols/user/ops/``, astral-go ``api/user/`` +
     ``api/user/client/``, and astrald ``mod/user/src/op_*.go``. Most ops are
-    query-arg driven; three depart from that: ``accept_membership`` streams its
-    inputs on the channel body, and ``sync_assets`` reads a non-EOS-terminated
-    stream (see the class methods and the module note).
+    query-arg driven; three depart from that: ``accept_membership`` and
+    ``accept_contract`` stream their inputs on the channel body, and
+    ``sync_assets`` reads a non-EOS-terminated stream (see the class methods and
+    the module note).
     """
 
     # -- user & swarm info --------------------------------------------------
@@ -434,3 +435,30 @@ class User(Protocol):
             stream.send(AstralObject("mod.auth.contract", contract))
             stream.send(AstralObject("mod.crypto.signature", issuer_sig))
             return Signature.from_value(stream.value())
+
+    def accept_contract(self, contract: Any) -> None:
+        """Activate a fully-signed ``contract`` as this node's active contract (acks).
+
+        INPUT-BODY op and the local-setup / cold-card counterpart of
+        :meth:`accept_membership`: instead of running the signing handshake, the
+        caller streams a contract already signed by BOTH the issuer and the
+        subject, and the node validates, stores, and activates it. The query
+        takes NO args; the signed contract streams on the channel body (then
+        ``eos``) and the node replies with a single ``ack`` — astrald
+        ``mod/user/src/op_accept_contract.go`` (``Expect(&signed)`` then
+        ``Send(Ack)``), spec ``protocols/user/ops/user.accept_contract.md``. It
+        is the setup-time replacement for a raw ``tree.set`` of the
+        active-contract path now that that path is a protected op, and rides the
+        node's pre-user setup allowlist.
+
+        ``contract`` may be a :class:`~astral.api.auth.SignedContract`, a dict
+        (JSON) or raw bytes (binary). Rejected with code ``2`` if the node
+        ALREADY has an active contract (claiming a node is a one-time
+        transition), or with an ``error_message`` on validation failure — both
+        signatures, subject == node, remaining validity, swarm-membership permit
+        — surfaced as :class:`~astral.errors.RemoteError`.
+        """
+        with self.client.query("user.accept_contract") as stream:
+            stream.send(AstralObject("mod.auth.signed_contract", contract))
+            stream.send_eos()
+            stream.value()  # ack, or raises on error_message
