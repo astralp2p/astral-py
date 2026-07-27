@@ -37,7 +37,7 @@ emits, and `apphost.whoami` and `dir.alias_map` end at bare EOF with no `eos`
 Deciding what an `error_message` object means is `Stream`'s job one layer up,
 because that decision belongs to the query, not to the bytes.
 
-`aclose()` is idempotent, never raises, and **returns only once the stream is
+`aclose()` is idempotent, raises no fault of its own, and **returns only once the stream is
 actually closed** -- a second concurrent caller waits for the first rather than
 reporting a close that has not happened yet, exactly as the transport under it
 does. A stream is an async context manager
@@ -55,8 +55,8 @@ import contextlib
 from types import TracebackType
 from typing import Any, AsyncIterator, Final
 
-from .channel import Channel, Format, open_channel
-from .errors import AllocationLimit
+from .channel import Channel, Format, is_eos, open_channel
+from .errors import AllocationLimit, StreamCorrupted
 from .object import EOS, Query
 from .registry import Blueprints
 from .transport import Transport
@@ -83,6 +83,7 @@ class QueryStream:
         "_max_alloc",
         "_channel",
         "_formats",
+        "_corrupt",
         "_closing",
         "_closed",
         "_released",
@@ -108,6 +109,7 @@ class QueryStream:
         self._max_alloc = max_alloc
         self._channel: Channel | None = None
         self._formats: tuple[str, str] | None = None
+        self._corrupt = False
         self._closing = False
         self._closed = False
         self._released = asyncio.Event()
@@ -286,9 +288,60 @@ class QueryStream:
         """
         return self._channel is not None and self._channel.saw_eos
 
-    async def receive(self) -> Any:
-        """One object off the framed view. `EOFError` at a clean end of stream."""
-        return await self.channel().receive()
+    @property
+    def corrupt(self) -> bool:
+        """Whether a framed read was abandoned inside a frame.
+
+        The stream is closed by then. What remains is that a later read must not
+        look plausible, because the bytes it would return are the tail of a frame
+        the responder chose.
+        """
+        return self._corrupt
+
+    async def receive(
+        self, fmt_in: str = Format.BIN, fmt_out: str = Format.BIN
+    ) -> Any:
+        """One object off the framed view. `EOFError` at a clean end of stream.
+
+        **THE framed read**, so the frame-boundary rule exists once. A read that
+        ends anywhere but at a boundary makes the stream unusable and says so,
+        rather than leaving it plausible. Three ways it ends: cleanly, which is
+        the common one; with a `WireError`, which has consumed a tag and a length
+        whose payload will never be drained; and abandoned, which a deadline and
+        a cancellation both reach and which the channel alone can tell apart from
+        a harmless one.
+
+        The last two close the transport -- the node's worker is freed either way
+        -- and latch `corrupt`, so a caller that catches the `QueryTimeout` and
+        retries is told the stream is gone instead of being handed forged bytes.
+        Measured: a responder sends one `uint64` header-first, the reader's
+        deadline expires between the tag and the payload, and the *next* read
+        returns `Ack()` assembled out of the integer's own payload. Any responder
+        can choose those bytes. A read abandoned **at** a boundary consumed
+        nothing and stays harmless, which is what makes an idle follow stream's
+        deadline safe.
+
+        This is `Session._recv`'s rule for the control channel, applied to the
+        query stream, and `Stream` inherits it by calling this rather than
+        reaching for the channel itself.
+        """
+        if self._corrupt:
+            raise StreamCorrupted(
+                f"{self.query_string}: a read was abandoned inside a frame, so "
+                "the rest of it is still on the wire and every later frame would "
+                "be one step out of step with what the responder sent"
+            )
+        channel = self.channel(fmt_in, fmt_out)
+        try:
+            return await channel.receive()
+        except EOFError:
+            # The clean end of the stream, and a boundary by construction.
+            raise
+        except BaseException:
+            if not channel.at_frame_boundary:
+                self._corrupt = True
+                await self.aclose()
+            raise
 
     async def send(self, obj: Any) -> None:
         """One object onto the framed view, in exactly one `write()`."""
@@ -298,13 +351,22 @@ class QueryStream:
         """The `eos` terminator, for an op that reads its input to one."""
         await self.send(EOS())
 
-    def __aiter__(self) -> AsyncIterator[Any]:
+    async def __aiter__(self) -> AsyncIterator[Any]:
         """Every object up to the first `eos` or to EOF.
 
-        Error objects are yielded unchanged: turning an `error_message` into a
-        raised `RemoteError` is `Stream`'s decision, one layer up.
+        Written over `receive()` rather than delegating to the channel's own
+        iterator, so an abandoned read here is caught by the same guard. Error
+        objects are yielded unchanged: turning an `error_message` into a raised
+        `RemoteError` is `Stream`'s decision, one layer up.
         """
-        return self.channel().__aiter__()
+        while True:
+            try:
+                obj = await self.receive()
+            except EOFError:
+                return
+            if is_eos(obj):
+                return
+            yield obj
 
     # --- lifetime ---
 

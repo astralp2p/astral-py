@@ -32,19 +32,41 @@ The tree, in one place::
     |   |-- QueryRejected
     |   +-- InternalError
     |-- RemoteError                an error_message object inside a stream
-    |-- ClientClosed
+    |-- BadArgument               an argument value refused here (also ValueError)
+    |-- BadArgumentType           an argument type refused here  (also TypeError)
+    |-- StreamClosed              use of a closed stream or client (also RuntimeError)
+    |-- ConcurrentRead            a second reader on a one-reader stream (also RuntimeError)
+    |-- ClientClosed                                              (also RuntimeError)
     +-- FeatureUnavailable
 
 `RemoteError` is deliberately not a `SessionError`. An `error_message` object
 travels in the query's own object stream; an `error_msg` travels in the apphost
 control channel. Merging them loses the distinction between "the node refused to
 route this" and "the op ran and reported a failure".
+
+**Every fault this SDK raises on its own behalf is an `AstralError`**, which is
+what `astral/__init__.py` promises, and the five classes above with a second
+stdlib base are how the promise is kept without breaking the reflex a Python
+caller already has. An argument fault is a `ValueError` or a `TypeError` *and* an
+`AstralError`; use after close is a `RuntimeError` *and* an `AstralError`. The
+alternative -- narrowing the promise to protocol and transport faults -- was
+rejected because use-after-close is the commonest runtime fault in an async SDK
+and a caller who wrote the documented catch-all would crash on it.
+
+Seven guards stay bare, and every one of them answers a caller who used an
+internal API wrongly rather than a caller who used the SDK: a negative length
+handed to `Reader`, `MemTransport` or `StreamTransport`; reframing a
+`QueryStream` that is already framed; reusing a `MemTransport` pair; and the
+abstract `read_payload` of the primitive base. None is reachable through
+`Client`, `Stream` or a module client, so none can surprise the documented
+catch-all.
 """
 
 from __future__ import annotations
 
 __all__ = [
     "AstralError",
+    "attributed",
     "WireError",
     "ShortRead",
     "AllocationLimit",
@@ -71,6 +93,10 @@ __all__ = [
     "QueryRejected",
     "InternalError",
     "RemoteError",
+    "BadArgument",
+    "BadArgumentType",
+    "StreamClosed",
+    "ConcurrentRead",
     "ClientClosed",
     "FeatureUnavailable",
 ]
@@ -78,6 +104,20 @@ __all__ = [
 
 class AstralError(Exception):
     """Base class for every error this SDK raises on its own behalf."""
+
+
+def attributed(message: str, query: str | None) -> str:
+    """`"<query>: <message>"`, or the message alone when no query is known.
+
+    The SDK attributes its own faults well -- `dir.filters: expected 'string8'`
+    names the op -- and the faults a caller meets in production are the remote's.
+    This is the one place that prefix is formed, so a remote fault reads like a
+    local one. An already-prefixed message is left alone rather than prefixed
+    twice, which happens when a layer that knew the op wrapped one that did not.
+    """
+    if not query or message.startswith(f"{query}:"):
+        return message
+    return f"{query}: {message}"
 
 
 # --- wire core ------------------------------------------------------------
@@ -186,7 +226,16 @@ class SessionError(AstralError):
 
 
 class ProtocolError(SessionError):
-    """`error_msg{protocol_error}`: the peer rejected the message sequence."""
+    """The message sequence was wrong, whichever side noticed.
+
+    `error_msg{protocol_error}` is the peer saying so. The same class is raised
+    locally when a reply is the wrong type, when an exchange ends without one, or
+    when an op breaks the shape its own documentation declares -- an RR op
+    answering with two objects, say. The op-mode taxonomy is not discoverable
+    from the wire (design section 4.7), so the caller declares the shape and a
+    violation of it is the responder failing to keep the contract, not a
+    transport fault.
+    """
 
 
 class AuthFailed(SessionError):
@@ -224,11 +273,19 @@ class QueryRejected(SessionError):
     0 success, 1 rejected, 2 invalid query, 3 canceled, 4 internal error, and
     5 upwards are op-specific. Rejection codes and `error_msg` codes are
     different namespaces.
+
+    `query` names the query string that was rejected when the raising layer knew
+    it. A program that issues ten queries and is told only "rejected with code 1"
+    has been told nothing it can act on.
     """
 
-    def __init__(self, code: int, message: str | None = None) -> None:
-        super().__init__(message if message is not None else f"query rejected with code {code}")
+    def __init__(
+        self, code: int, message: str | None = None, *, query: str | None = None
+    ) -> None:
+        text = message if message is not None else f"query rejected with code {code}"
+        super().__init__(attributed(text, query))
         self.code = code
+        self.query = query
 
 
 class InternalError(SessionError):
@@ -239,14 +296,59 @@ class InternalError(SessionError):
 
 
 class RemoteError(AstralError):
-    """An `error_message` object arrived in the query's object stream."""
+    """An `error_message` object arrived in the query's object stream.
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
+    `message` is the responder's own text, unprefixed, because a caller that
+    matches on it -- astrald's `record not found` is the common one -- must not
+    have to strip attribution first. `str(exc)` carries the query string in front
+    of it when the raising layer knew one: `record not found` alone does not say
+    which of a program's ten queries failed, and no frame in the traceback does
+    either.
+    """
+
+    def __init__(
+        self, message: str, *, query: str | None = None, endpoint: str | None = None
+    ) -> None:
+        super().__init__(attributed(message, query))
         self.message = message
+        self.query = query
+        self.endpoint = endpoint
 
 
-class ClientClosed(AstralError):
+class BadArgument(AstralError, ValueError):
+    """An argument value this SDK refuses before it sends anything.
+
+    A `ValueError` too, so the stdlib reflex keeps working, and an `AstralError`
+    so the documented catch-all does. Raised where sending the value would be
+    worse than refusing it: an empty `dir.resolve` name resolves to the zero
+    identity on the node rather than failing, a filter name containing a comma
+    arrives as two names.
+    """
+
+
+class BadArgumentType(AstralError, TypeError):
+    """An argument of a type this SDK cannot use. A `TypeError` too."""
+
+
+class StreamClosed(AstralError, RuntimeError):
+    """A closed `Stream`, `Client` or session was used again.
+
+    A `RuntimeError` too: use after close is a caller fault of exactly that kind,
+    and it is the commonest runtime fault in an async SDK, so it must satisfy
+    both `except RuntimeError` and `except AstralError`.
+    """
+
+
+class ConcurrentRead(AstralError, RuntimeError):
+    """A second read was started on a stream that allows one reader.
+
+    There is no multiplexing on the IPC leg, so two readers split one stream's
+    frames between them. The *second* read is what fails, leaving the first
+    untouched, so the caller that broke the rule is the one that hears about it.
+    """
+
+
+class ClientClosed(StreamClosed):
     """The client is shutting down and accepts no new work."""
 
 

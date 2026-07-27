@@ -8,12 +8,12 @@ Three jobs, in this order:
    not carry as vectors, and every negative case.
 3. Sweep every spec kind with a seeded generator, 10 000 round trips.
 
-**Stand-in schemas.** `mod.dir.alias_map` belongs in `astral/api/dir.py`, which
-lands with the module-client step; its schema is declared here, in a child
-registry, so its vectors are proven now, and whoever writes that module moves the
-declaration across verbatim. The `mod.apphost.*` schemas were stand-ins until the
-session step and are now imported from `astral.session`, so the corpus runs
-against the shipping declarations.
+**Stand-in schemas.** Only the synthetic struct shapes the corpus carries are
+declared here, in a child registry. `mod.dir.alias_map` was a stand-in until the
+module-client step and is now imported from `astral.api.dir`; the `mod.apphost.*`
+schemas were stand-ins until the session step and come from `astral.session`. So
+the corpus runs against the shipping declarations. `register_handler_msg` is the
+one exception and stays declared below: the SDK deliberately does not ship it.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import unittest
 from typing import Any, Callable
 
 from astral import codec, object as objects, primitives as P
+from astral.api.dir import AliasMap
 from astral.codec.binary import (
     ObjectReader,
     ObjectWriter,
@@ -105,14 +106,6 @@ class RegisterHandlerMsg:
     identity: Identity | None = wire("Identity", Ptr("identity"))
     endpoint: str = wire("Endpoint", Primitive("string8"))
     auth_token: Nonce = wire("AuthToken", Primitive("nonce64"))
-
-
-@record("mod.dir.alias_map", registry=_STANDIN)
-class AliasMap:
-    # The map kind, and the reason dir.alias_map was undecodable before it
-    # existed. The field name reaches JSON only: the payload starts straight at
-    # the map count.
-    aliases: dict[str, Identity | None] = wire("Aliases", Map("string16", "identity"))
 
 
 # --- stand-in schemas: the corpus's synthetic struct vectors ---------------

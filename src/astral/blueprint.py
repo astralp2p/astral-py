@@ -31,12 +31,18 @@ construction (astral-go bug G-22). `Blueprints.register_blueprint` rejects such 
 pair outright; the construction counter is what holds when a caller bypasses
 registration.
 
-The limit this operates under: **there is no way to fetch a schema from a node.**
-`objects.blueprints` returns names only and no live op serves a blueprint body
-(astral-go bug G-21). Runtime records are therefore for types the SDK itself
-defines and pushes, and for a peer that hands a schema over in band -- never for
-learning the node's types. The SDK carries its own schema for everything it means
-to decode.
+**A node can be asked for a schema after all.** Design section 2.10 and
+astral-go bug G-21 both say it cannot -- that `objects.blueprints` returns names
+only and nothing serves a blueprint body -- and both are wrong.
+`objects.get_blueprint?type=<name>` has been in astrald since `3de755d9`
+(2026-06-11) and is in the live node's `shell.spec` registry, confirmed this
+session against `furry-bolt`; astrald's handler sends one `astral.blueprint` for
+the named type. Two limits are real and are the reason the SDK still carries its
+own schema for everything it means to decode: referenced types are **not**
+resolved or included, so learning a composite type means walking its references
+one query at a time, and a primitive has no blueprint and answers with an error.
+The op is confirmed present, not exercised -- the node crashed before this
+session reached it (see `tests/test_risk_register.py`).
 """
 
 from __future__ import annotations

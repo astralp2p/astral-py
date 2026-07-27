@@ -148,6 +148,8 @@ from .context import Context
 from .errors import (
     AstralError,
     AuthFailed,
+    BadArgument,
+    ConcurrentRead,
     Denied,
     InternalError,
     NodeUnavailable,
@@ -157,8 +159,10 @@ from .errors import (
     QueryTimeout,
     RouteNotFound,
     SessionError,
+    StreamClosed,
     TargetNotAllowed,
     WireError,
+    attributed,
 )
 from .object import Ack, Query
 from .record import record, wire
@@ -445,12 +449,16 @@ than being silently folded into a neighbouring meaning.
 """
 
 
-def error_for(code: str) -> SessionError:
-    """The exception for one `error_msg` code."""
-    kind = ERROR_CODES.get(code)
-    if kind is None:
-        return SessionError(f"apphost error: {code}")
-    return kind(f"apphost error: {code}")
+def error_for(code: str, query: str | None = None) -> SessionError:
+    """The exception for one `error_msg` code, naming the query when known.
+
+    `RouteNotFound: apphost error: route_not_found` says which failure happened
+    and not which query it happened to; a program that issues ten of them needs
+    both, and this is the only layer that holds the query string at the moment
+    the code arrives.
+    """
+    kind = ERROR_CODES.get(code, SessionError)
+    return kind(attributed(f"apphost error: {code}", query))
 
 
 def _type_of(obj: Any) -> str:
@@ -969,11 +977,13 @@ class Session:
                 # (`lib/apphost/host.go`), so a 0 on the wire reaches a Go caller
                 # as a rejection whose code means success. Only the responder-side
                 # constructors coerce.
-                raise QueryRejected(int(reply.code) or DEFAULT_REJECT_CODE)
+                raise QueryRejected(
+                    int(reply.code) or DEFAULT_REJECT_CODE, query=query
+                )
             if isinstance(reply, ErrorMsg):
-                raise error_for(reply.code)
+                raise error_for(reply.code, query)
             raise ProtocolError(
-                f"unexpected reply to route_query_msg: {_type_of(reply)}"
+                f"{query}: unexpected reply to route_query_msg: {_type_of(reply)}"
             )
         except TimeoutError as exc:
             raise QueryTimeout(
@@ -1144,7 +1154,7 @@ class Session:
         """
         self._require_live()
         if self._inbound is None:
-            raise RuntimeError("accept_query: no handle_query_msg has been read")
+            raise StreamClosed("accept_query: no handle_query_msg has been read")
         msg = self._inbound
         try:
             await self._send(Ack(), timeout, what="ack")
@@ -1172,7 +1182,7 @@ class Session:
         the third; this raises, because a silent rewrite hides a caller's bug.
         """
         if code == 0:
-            raise ValueError("reject code 0 is success, not a rejection")
+            raise BadArgument("reject code 0 is success, not a rejection")
         await self._fail(QueryRejectedMsg(code=code), timeout=timeout)
 
     async def skip_query(self, *, timeout: float | None = HANDSHAKE_TIMEOUT) -> None:
@@ -1353,7 +1363,7 @@ class Session:
         """
         self._require_live()
         if code == 0:
-            raise ValueError("reject code 0 is success, not a rejection")
+            raise BadArgument("reject code 0 is success, not a rejection")
         ident = query_id.query_id if isinstance(query_id, IncomingQueryMsg) else query_id
         await self._send(
             RejectIncomingMsg(query_id=Nonce(int(ident)), code=code),
@@ -1667,7 +1677,7 @@ class Session:
         rule protects stays open.
         """
         if self._reading:
-            raise RuntimeError(
+            raise ConcurrentRead(
                 f"{self!r}: a control read is already in flight; one connection "
                 "carries one exchange at a time, and concurrency is more "
                 "connections"
@@ -1675,14 +1685,14 @@ class Session:
 
     def _require_live(self) -> None:
         if self._closing:
-            raise RuntimeError(f"{self!r}: the session is closed")
+            raise StreamClosed(f"{self!r}: the session is closed")
         if self._spent:
-            raise RuntimeError(
+            raise StreamClosed(
                 f"{self!r}: the connection became a query stream and is no longer "
                 "a message channel"
             )
         if not self._greeted:
-            raise RuntimeError(f"{self!r}: the greeting has not been read")
+            raise StreamClosed(f"{self!r}: the greeting has not been read")
 
     # --- lifetime ---
 

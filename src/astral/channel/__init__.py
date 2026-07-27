@@ -34,7 +34,7 @@ import enum
 from types import TracebackType
 from typing import Any, AsyncIterator, Final
 
-from ..errors import TransportUnsupported
+from ..errors import ParseError, TransportUnsupported
 from ..registry import Blueprints
 from ..transport import Transport
 from ..wire import DEFAULT_MAX_ALLOC
@@ -75,17 +75,23 @@ _EOS_TYPE: Final = "eos"
 def parse_format(token: str, *, output: bool) -> Format:
     """Validate one format token. An empty token is `bin`, as in astral-go.
 
-    Raises `ValueError` for an unknown token and for `base64` or `render` in an
-    input position.
+    Raises `ParseError` for an unknown token and for `base64` or `render` in an
+    input position. A `ParseError` and not a bare `ValueError`: this token comes
+    off a query string a caller wrote, so it is one more unparsable text form,
+    and `Client.query(fmt_out=...)` puts it on the public surface where the
+    documented `except AstralError` has to catch it. It is a `ValueError` as
+    well, so nothing that already caught one stops working.
     """
     name = token or Format.BIN
     try:
         fmt = Format(name)
     except ValueError:
         allowed = ", ".join(sorted(f.value for f in (OUTPUT_FORMATS if output else INPUT_FORMATS)))
-        raise ValueError(f"unknown channel format {token!r}: expected one of {allowed}") from None
+        raise ParseError(
+            f"unknown channel format {token!r}: expected one of {allowed}"
+        ) from None
     if not output and fmt not in INPUT_FORMATS:
-        raise ValueError(f"channel format {fmt.value!r} is output-only")
+        raise ParseError(f"channel format {fmt.value!r} is output-only")
     return fmt
 
 

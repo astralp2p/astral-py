@@ -1,24 +1,15 @@
 # astral-py
 
-A Python client library for **astrald** — the node daemon of the
+An **asyncio** client library for **astrald** — the node daemon of the
 [Astral Network](https://github.com/astralp2p/astral-docs). It speaks the
-`apphost` IPC protocol so local apps and agents can route queries through the
-node, serve inbound queries for identities they own, read/write the config
-tree, resolve aliases, sign data, fetch objects, and more.
+`apphost` IPC protocol, so a local app or agent can route queries through the
+node, read the directory, and exchange typed objects over the binary wire.
 
-Pure standard library — **no third-party dependencies**. Implements all three
-apphost transports the node exposes:
+Pure standard library — **no third-party dependencies**. Distribution name
+`astral-ipc`; import name `astral`.
 
-| Transport     | Endpoint (default)              | Streaming | Serving | Encoding |
-|---------------|---------------------------------|:---------:|:-------:|----------|
-| Binary (IPC)  | `unix:~/.apphost.sock`, `tcp:127.0.0.1:8625` | ✅ | ✅ | binary |
-| WebSocket     | `ws://127.0.0.1:8624/.ws`       | ✅ | ✅ | JSON |
-| HTTP          | `http://localhost:8624`         | response-only | ❌ | JSON |
-
-The native binary channel is the canonical *Astral IPC*. The WebSocket
-transport mirrors the reference `apphost-js` client and is the most robust path
-for arbitrary structured results (JSON is self-describing). HTTP is the
-simplest path for one-shot queries.
+> The import name `astral` collides with the unrelated `astral` (astronomy)
+> package on PyPI. If you have both, keep them in separate environments.
 
 ## Install
 
@@ -26,262 +17,181 @@ simplest path for one-shot queries.
 pip install -e .          # from this directory (src layout)
 ```
 
-Requires Python 3.8+. The distribution name is `astral-ipc`; the import name is
-`astral`.
+Requires **Python 3.11 or newer**. `asyncio.TaskGroup` and `asyncio.timeout()`
+are structural to the design, not conveniences.
 
-> Note: the import name `astral` collides with the unrelated `astral`
-> (astronomy) package on PyPI. If you have both installed, keep them in separate
-> environments.
+## What ships today
+
+This tree is a from-scratch rewrite, landing in layers. What exists now:
+
+| Layer | Modules | State |
+|---|---|---|
+| Wire core (synchronous, I/O-free) | `wire`, `types`, `spec`, `record`, `registry`, `object`, `primitives`, `blueprint`, `objectid`, `querystring`, `codec/{binary,jsoncodec,text}` | complete |
+| Transport and session (async) | `transport/{base,socket,mem}`, `channel/{__init__,binary}`, `session`, `conn`, `context` | complete for binary IPC |
+| Client and module clients | `client`, `stream`, `api/{apphost,dir}` | `apphost` and `dir` |
+
+Not yet landed, in implementation order: inbound serving (`serve.py`,
+`registrar.py`), the remaining Tier 1 modules (`crypto`, `auth`, `services`,
+`tree`, `objects`), the `astral-query` CLI, Tier 2 (`user`, `bip137sig`, `ip`,
+`exonet`), the JSON/text/canonical channels with the WebSocket and HTTP
+transports, and the gated Tier 3 modules. Asking for a channel format other than
+`bin`, or for a `ws://`/`http://` endpoint, raises `TransportUnsupported` naming
+the step it lands in rather than doing something approximate.
 
 ## Quick start
 
 ```python
+import asyncio
+
 import astral
 
-# Connects to the local node. Default endpoint: unix socket if present, else TCP.
-# A token (or $ASTRALD_TOKEN) authenticates the session; without one you are
-# anonymous (allowed for outbound queries by default).
-with astral.connect(token="...") as node:
-    print(node.identity, node.alias, node.guest_id)
 
-    # One-shot query, first result value:
-    who = node.whoami()                      # apphost.whoami -> identity hex
+async def main() -> None:
+    # Default endpoint: the unix socket if it exists, else tcp:127.0.0.1:8625.
+    # Without a token the session is anonymous, which the node allows for
+    # outbound queries by default.
+    async with await astral.connect() as client:
+        print(client.host_id, client.host_alias, client.guest_id)
 
-    # Protocol helpers:
-    ident = node.dir.resolve("alice")        # alias/hex -> identity
-    keys  = node.tree.list("/mod")           # list child config keys
-    sig   = node.crypto.sign_text("hello")   # "bip137:..."
+        who = await client.apphost.whoami()          # -> Identity
+        aliases = await client.dir.alias_map()       # -> AliasMap
+        print(aliases.alias_of(who))
 
-    # Generic streaming query:
-    with node.query("tree.list", {"path": "/mod"}) as stream:
-        for obj in stream:                   # stops at eos
-            print(obj.type, obj.value)
+        async with client.stream("dir.filters") as s:
+            async for obj in s:                      # stops at eos or EOF
+                print(obj)
+
+
+asyncio.run(main())
 ```
 
-Pick a transport explicitly by passing an endpoint:
-
-```python
-astral.connect("ws://127.0.0.1:8624/.ws", token="...")   # WebSocket (JSON)
-astral.connect("http://localhost:8624", token="...")     # HTTP
-astral.connect("tcp:127.0.0.1:8625", token="...")        # binary over TCP
-astral.connect("unix:/run/apphost.sock")                 # binary over unix socket
-```
+**Close what you open.** astrald serves apphost from a fixed pool of 32 workers
+shared by every app on the machine and never notices a peer that vanished, so a
+`Client` or a `Stream` left open burns one worker until the node restarts.
+`async with` on both is the contract; there is no `__del__` fallback, and a
+`Client` bounds how many connections it may hold at once for the same reason.
 
 ## Core concepts
 
-A **query** is a call from a *caller* identity to a *target* identity with a
-*query string* (`operation?param=value&...`). The target accepts it (opening a
-**channel** / `Stream`) or rejects it with a numeric code. Over the channel both
-sides exchange **objects**: an `AstralObject` is a `(type, value)` pair, where an
-empty type is a raw binary blob. A stream of objects conventionally ends with an
-`eos` object.
+A **query** goes from a *caller* identity to a *target* identity carrying a
+*query string* (`operation?param=value&…`). The target accepts it — after which
+the connection **is** that query's bidirectional stream — or rejects it with a
+numeric code. Over the stream both sides exchange **objects**: typed values whose
+type name is a registry key. A stream ends at an `eos` object **or** at a bare
+EOF, and which one is a per-op contract that the wire does not carry.
+
+### The five op shapes
+
+Op mode is declared by the caller and never inferred, because nothing on the
+wire reveals it: `apphost.whoami` answers one object and closes with no `eos`,
+`dir.filters` answers several and ends with one, and `objects.read` answers no
+objects at all.
 
 ```python
-from astral import obj, eos, ack, blob, AstralObject
+one   = await client.call_one("dir.alias_map")          # RR: exactly one object
+many  = await client.call("dir.filters")                # ST: to eos or EOF
+data  = await client.call_raw("objects.read?id=data1…") # RAW: unframed bytes
+outs  = await client.call_with("crypto.sign_text",      # WA: input on the body
+                               text_object, expect=1)
 
-obj("string8", "hello")     # a typed object
-blob(b"\x00\x01")           # an untyped binary object
-eos()                        # end-of-stream marker
+async with client.follow("tree.get?path=/mod&follow=true") as s:  # ST+follow
+    async for value in s.snapshot():                    # the stored state
+        ...
+    async for update in s.live():                       # everything after
+        ...
 ```
 
-### Queries and results
-
-```python
-# query() returns a Stream once the query is accepted.
-stream = node.query("dir.resolve", {"name": "alice"})
-
-# Convenience wrappers (open + collect + close):
-objs  = node.call("tree.list", {"path": "/mod"})   # list[AstralObject], raises on error_message
-value = node.call_one("apphost.whoami")            # first result's value
-```
-
-A query string can also be written inline; extra `args` are text-encoded and
-appended:
-
-```python
-node.query("dir.resolve?name=alice")
-node.query("objects.read", {"id": oid, "offset": 6, "limit": 5})
-```
+`timeout` on `call`, `call_one`, `call_raw` and `call_with` bounds the **whole**
+call — route and answer together — because those own the stream. `query()` hands
+the stream back, so its `timeout` covers the route only and the deadline on the
+body belongs to the caller.
 
 ### Streams
 
 ```python
-with node.query("crypto.sign_text", {"out": "json"}) as s:
-    s.send(obj("string8", "sign me"))   # send input objects (binary/WS only)
-    s.send_eos()
-    signature = s.value()               # first result value
+async with client.stream("apphost.list_tokens") as s:
+    objects = await s.collect(timeout=5.0)
+    print(s.terminated_by)          # "eos" or "eof"
 
-for obj in stream.results():            # raises RemoteError on error_message
-    ...
-
-raw = node.query("objects.read", {"id": oid}).read()   # unframed byte output
-stream.cancel()                          # cancel an in-flight query, then close
+async with client.stream("crypto.sign_text") as s:
+    await s.send(text_object)       # body input; never a query argument
+    signature = await s.value()
 ```
 
-`Stream` is a context manager; iterating it yields objects until `eos` or the
-channel closes. `.collect()`, `.value()`, `.first()`, `.results()` and
-`.read()` cover the common shapes.
+`async for` raises `RemoteError` on an `error_message` object rather than
+yielding it, because a pipeline stage that yields one feeds a wrong-typed object
+to the next. `raw_objects()` is the view that yields everything and raises
+nothing.
 
-### Serving inbound queries
+### Module clients
 
-Register a handler for an identity you own (requires an authenticated session).
-The handler runs on a background thread per inbound query.
+Attached to `Client` as cached properties, one per node module:
 
 ```python
-def handle(q: astral.IncomingQuery):
-    print(q.query, "from", q.caller)
-    if q.op.startswith("admin"):
-        q.reject(3)                      # non-zero reject code (1..255)
-        return
-    s = q.accept()                       # responder-side Stream
-    s.send(astral.obj("string8", "hi"))
-    s.send_eos()
-    s.close()
-
-reg = node.serve(handle)                 # for node.guest_id
-# reg = node.register(identity, handle)  # for another owned identity
-...
-reg.unregister()                         # or use `with node.serve(handle) as reg:`
+await client.apphost.whoami()
+await client.apphost.list_tokens()                  # every token, in plaintext
+await client.dir.resolve("alice")                   # alias/hex -> Identity
+await client.dir.get_alias(identity)
+await client.dir.apply_filters("localnode", identity="alice")
 ```
 
-(Uses the apphost *register-service* mechanism: the host pushes inbound queries
-on the registration connection, and each `accept()` opens a fresh attach
-connection. The *register-handler* dial-back mechanism — `apphost.bind` — is
-available via `transport.bind(token)` for advanced use.)
-
-### Protocol helpers
-
-Exposed as attributes of the client:
-
-```python
-node.apphost.whoami()                       # -> identity
-node.apphost.create_token(identity)         # -> AccessToken(identity, token, expires_at)
-node.apphost.register()                     # bootstrap a fresh guest identity + token
-
-node.dir.resolve(name)                      # alias/hex -> identity
-node.dir.get_alias(identity)                # -> alias or None
-node.dir.set_alias(identity, "alice")       # set/remove an alias
-
-node.tree.get("/mod/tcp/settings/listen")   # -> stored value
-node.tree.list("/mod")                       # -> list[str]
-node.tree.set(path, astral.obj("bool", True))
-node.tree.delete(path)
-
-node.crypto.sign_text("hello")              # -> "<scheme>:<sig>"
-node.crypto.public_key()                     # -> "<scheme>:<hex>"
-
-node.objects.read(object_id)                # -> bytes (raw)
-node.objects.describe(object_id)            # -> list of descriptor values
-node.objects.contains(object_id)            # -> bool
-```
-
-Helpers that return scalar common types (identity, string, bool, …) work over
-every transport. Helpers that return **structured** objects (e.g.
-`apphost.access_token`, `mod.objects.describe_result`) decode cleanly over the
-JSON transports (`ws://`, `http://`); over the binary transport such payloads
-are handed back as raw bytes.
+Importing `astral` registers every wire type in the package, so whether an
+object decodes never depends on which property was touched first.
 
 ### Object IDs
 
 ```python
-oid = astral.compute_object_id(b"hello world")   # ObjectID(size, hash)
-str(oid)                                          # "data1..." (zBase32)
-astral.ObjectID.parse("data1...")                 # round-trips
-astral.compute_object_id(b"\x15", "uint8")        # typed: includes Stamp + header
+from astral.objectid import object_id, object_id_of_bytes
+
+oid = object_id_of_bytes(b"hello world")       # ObjectID(size, hash)
+str(oid)                                       # "data1…" (zBase32)
+astral.ObjectID.parse(str(oid))                # round-trips
+object_id(some_typed_object)                   # typed: Stamp + type + payload
 ```
 
-## Command line
+### Errors
 
-A small `astral-query`-style CLI ships with the package:
+Everything the SDK raises on its own behalf is an `astral.AstralError`. Argument
+and state faults carry their stdlib base as well, so both reflexes work:
 
-```bash
-python -m astral dir.resolve -name alice
-python -m astral tree.list -path /mod --json
-python -m astral --endpoint ws://127.0.0.1:8624/.ws apphost.whoami
-python -m astral objects.read -id data1...        # writes raw bytes to stdout
-python -m astral alice:some.op -param value       # target:operation form
+```python
+try:
+    await client.call_one("dir.resolve?name=nope")
+except astral.RemoteError as exc:
+    print(exc.query, exc.message)        # the op, and the responder's own text
+except astral.AstralError:
+    ...
 ```
 
-After `pip install`, the `astral-query` console script is also available.
-
-Configuration via environment:
-
-* `ASTRALD_TOKEN` / `ASTRAL_AUTH_TOKEN` / `ASTRAL_TOKEN` — auth token.
-* `ASTRALD_ENDPOINT` / `ASTRAL_ENDPOINT` — default endpoint.
+`BadArgument` is also a `ValueError`, `BadArgumentType` also a `TypeError`, and
+`StreamClosed`, `ConcurrentRead` and `ClientClosed` are also `RuntimeError`.
 
 ## Wire format
 
-The library implements the encodings described in astral-docs:
+Implemented per astral-docs, with the divergences the design records:
 
-* **Binary** (big-endian): length-prefixed `string8..string64` / `bytes8..bytes64`,
-  `uint8..uint64` / `int8..int64`, `bool`, `identity` (a `bool` presence flag
-  then the 33-byte compressed secp256k1 key when present), `nonce64` (8 bytes),
-  `time` (uint64 ns), arrays (uint32 count). A channel frame is
-  `string8(type) ++ bytes32(payload)`.
-* **JSON**: the `{ "Type": ..., "Object": ... }` envelope.
-* **Text**: `#[type]` + separator + payload; query-string params use the
-  payload-only form.
-* **Object IDs**: `uint64 size ++ sha256(binary-encoding)`, zBase32-encoded with
-  leading `y`s stripped and a `data1` prefix.
-
-### Assumptions
-
-The docs fully specify the JSON path. For the binary path:
-
-* `identity` is a `bool` presence flag (`0x01` present / `0x00` null) followed by
-  the 33-byte compressed key when present — verified against a live node's
-  `host_info_msg`.
-* `zone` is assumed to be a single-byte bitmask (`device=1`, `virtual=2`,
-  `network=4`; `"dvn"` = all). This is the one field not yet confirmed against a
-  node; it only affects routing scope.
-
-If you hit a binary-encoding mismatch against a specific node build, use the
-`ws://` transport (JSON), which is unaffected by these assumptions.
-
-## Limitations
-
-* Synchronous (blocking) API; serving uses background threads. No asyncio layer
-  (yet).
-* HTTP transport is request/response only — no input streaming, no serving.
-* The JSON WebSocket transport is text-only, so it cannot carry unframed raw
-  byte output (`objects.read`); use the binary or HTTP transport for that.
+* **Binary**, big-endian throughout: `string8..string64` / `bytes8..bytes64`,
+  `uint8..uint64` / `int8..int64`, `bool`, **`identity` as 33 flat bytes with no
+  presence flag** (the flag belongs to an enclosing `*Identity` pointer field),
+  `nonce64`, `time` (uint64 ns), `duration` (signed int64 ns), `zone`,
+  `object_id.sha256`, plus the seven composite kinds — including the **map**
+  kind, sorted by encoded key bytes. A channel frame is
+  `string8(type) ++ bytes32(payload)`; a bundle element inverts that order.
+* **JSON**: the `{"Type": …, "Object": …}` envelope.
+* **Text**: `#[type]` + separator + payload; query-string parameters carry the
+  payload-only half.
+* **Object IDs**: `uint64 size ++ sha256(canonical form)`, zBase32 with leading
+  `y`s stripped and a `data1` prefix.
 
 ## Development
 
 ```bash
-# run the test suite (stdlib unittest; no pytest required)
-PYTHONPATH=src python -m unittest discover -s tests -v
+PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
-Tests run entirely against in-process mock nodes (a binary apphost server and a
-WebSocket server), so no live astrald is needed. They also check the codecs
-against the byte examples in the docs.
-
-## Layout
-
-```
-src/astral/
-  __init__.py        public API
-  client.py          connect(), Client
-  stream.py          Stream
-  objects.py         AstralObject + constructors
-  codec.py           binary read/write primitives + channel framing
-  payload.py         common-type payload (en/de)coding for the binary channel
-  objectid.py        ObjectID + zBase32
-  encoding.py        text encoding, query strings, JSON envelopes, zones
-  messages.py        mod.apphost.* control messages (binary + JSON)
-  errors.py          exception hierarchy
-  cli.py             `python -m astral` command line
-  transport/
-    base.py          Channel / Transport ABCs, endpoint parsing
-    session.py       shared apphost session (handshake/query/register/attach)
-    binary.py        native binary channel (unix/tcp)
-    websocket.py     minimal RFC 6455 client + JSON channel
-    http.py          HTTP request/response transport
-  protocols/         dir, tree, crypto, objects, apphost helpers
-examples/            runnable examples
-tests/               unittest suite with mock nodes
-```
+Three tiers. A and B need no node and no network and gate every commit; C runs
+only when `ASTRAL_TEST_ENDPOINT` names a reachable astrald, and skips cleanly
+with a reason otherwise.
 
 ## License
 

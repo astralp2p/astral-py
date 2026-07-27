@@ -1,5 +1,21 @@
 # CLAUDE.md
 
+> **STALE — this file describes the synchronous SDK that commit `e580b03`
+> deleted.** Every module it names (`codec.py`, `payload.py`, `encoding.py`,
+> `messages.py`, `transport/session.py`) is gone, and the architecture is now
+> the three layers of the asyncio rewrite. It is kept only until layer 3 lands
+> and rewrites it. **Do not take a wire fact from this file.**
+>
+> One claim in it is not merely stale but false and is asserted here with a
+> claim of live verification, so it is corrected up front: **`identity` is 33
+> flat bytes with no presence flag.** The flag the section below describes
+> belongs to the enclosing `*astral.Identity` **pointer field**, not to the
+> identity. Confirmed against `furry-bolt` — `apphost.whoami` answers a frame
+> whose `bytes32` length is exactly 33 — and pinned by
+> `tests/test_risk_register.py::R1IdentityWidth`. That one byte broke
+> `dir.resolve`, `apphost.whoami`, `objects.find` and `user.list_siblings` over
+> binary for the whole life of the SDK this file documents.
+
 Python client for the astrald **apphost IPC** protocol. The protocol spec lives
 in the sibling `../astral-docs/` repo — read `topics/astral-ipc.md`,
 `topics/*-transport.md`, `core-primitives/channel.md`, and `common-types/`

@@ -55,7 +55,12 @@ from typing import Any, Final
 
 from ..codec import channel_frame, payload_bytes
 from ..codec.binary import ObjectReader
-from ..errors import AllocationLimit, BlueprintNotFound, StreamCorrupted
+from ..errors import (
+    AllocationLimit,
+    BlueprintNotFound,
+    StreamClosed,
+    StreamCorrupted,
+)
 from ..object import Blob, UnparsedObject
 from ..registry import Blueprints, default_blueprints
 from ..transport import Transport
@@ -151,7 +156,7 @@ class BinaryChannel(Channel):
 
     async def receive(self) -> Any:
         if self._detached:
-            raise RuntimeError(_DETACHED)
+            raise StreamClosed(_DETACHED)
         type_name = await self._read_type()
         payload = await self._read_payload()
         # Back at a boundary: `_decode` reads from the payload it was handed and
@@ -165,7 +170,7 @@ class BinaryChannel(Channel):
 
     async def send(self, obj: Any) -> None:
         if self._detached:
-            raise RuntimeError(_DETACHED)
+            raise StreamClosed(_DETACHED)
         # One `bytes`, one `write()`. The frame is committed before the only
         # cancellable point in the method, so cancellation cannot land mid-frame
         # and no write lock is needed.
