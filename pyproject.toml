@@ -7,7 +7,7 @@ name = "astral-ipc"
 version = "0.1.0"
 description = "Python client for the astrald apphost IPC protocol (Astral Network)"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "astral-py contributors" }]
 keywords = ["astral", "astrald", "apphost", "ipc", "p2p", "network"]
@@ -16,10 +16,21 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: System :: Networking",
 ]
 dependencies = []
+
+# secp256k1 arithmetic cannot be implemented responsibly in pure Python, and it
+# buys only local key generation and local signing: every op the SDK exposes can
+# be served by the node, and Identity handling needs no curve math at all.
+# Without the extra the curve-dependent helpers raise FeatureUnavailable and
+# nothing else degrades.
+[project.optional-dependencies]
+secp256k1 = ["coincurve>=19"]
 
 [project.urls]
 Documentation = "https://github.com/astralp2p/astral-docs"
