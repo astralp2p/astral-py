@@ -8,11 +8,12 @@ Three jobs, in this order:
    not carry as vectors, and every negative case.
 3. Sweep every spec kind with a seeded generator, 10 000 round trips.
 
-**Stand-in schemas.** `mod.apphost.*` and `mod.dir.alias_map` belong in
-`astral/api/apphost.py` and `astral/api/dir.py`, which land with the session and
-module-client steps. Their schemas are declared here, in a child registry, so
-their vectors are proven now. Whoever writes those modules moves the
-declarations across verbatim and deletes `_STANDIN` and everything under it.
+**Stand-in schemas.** `mod.dir.alias_map` belongs in `astral/api/dir.py`, which
+lands with the module-client step; its schema is declared here, in a child
+registry, so its vectors are proven now, and whoever writes that module moves the
+declaration across verbatim. The `mod.apphost.*` schemas were stand-ins until the
+session step and are now imported from `astral.session`, so the corpus runs
+against the shipping declarations.
 """
 
 from __future__ import annotations
@@ -44,6 +45,22 @@ from astral.errors import (
 )
 from astral.record import F, alias, embed, record, wire
 from astral.registry import Blueprints, default_blueprints
+from astral.session import (
+    AttachQueryMsg,
+    AuthSuccessMsg,
+    AuthTokenMsg,
+    BindMsg,
+    ErrorMsg,
+    HandleQueryMsg,
+    HostInfoMsg,
+    IncomingQueryMsg,
+    PingMsg,
+    QueryAcceptedMsg,
+    QueryRejectedMsg,
+    RegisterServiceMsg,
+    RejectIncomingMsg,
+    RouteQueryMsg,
+)
 from astral.spec import (
     MAP_KEY_TYPES,
     MAX_ARRAY_LENGTH,
@@ -71,101 +88,23 @@ NODE = Identity.parse("03b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81
 _STANDIN = Blueprints(default_blueprints())
 
 
-# --- stand-in schemas: mod.apphost.* ---------------------------------------
-
-
-@record("mod.apphost.auth_token_msg", registry=_STANDIN)
-class AuthTokenMsg:
-    token: str = wire("Token", Primitive("string8"))
-
-
-@record("mod.apphost.auth_success_msg", registry=_STANDIN)
-class AuthSuccessMsg:
-    guest_id: Identity | None = wire("GuestID", Ptr("identity"))
-
-
-@record("mod.apphost.bind_msg", registry=_STANDIN)
-class BindMsg:
-    # A nonce64, not the string8 that auth_token_msg carries.
-    token: Nonce = wire("Token", Primitive("nonce64"))
-
-
-@record("mod.apphost.attach_query_msg", registry=_STANDIN)
-class AttachQueryMsg:
-    query_id: Nonce = wire("QueryID", Primitive("nonce64"))
-
-
-@record("mod.apphost.register_service_msg", registry=_STANDIN)
-class RegisterServiceMsg:
-    identity: Identity | None = wire("Identity", Ptr("identity"))
-
-
-@record("mod.apphost.incoming_query_msg", registry=_STANDIN)
-class IncomingQueryMsg:
-    query_id: Nonce = wire("QueryID", Primitive("nonce64"))
-    caller: Identity | None = wire("Caller", Ptr("identity"))
-    target: Identity | None = wire("Target", Ptr("identity"))
-    query: str = wire("Query", Primitive("string16"))
-
-
-@record("mod.apphost.handle_query_msg", registry=_STANDIN)
-class HandleQueryMsg:
-    ipc_token: Nonce = wire("IPCToken", Primitive("nonce64"))
-    id: Nonce = wire("ID", Primitive("nonce64"))
-    caller: Identity | None = wire("Caller", Ptr("identity"))
-    target: Identity | None = wire("Target", Ptr("identity"))
-    query: str = wire("Query", Primitive("string16"))
-
-
-@record("mod.apphost.reject_incoming_msg", registry=_STANDIN)
-class RejectIncomingMsg:
-    query_id: Nonce = wire("QueryID", Primitive("nonce64"))
-    code: int = wire("Code", Primitive("uint8"))
+# --- mod.apphost.*: the real declarations ----------------------------------
+#
+# These were stand-ins until the session step landed. They are now `astral.session`
+# and the vectors run against the shipping schemas, which is what makes the corpus
+# a regression test rather than a copy of itself. `register_handler_msg` is the one
+# exception: it stays a stand-in below because the SDK deliberately does not ship
+# it -- astrald's dispatch switch never routes to its handler (bug G-16) -- while
+# the corpus still carries its vector.
 
 
 @record("mod.apphost.register_handler_msg", registry=_STANDIN)
 class RegisterHandlerMsg:
+    """Dead on the wire, alive in the corpus. Declared here and nowhere else."""
+
     identity: Identity | None = wire("Identity", Ptr("identity"))
     endpoint: str = wire("Endpoint", Primitive("string8"))
     auth_token: Nonce = wire("AuthToken", Primitive("nonce64"))
-
-
-@record("mod.apphost.ping_msg", registry=_STANDIN)
-class PingMsg:
-    """No fields. A registered type with no handler: sending it yields protocol_error."""
-
-
-@record("mod.apphost.error_msg", registry=_STANDIN)
-class ErrorMsg:
-    # error_msg codes are strings; query_rejected_msg codes are uint8. Two
-    # separate namespaces.
-    code: str = wire("Code", Primitive("string8"))
-
-
-@record("mod.apphost.query_rejected_msg", registry=_STANDIN)
-class QueryRejectedMsg:
-    code: int = wire("Code", Primitive("uint8"))
-
-
-@record("mod.apphost.query_accepted_msg", registry=_STANDIN)
-class QueryAcceptedMsg:
-    """No fields."""
-
-
-@record("mod.apphost.host_info_msg", registry=_STANDIN)
-class HostInfoMsg:
-    identity: Identity | None = wire("Identity", Ptr("identity"))
-    alias: str = wire("Alias", Primitive("string8"))
-
-
-@record("mod.apphost.route_query_msg", registry=_STANDIN)
-class RouteQueryMsg:
-    nonce: Nonce = wire("Nonce", Primitive("nonce64"))
-    caller: Identity | None = wire("Caller", Ptr("identity"))
-    target: Identity | None = wire("Target", Ptr("identity"))
-    query: str = wire("Query", Primitive("string16"))
-    zone: Zone = wire("Zone", Primitive("zone"), default=Zone.ALL)
-    filters: list[str] = wire("Filters", Slice("string8"))
 
 
 @record("mod.dir.alias_map", registry=_STANDIN)
