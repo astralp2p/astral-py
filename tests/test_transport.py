@@ -18,6 +18,7 @@ Every async test is `bounded`. No test contacts a node.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import socket
 import tempfile
@@ -757,6 +758,12 @@ class StreamServerTest(unittest.IsolatedAsyncioTestCase):
         second caller that returned during it would report a listener shut while
         connections nobody accepted were still open -- and unaccepted
         connections are exactly the leak that wedges astrald's worker pool.
+
+        The connection stays *in* the queue for the whole of its own close.
+        Removing it first was the old shape and it is what let a cancelled drain
+        lose track of the rest of the queue: `pending` is what the server still
+        owns, so it drops to zero when the descriptor is gone and not when the
+        close was merely begun.
         """
         server = await listen_any("tcp")
         stalled = _SlowClose()
@@ -766,11 +773,38 @@ class StreamServerTest(unittest.IsolatedAsyncioTestCase):
         second = asyncio.ensure_future(server.aclose())
         await until(lambda: second.done())
         self.assertFalse(second.done(), "the second aclose() returned early")
-        self.assertEqual(server.pending, 0)
+        self.assertEqual(server.pending, 1, "dropped from the queue before it closed")
         self.assertFalse(stalled.closed)
         stalled.release.set()
         await asyncio.gather(first, second)
         self.assertTrue(stalled.closed)
+        self.assertEqual(server.pending, 0)
+
+    @bounded()
+    async def test_a_cancelled_server_aclose_still_drains_the_whole_queue(self):
+        """The same defect `Service.aclose()` and `Registrar.aclose()` carried,
+        one layer down: the drain used to `popleft()` and await one close at a
+        time with `_closed` latched in a `finally`, so a `CancelledError` landing
+        in it abandoned every remaining queued connection -- five of six still
+        open, `closed=True`, and a second `aclose()` returning at once. Each
+        close is shielded and the entry leaves the queue only once it is gone."""
+        server = await listen_any("tcp")
+        clients = [await dial(server.endpoint) for _ in range(6)]
+        await until(lambda: server.pending >= 6)
+
+        closer = asyncio.ensure_future(server.aclose())
+        await asyncio.sleep(0)
+        closer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await closer
+
+        self.assertTrue(server.closing)
+        self.assertFalse(server.closed, "latched closed with the queue still held")
+        await server.aclose()
+        self.assertEqual(server.pending, 0, "a cancelled drain abandoned the queue")
+        self.assertTrue(server.closed)
+        for transport in clients:
+            await transport.aclose()
 
     @bounded()
     async def test_the_server_does_not_report_closed_while_it_still_owns_connections(self):

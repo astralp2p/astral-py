@@ -279,19 +279,15 @@ def _duration(value: Duration | int | _dt.timedelta | None) -> Duration | None:
     return Duration(int(value))
 
 
-def _encode(specs: dict[str, Spec], values: dict[str, Any]) -> dict[str, str]:
-    """Every parameter through its declared spec. Rule 2, made mechanical.
-
-    A key with no declared spec still travels, so nothing is silently dropped;
-    what the declaration buys is that a wrong-typed value is refused here rather
-    than encoded into a query the node reads as something else.
-    """
-    return querystring.encode_params(specs, values)
+# One implementation, on `ModuleClient`. These names stay because the call sites
+# and the tests spell them, but the bodies are the base class's: four spellings
+# of one encoder across six modules is how thirteen dialects start.
+_encode = ModuleClient._encode
 
 
-def _object_id(value: ObjectID | str) -> ObjectID:
-    """An `object_id.sha256` parameter, from an ID or its `data1…` text form."""
-    return value if isinstance(value, ObjectID) else ObjectID.parse(value)
+def _object_id(value: ObjectID | str, op: str) -> ObjectID:
+    """An `object_id.sha256` parameter, naming the op that refused it."""
+    return ModuleClient._object_id(value, op)
 
 
 class Apphost(ModuleClient):
@@ -496,7 +492,7 @@ class Apphost(ModuleClient):
 
         astral-go's client cannot pass `duration` at all.
         """
-        params: dict[str, Any] = {"id": _object_id(id)}
+        params: dict[str, Any] = {"id": _object_id(id, OP_HOLD_OBJECT)}
         span = _duration(duration)
         if span is not None:
             params["duration"] = span
@@ -512,7 +508,7 @@ class Apphost(ModuleClient):
         existed.
         """
         qs = querystring.build(
-            OP_UNHOLD_OBJECT, _encode(_OBJECT_ID, {"id": _object_id(id)})
+            OP_UNHOLD_OBJECT, _encode(_OBJECT_ID, {"id": _object_id(id, OP_UNHOLD_OBJECT)})
         )
         self._expect(await self._c.call_one(qs, **kw), Ack, OP_UNHOLD_OBJECT)
 

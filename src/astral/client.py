@@ -93,7 +93,7 @@ from .context import Context
 from .errors import (
     BadArgument,
     ClientClosed,
-    FeatureUnavailable,
+    Denied,
     ProtocolError,
     QueryTimeout,
     TransportUnsupported,
@@ -116,7 +116,13 @@ from .wire import DEFAULT_MAX_ALLOC
 
 if TYPE_CHECKING:  # pragma: no cover -- typing only
     from .api.apphost import Apphost
+    from .api.auth import Auth
+    from .api.crypto import Crypto
     from .api.dir import Dir
+    from .api.objects import Objects
+    from .api.services import Services
+    from .api.tree import Tree
+    from .serve import Handler, Service
 
 __all__ = [
     "CANCEL_FLUSH_TIMEOUT",
@@ -317,6 +323,11 @@ class Client:
         # stream -> which lane it spends from, or `None` for neither. Persistent
         # streams are tracked for shutdown exactly as budgeted ones are.
         self._live: dict[Stream, str | None] = {}
+        # Inbound services, closed ahead of the streams by `aclose()` (design
+        # section 3.8 step 2). A service holds a listener, serving tasks and its
+        # registrar's bind stream, and the bind stream is one of `_live`, so
+        # closing services first is what makes the bind stream close last.
+        self._services: list[Any] = []
         self._closing = False
         self._closed = False
         # One walk at a time, and the second caller inherits an abandoned
@@ -360,6 +371,41 @@ class Client:
         from .api.dir import Dir
 
         return Dir(self)
+
+    @functools.cached_property
+    def auth(self) -> "Auth":
+        """The `auth` ops: contracts, signing, indexing."""
+        from .api.auth import Auth
+
+        return Auth(self)
+
+    @functools.cached_property
+    def crypto(self) -> "Crypto":
+        """The `crypto` ops: public keys, signing, verification."""
+        from .api.crypto import Crypto
+
+        return Crypto(self)
+
+    @functools.cached_property
+    def objects(self) -> "Objects":
+        """The `objects` ops: repositories, reads, writes, search, blueprints."""
+        from .api.objects import Objects
+
+        return Objects(self)
+
+    @functools.cached_property
+    def services(self) -> "Services":
+        """The `services` ops: discovery and sync."""
+        from .api.services import Services
+
+        return Services(self)
+
+    @functools.cached_property
+    def tree(self) -> "Tree":
+        """The `tree` ops: get, list, set, mounts."""
+        from .api.tree import Tree
+
+        return Tree(self)
 
     # --- what the greeting said ---
 
@@ -461,6 +507,7 @@ class Client:
         timeout: float | None | _Default = _DEFAULT,
         persistent: bool = False,
         raw: bool = False,
+        separator: bool | None = None,
         allow_unparsed: bool = False,
         nonce: Nonce | int | None = None,
     ) -> Stream:
@@ -509,6 +556,16 @@ class Client:
         session that cannot carry unframed bytes fails without spending one of
         the node's workers on a response nobody can read, and it is carried into
         the `Stream`, which then refuses to frame a file as protocol.
+
+        `separator` declares whether this op's first `eos` is design section
+        4.7's snapshot/live boundary, and it is carried into the `Stream`, which
+        then refuses the readers that would misread it. `None`, the default,
+        declares nothing and permits every reader, which is right for every ST
+        and RR op. `True` -- what `follow()` sets -- refuses `async for`, which
+        would stop at the separator and drop every live object in silence.
+        `False` refuses `follow()`, `snapshot()` and `live()`, for a follow-shaped
+        op that sends no separator at all: `tree.get?follow=true` is one, and
+        those three would block until the deadline holding a node worker.
 
         `fmt_in` and `fmt_out` are the channel formats, and they are reconciled
         with any `in=`/`out=` the query string already carries -- the query string
@@ -575,6 +632,7 @@ class Client:
                     cancel_timeout=self.cancel_timeout,
                     on_close=self._forget,
                     raw=raw,
+                    separator=separator,
                 )
             except BaseException:
                 await conn.aclose()
@@ -627,6 +685,7 @@ class Client:
         """
         kw.setdefault("persistent", True)
         kw.setdefault("timeout", None)
+        kw.setdefault("separator", True)
         return StreamContext(self, qs, kw)
 
     async def call(self, qs: str, **kw: Any) -> list[Any]:
@@ -698,21 +757,52 @@ class Client:
         `sign_app_contract` again. Reading to the end of a stream that never ends
         blocks until the responder closes, which for that op is never.
 
+        **`expect=n` interleaves: one send, then one read.** That declaration is
+        exactly the statement that the op answers as it goes, and an op that
+        answers as it goes cannot be fed a whole batch first. The answers pile up
+        unread in this process's receive buffer while it is still writing; when
+        that buffer fills, the responder's own `ch.Send` blocks, it stops reading,
+        this side's `send()` blocks on its drain, and neither moves until the
+        one-shot budget expires as `QueryTimeout`. Measured against a mock that
+        runs astrald's own `ch.Switch` loop over loopback: 20,000 inputs of 1 kB
+        with 1 kB answers wedged after 4,767 exchanges, and the interleaved form
+        completes every size tried. `Objects._exchange` was written with the
+        interleave for this reason and said so in its docstring while the shared
+        helper -- which drives `tree.set`, `crypto.public_key`, `crypto.sign_hash`,
+        `crypto.sign_text` and `auth.sign_contract` -- did not.
+
+        `expect=None` keeps the batch-first order: it reads to the stream's end,
+        so the op it names has answered nothing until the input is complete and
+        there is nothing to interleave with.
+
         `timeout` bounds the send, the answers and the route together.
         """
         async with self._one_shot(qs, kw) as (s, budget):
-            for obj in objects:
-                await s.send(obj, timeout=budget.remaining)
-            if eos:
-                await s.send_eos(timeout=budget.remaining)
             if expect is None:
+                for obj in objects:
+                    await s.send(obj, timeout=budget.remaining)
+                if eos:
+                    await s.send_eos(timeout=budget.remaining)
                 return await s.collect(timeout=budget.remaining)
-            answers = []
-            for _ in range(expect):
-                answer = await s.first(timeout=budget.remaining)
-                if answer is None:
-                    break
-                answers.append(answer)
+            answers: list[Any] = []
+            sent = 0
+            total = len(objects)
+            # The terminator goes after the last input on both paths, so the
+            # frames this side writes are in the same order either way and only
+            # the points it reads at move.
+            if total == 0 and eos:
+                await s.send_eos(timeout=budget.remaining)
+            while sent < total or len(answers) < expect:
+                if sent < total:
+                    await s.send(objects[sent], timeout=budget.remaining)
+                    sent += 1
+                    if sent == total and eos:
+                        await s.send_eos(timeout=budget.remaining)
+                if len(answers) < expect:
+                    answer = await s.first(timeout=budget.remaining)
+                    if answer is None:
+                        break
+                    answers.append(answer)
             return answers
 
     async def resolve_identity(self, name: Identity | str, **kw: Any) -> Identity:
@@ -744,39 +834,137 @@ class Client:
 
     async def serve(
         self,
-        identity: Identity | None,
-        handler: Any,
+        identity: Identity | None = None,
+        handler: "Handler | None" = None,
         *,
         mode: str = "handler",
-    ) -> Any:
-        """Serve inbound queries on `identity`. Lands with `serve.py`, step 10.
+        proto: str | None = None,
+        endpoint: str | None = None,
+        token: Nonce | int | None = None,
+        experimental: bool = False,
+        ready_timeout: float | None = None,
+        **kw: Any,
+    ) -> "Service":
+        """Serve inbound queries. Design sections 4.3 and 4.4.
 
-        `mode` is `handler` (the node dials us, design section 4.3) or `service`
-        (experimental on IPC, design section 4.4). A misspelled one is a caller
-        fault and is refused first, because it is wrong whatever else is true.
+        `mode="handler"` is the primary path: a local listener is bound, the
+        accept loop starts **before** anything is registered, and
+        `apphost.bind` + `apphost.register_handler` tell the node where to dial.
+        The returned `Service` owns the listener, the op table and the registrar,
+        and `Service.aclose()` closes all three in design section 3.8's order.
 
-        Then the certain fact, before the conditional one: **nothing serves
-        yet.** The ordering matters. Telling an anonymous caller "get a token"
-        for a feature that does not exist sends them to obtain a credential and
-        learn afterwards that it buys nothing, so the permanent refusal wins over
-        the fixable one -- and the message names both, because when serving does
-        land an anonymous client will still be refused: astrald checks
-        `isAuthenticated()` before it looks at the identity and answers `denied`
-        even for the zero identity.
+        `mode="service"` is design section 4.4's register-service path, which is
+        the WebSocket design. astral-go implements neither side of it and astrald
+        closes the IPC guest connection unconditionally after `Guest.Serve`
+        returns while guarding the same close on `donated` only on the WebSocket
+        path, so a donated responder stream over IPC can be closed under it
+        (design risk R-16, unsettled). Over IPC it therefore needs
+        `experimental=True`; over WebSocket it needs nothing.
 
-        `FeatureUnavailable` and not `NotImplementedError`, so the documented
-        `except astral.AstralError` catches it like everything else.
+        `identity` names the identity to serve. It reaches the wire only in
+        service mode, where `register_service_msg` carries it. Register-handler
+        has no identity argument at all: astrald registers the handler under
+        `q.Caller()`, so a `handler`-mode `identity` that is not this client's
+        guest identity is refused here rather than silently registered under
+        another one.
+
+        **The two modes are authenticated differently, and it is astrald's
+        asymmetry rather than this SDK's.** `register_service_msg` is refused
+        outright for a token-less guest, the zero identity included, because
+        `onRegisterServiceMsg` tests `isAuthenticated()` first. The
+        `apphost.register_handler` **op** tests nothing but the query's origin
+        and then registers under `q.Caller()` -- which the core router rewrites
+        to the node's own identity for an anonymous guest -- so an anonymous
+        local process can register a handler, and it registers as the node.
+
+        **Returning means registered.** The first registration cycle runs
+        before this returns, bounded by `ready_timeout`, and its failure is this
+        call's failure with the service already closed: a service the node has
+        never heard of answers nothing and reports nothing, which is worse than
+        an exception. Only a connection that worked and then dropped is retried,
+        and that retrying is the registrar's.
         """
+        from .registrar import READY_TIMEOUT, Registrar
+        from .serve import DEFAULT_PROTO, Service, require_service_transport
+
         if mode not in ("handler", "service"):
             raise BadArgument(f"serve mode {mode!r}: expected 'handler' or 'service'")
-        raise FeatureUnavailable(
-            "inbound serving lands with astral/serve.py and astral/registrar.py "
-            "(design sections 4.3, 4.4 and implementation step 10); when it does, "
-            "an anonymous client will still be refused, because astrald denies "
-            "every registration from a token-less guest, the zero identity "
-            f"included -- this client is "
-            f"{'authenticated' if self.authenticated else 'anonymous'}"
+        self._require_open()
+        if mode == "service":
+            # Both refusals are certainties, and both happen before anything is
+            # dialed: astrald tests `isAuthenticated()` ahead of everything else
+            # in `onRegisterServiceMsg` and answers `denied` even for the zero
+            # identity, so an anonymous registration is a round trip whose answer
+            # is already known -- and one of 32 node workers spent to hear it.
+            # The unsettled risk outranks the fixable refusal: a caller told to
+            # get a token first would obtain one and only then learn that the
+            # path is gated.
+            require_service_transport(self._endpoint, experimental=experimental)
+            if not self.authenticated:
+                raise Denied(
+                    "an anonymous client cannot register a service: astrald "
+                    "refuses every registration from a token-less guest, the "
+                    "zero identity included. mode='handler' is not refused -- "
+                    "apphost.register_handler checks only the query's origin -- "
+                    "but it then registers under the caller the core router "
+                    "substitutes, which is the node's own identity"
+                )
+        if mode == "handler" and identity is not None and identity != self._guest_id:
+            # An anonymous client fails this too, and correctly: its `guest_id`
+            # is `None`, the node substitutes its own identity for the nil
+            # caller, and a client that cannot name the identity it will be
+            # registered under cannot be asked to confirm it.
+            whose = (
+                "which this anonymous client does not know -- the core router "
+                "substitutes the node's own identity for a nil caller"
+                if self._guest_id is None
+                else f"which is {self._guest_id.fingerprint()}"
+            )
+            raise BadArgument(
+                f"serve(identity={identity.fingerprint()}): apphost.register_handler "
+                "takes no identity -- astrald registers the handler under the "
+                f"query's caller, {whose}. The message that could name another "
+                "one, mod.apphost.register_handler_msg, is registered in "
+                "astral-go and unreachable in astrald: Guest.Serve's dispatch "
+                "switch never routes to it (astral-go bug G-16)"
+            )
+
+        service = Service(
+            handler=handler,
+            identity=identity,
+            token=token,
+            connector=self._connector,
+            **kw,
         )
+        self._services.append(service)
+        try:
+            if mode == "service":
+                session = await self._connector()
+                try:
+                    await service.attach_registration(
+                        session, identity, experimental=experimental
+                    )
+                except BaseException:
+                    await session.aclose()
+                    raise
+                return service
+
+            registrar = Registrar(self)
+            service.attach_registrar(registrar)
+            # The accept loop is up before anything is registered, which is
+            # design section 4.3 step 2: a post-connect hook's own query can be
+            # routed straight back to this identity, and astrald waits for the
+            # `ack` with no deadline of its own.
+            await service.listen(DEFAULT_PROTO if proto is None else proto, endpoint=endpoint)
+            await registrar.register(service.endpoint, service.token)
+            await registrar.start(
+                timeout=READY_TIMEOUT if ready_timeout is None else ready_timeout
+            )
+            return service
+        except BaseException:
+            self._forget_service(service)
+            await service.aclose()
+            raise
 
     # --- internals ---
 
@@ -957,6 +1145,11 @@ class Client:
                 f"{self._endpoint}: no connection within {budget.timeout}s"
             ) from exc
 
+    def _forget_service(self, service: Any) -> None:
+        """Drop a service from the shutdown walk. Called by `serve()` on failure."""
+        with contextlib.suppress(ValueError):
+            self._services.remove(service)
+
     def _forget(self, stream: Stream) -> None:
         """A stream has closed: drop it and give its permit back.
 
@@ -984,12 +1177,13 @@ class Client:
         1. refuse new work, so nothing is opened behind the teardown, **and wake
            the queue** so a query already waiting on a permit fails instead of
            being handed one by a stream this method just closed;
-        2. cancel serving tasks -- lands with `serve.py`;
+        2. close every inbound service: its listener, then its serving tasks,
+           then its registrar's bind stream, which is what makes the node run its
+           deferred handler sweep with the handlers already torn down (design
+           section 3.8 step 4, and the bind stream is one of the streams step 3
+           would otherwise close first);
         3. close every live stream, budgeted and persistent alike;
-        4. close the registrar's bind channel last, so the node's crash-safe
-           deregistration fires with the handlers already gone -- lands with
-           `registrar.py`;
-        5. drain best-effort `apphost.cancel` dials, so one issued during
+        4. drain best-effort `apphost.cancel` dials, so one issued during
            teardown is not abandoned half-open on the node.
 
         Swallowing teardown faults supersedes design section 3.8's
@@ -1034,6 +1228,16 @@ class Client:
             if self._closed:
                 return
             try:
+                # Services first, and one at a time: each one closes its listener,
+                # its serving tasks and then its bind stream, and the ordering
+                # inside a service is what the node's deferred handler sweep
+                # depends on. Shielded for the same reason the streams are -- a
+                # cancelled teardown that abandoned a listener would leave it
+                # accepting connections nothing serves.
+                while self._services:
+                    service = self._services.pop()
+                    with contextlib.suppress(Exception):
+                        await asyncio.shield(service.aclose())
                 # `shield` per stream, gathered: a cancellation delivered here
                 # cancels this `gather` and not the closes underneath it, so
                 # every descriptor is still released, and the bound is one
@@ -1054,7 +1258,7 @@ class Client:
                 with contextlib.suppress(Exception):
                     await flush_cancels(CANCEL_FLUSH_TIMEOUT)
             finally:
-                if not self._live:
+                if not self._live and not self._services:
                     self._closed = True
 
     def _wake_waiters(self) -> None:

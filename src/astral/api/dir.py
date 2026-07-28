@@ -321,7 +321,7 @@ class Dir(ModuleClient):
 
     async def apply_filters(
         self,
-        filters: str | Sequence[str],
+        names: str | Sequence[str],
         *,
         identity: Identity | str | None = None,
         **kw: Any,
@@ -335,6 +335,13 @@ class Dir(ModuleClient):
         argument, which the node reads as one unknown filter and answers
         `False`.
 
+        **`names`, not `filters`.** The op's wire argument is `filters=` and it
+        travels as one, but `filters` is also a routing keyword every method
+        forwards to `Client.query`, where it is `route_query_msg.Filters` -- the
+        identity filters applied to the *hop*, not the names this op evaluates.
+        Taking the op's argument under that name made the routing lever
+        unreachable on this op and did it silently.
+
         `identity` defaults to the query's caller, which is the node itself for
         an anonymous client. Unlike `get_alias`, it accepts a directory name,
         `localnode`, or a hex key: the op resolves this argument server-side.
@@ -344,7 +351,7 @@ class Dir(ModuleClient):
         `dir.set_alias` (bug G-8); this one never names another op.
         """
         params: dict[str, Any] = {
-            "filters": _param(_STRING8, _filter_list(filters)),
+            "filters": _param(_STRING8, _filter_list(names)),
         }
         if identity is not None:
             params["id"] = _param(_STRING8, _name(identity, OP_APPLY_FILTERS))
@@ -391,9 +398,8 @@ class Dir(ModuleClient):
 # --- argument and answer discipline --------------------------------------
 
 
-def _param(spec: Spec, value: Any) -> str:
-    """One parameter value, in the bare payload half of its text encoding."""
-    return querystring.encode_param(spec, value)
+_param = ModuleClient._param
+"""One parameter value, in its text form. `ModuleClient`'s, not a copy."""
 
 
 def _identity(value: Identity | str, op: str) -> Identity:

@@ -127,5 +127,159 @@ class ReadmeTest(unittest.TestCase):
                     self.assertNotIn("http://", line)
 
 
+class ReadmeFollowTest(unittest.TestCase):
+    """Every `client.follow(...)` the README shows names an op that sends one.
+
+    The README's only ST+follow example was `client.follow("tree.get?...&follow=
+    true")` read with `snapshot()` then `live()`, and `Tree` documents the
+    opposite for the same op: it sends no separator, so `snapshot()` blocks. And
+    `client.follow()` sets `timeout=None`, so nothing bounded the hang -- the
+    process blocked, never reached the `live()` line, and held one of the node's
+    32 workers for as long as it ran. Two authored surfaces of one SDK
+    contradicting each other about the safety of the same call.
+
+    Verified live against `furry-bolt`: `tree.get?path=/mod/indexing&follow=true`
+    answered one `nil` frame and no `eos` with the stream still open after four
+    seconds, while `services.discover?follow=true` and
+    `objects.scan?repo=main&follow=true` both ended at a separator `eos`.
+    """
+
+    SEPARATOR_OPS = frozenset({"objects.scan", "services.discover", "services.sync"})
+    """Ops whose first `eos` is the snapshot/live boundary. Verified live."""
+
+    NO_SEPARATOR_OPS = frozenset({"tree.get"})
+    """Follow-shaped ops whose single `eos` is the terminator. Verified live."""
+
+    def test_the_readme_follows_only_ops_that_send_a_separator(self):
+        text = README.read_text(encoding="utf-8")
+        found = re.findall(r'client\.follow\(\s*"([^"?]+)', text)
+        self.assertTrue(found, "the README no longer shows a follow example")
+        for op in found:
+            with self.subTest(op=op):
+                self.assertNotIn(
+                    op,
+                    self.NO_SEPARATOR_OPS,
+                    f"client.follow({op!r}) blocks forever: that op sends no "
+                    "snapshot/live separator, so `snapshot()` never returns",
+                )
+                self.assertIn(op, self.SEPARATOR_OPS)
+
+
+class AnnotationTest(unittest.TestCase):
+    """`py.typed` makes every annotation a supported interface, so every one
+    of them has to resolve at runtime.
+
+    `api/base.py` names this failure verbatim as the reason `Client` is imported
+    at module scope rather than under `TYPE_CHECKING`: "an interface that raises
+    `NameError` on introspection is not one -- `inspect.signature(eval_str=True)`,
+    doc generators and DI containers all read them at runtime." Three public
+    surfaces did exactly that and none was caught, because the obvious spot check
+    does not show it: `typing.get_type_hints(cls)` walks `__mro__` and resolves
+    each base against **its own** module globals, while
+    `get_type_hints(cls.__init__)` and `inspect.signature(cls, eval_str=True)`
+    resolve the generated `__init__` against the *subclass's* globals.
+
+    - `ReadObjectAction` and `CreateObjectAction` inherit `auth.Action`'s
+      `nonce: Nonce` into `astral.api.objects`, which had no reason of its own to
+      import `Nonce`. Every remaining action type -- `mod.user.*_action`,
+      `mod.nodes.relay_for_action` -- would have repeated it.
+    - `Connector` was `Callable[[], Awaitable["Session"]]`, a forward reference
+      in an exported alias, and `astral.stream` imports the alias without the
+      class.
+
+    So the check is a sweep rather than three assertions.
+    """
+
+    def modules(self) -> list[str]:
+        directory = pathlib.Path(astral.api.__file__).parent
+        return [
+            "astral",
+            "astral.blueprint",
+            "astral.channel",
+            "astral.client",
+            "astral.codec",
+            "astral.conn",
+            "astral.context",
+            "astral.object",
+            "astral.objectid",
+            "astral.primitives",
+            "astral.querystring",
+            "astral.record",
+            "astral.registrar",
+            "astral.registry",
+            "astral.serve",
+            "astral.session",
+            "astral.spec",
+            "astral.stream",
+            "astral.transport",
+            "astral.types",
+            "astral.wire",
+        ] + [
+            f"astral.api.{path.stem}"
+            for path in sorted(directory.glob("*.py"))
+            if not path.stem.startswith("_")
+        ]
+
+    def test_every_public_annotation_resolves(self):
+        import inspect
+        import typing
+
+        import astral.api
+
+        checked = 0
+        for name in self.modules():
+            module = importlib.import_module(name)
+            for attribute in sorted(vars(module)):
+                if attribute.startswith("_"):
+                    continue
+                obj = getattr(module, attribute)
+                if not (inspect.isclass(obj) or inspect.isfunction(obj)):
+                    continue
+                if getattr(obj, "__module__", None) != name:
+                    continue
+                targets = [(attribute, obj)]
+                if inspect.isclass(obj) and "__init__" in vars(obj):
+                    targets.append((f"{attribute}.__init__", obj.__init__))
+                for label, target in targets:
+                    checked += 1
+                    with self.subTest(module=name, name=label):
+                        try:
+                            typing.get_type_hints(target)
+                        except NameError as exc:  # pragma: no cover -- the defect
+                            self.fail(
+                                f"{name}.{label} has an unresolvable annotation: "
+                                f"{exc}. py.typed makes this a shipped interface."
+                            )
+        self.assertGreater(checked, 100, "the sweep found nothing to check")
+
+    def test_every_public_dataclass_signature_is_introspectable(self):
+        """The call a real tool makes. `get_type_hints(cls)` succeeds where this
+        fails, which is why the fault was invisible to the obvious spot check."""
+        import dataclasses
+        import inspect
+
+        checked = 0
+        for name in self.modules():
+            module = importlib.import_module(name)
+            for attribute in sorted(vars(module)):
+                if attribute.startswith("_"):
+                    continue
+                obj = getattr(module, attribute)
+                if not inspect.isclass(obj) or not dataclasses.is_dataclass(obj):
+                    continue
+                if getattr(obj, "__module__", None) != name:
+                    continue
+                checked += 1
+                with self.subTest(module=name, name=attribute):
+                    try:
+                        inspect.signature(obj, eval_str=True)
+                    except NameError as exc:  # pragma: no cover -- the defect
+                        self.fail(
+                            f"inspect.signature({name}.{attribute}, eval_str=True) "
+                            f"raises {exc}"
+                        )
+        self.assertGreater(checked, 20, "the sweep found no dataclasses")
+
+
 if __name__ == "__main__":
     unittest.main()

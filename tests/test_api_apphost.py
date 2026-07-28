@@ -71,6 +71,7 @@ from astral.types import Duration, Identity, Nonce, ObjectID, Time, Zone
 from astral.wire import Writer
 
 import live_support
+import reference
 from mock_apphost import (
     ACK,
     Accept,
@@ -287,8 +288,8 @@ class CoercionTest(unittest.TestCase):
 
     def test_an_object_id_parses_from_its_text_form(self):
         oid = ObjectID(size=5, hash=bytes(range(32)))
-        self.assertEqual(_object_id(str(oid)), oid)
-        self.assertEqual(_object_id(oid), oid)
+        self.assertEqual(_object_id(str(oid), OP_HOLD_OBJECT), oid)
+        self.assertEqual(_object_id(oid, OP_HOLD_OBJECT), oid)
 
     def test_a_duration_renders_as_a_go_duration_string(self):
         """The node parses this parameter with Go's `time.ParseDuration`."""
@@ -921,7 +922,7 @@ class SecurityNoteTest(unittest.TestCase):
     security note that is wrong that way is worse than no note.
     """
 
-    ASTRALD = pathlib.Path("/home/intern0/work/astralp2p/astrald/master/mod/apphost/src")
+    SRC = "mod/apphost/src"
 
     GUARDED = {
         "bind",
@@ -941,17 +942,35 @@ class SecurityNoteTest(unittest.TestCase):
         "cancel",
     }
 
+    def ops(self) -> dict[str, str]:
+        """Every `op_*.go` at the pin, name to source."""
+        try:
+            names = reference.listdir(reference.ASTRALD, self.SRC)
+            return {
+                name[len("op_") : -len(".go")]: reference.read(
+                    reference.ASTRALD, f"{self.SRC}/{name}"
+                )
+                for name in names
+                if name.startswith("op_") and name.endswith(".go")
+            }
+        except reference.Unavailable as exc:  # pragma: no cover -- may be absent
+            self.skipTest(str(exc))
+
     def test_the_census_in_the_docstring_matches_the_node(self):
-        if not self.ASTRALD.is_dir():  # pragma: no cover -- astrald may be absent
-            self.skipTest(f"{self.ASTRALD} is not present")
-        guarded = {
-            path.stem[len("op_") :]
-            for path in self.ASTRALD.glob("op_*.go")
-            if "OriginNetwork" in path.read_text(encoding="utf-8")
-        }
+        """Read at the pinned revision, not out of the working tree.
+
+        Globbing the checkout is what made this test fail on a sibling
+        repository's pull: astrald moved to `3392926b`, gained a guarded
+        `op_delete_token.go`, and the census went to seven -- for an op the
+        running node does not serve and no SDK method drives. The census is a
+        statement about the revision this module was read against, so it is read
+        at that revision. Bumping the pin in `tests/reference.py` is what makes
+        it a statement about a newer one, deliberately.
+        """
+        ops = self.ops()
+        guarded = {name for name, src in ops.items() if "OriginNetwork" in src}
         self.assertEqual(guarded, self.GUARDED)
-        ops = {path.stem[len("op_") :] for path in self.ASTRALD.glob("op_*.go")}
-        self.assertEqual(ops - guarded, self.UNGUARDED)
+        self.assertEqual(set(ops) - guarded, self.UNGUARDED)
 
         doc = apphost_module.__doc__ or ""
         self.assertIn("six of the", doc)
@@ -964,10 +983,7 @@ class SecurityNoteTest(unittest.TestCase):
         """The sharper end of the same astrald defect: it *mints* a bearer token
         for any identity named in `id`, which is strictly worse than reading the
         ones that already exist."""
-        path = self.ASTRALD / "op_create_token.go"
-        if not path.is_file():  # pragma: no cover -- astrald may be absent
-            self.skipTest(f"{path} is not present")
-        source = path.read_text(encoding="utf-8")
+        source = self.ops()["create_token"]
         self.assertNotIn("OriginNetwork", source)
         self.assertIn("CreateAccessToken", source)
         self.assertIn("create_token", apphost_module.__doc__ or "")
@@ -1000,17 +1016,36 @@ class ModulePatternTest(ApphostCase):
 
     @bounded()
     async def test_every_module_has_a_type_sweep_and_a_client_property(self):
-        from astral.api.dir import DIR_TYPES, Dir
+        """Walked from the directory, not enumerated by hand. Enumerating it by
+        hand is what let five modules land with no `Client` property while this
+        test and `ModuleClientAttachmentTest` both passed: each named `apphost`
+        and `dir` and neither looked at what else was in the package."""
+        import astral.api
+        from astral.api.base import ModuleClient
 
         self.assertEqual(tuple(Apphost.TYPES), tuple(APPHOST_TYPES))
-        self.assertEqual(tuple(Dir.TYPES), tuple(DIR_TYPES))
+        directory = pathlib.Path(astral.api.__file__).parent
+        modules = sorted(
+            path.stem
+            for path in directory.glob("*.py")
+            if not path.stem.startswith("_") and path.stem != "base"
+        )
+        self.assertGreaterEqual(len(modules), 7, "the walk found nothing to check")
         async with MockApphost() as mock:
             client = await self.client(mock)
-            for name, kind in (("apphost", Apphost), ("dir", Dir)):
+            for name in modules:
                 with self.subTest(module=name):
                     got = getattr(client, name)
-                    self.assertIsInstance(got, kind)
+                    self.assertIsInstance(got, ModuleClient)
                     self.assertIs(got, getattr(client, name))
+                    # The sweep is the module's own tuple of declared types, and
+                    # every name in it is registered by the eager import above.
+                    self.assertEqual(
+                        tuple(type(got).TYPES),
+                        tuple(getattr(astral.api, name).__dict__[
+                            f"{name.upper()}_TYPES"
+                        ]),
+                    )
 
     @bounded()
     async def test_every_parameter_goes_through_its_declared_spec(self):

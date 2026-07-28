@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import os
+import pathlib
 import unittest
 from unittest import mock as mocklib
 
@@ -75,6 +77,7 @@ from mock_apphost import (
     MockApphost,
     Reject,
     bounded,
+    frame,
     leaked_sockets,
     socket_fds,
     until,
@@ -933,27 +936,19 @@ class LeakTest(ClientCase):
             await self.assert_no_open_sockets(baseline)
 
 
-# --- serving, which lands with step 10 -----------------------------------
+# --- serving: what `Client.serve` owns ------------------------------------
+#
+# The serving mechanics are `tests/test_serve.py`'s. What belongs here is the
+# facade's own contract: the argument checks that happen before anything is
+# dialed, the failure that closes what it opened, and the shutdown order.
 
 
 class ServeTest(ClientCase):
     @bounded()
-    async def test_the_permanent_refusal_wins_over_the_fixable_one(self):
-        """An anonymous caller told "get a token" for a feature that does not
-        exist obtains a credential and only then learns it buys nothing. The
-        certain fact comes first; the message still carries both."""
-        async with MockApphost() as mock:
-            client = await self.client(mock)
-            with self.assertRaises(FeatureUnavailable) as caught:
-                await client.serve(FURRY_BOLT, None)
-            self.assertIn("serve.py", str(caught.exception))
-            self.assertIn("anonymous", str(caught.exception))
-
-    @bounded()
     async def test_an_unknown_mode_is_refused_before_anything_else(self):
-        """A misspelled mode is wrong whatever else is true, so it outranks even
-        the not-implemented refusal -- and it is a `ValueError` to the stdlib
-        reflex and an `AstralError` to the documented catch-all, both."""
+        """A misspelled mode is wrong whatever else is true, so it outranks every
+        other check -- and it is a `ValueError` to the stdlib reflex and an
+        `AstralError` to the documented catch-all, both."""
         async with MockApphost() as mock:
             client = await self.client(mock)
             with self.assertRaises(BadArgument):
@@ -962,19 +957,58 @@ class ServeTest(ClientCase):
                 await client.serve(FURRY_BOLT, None, mode="rpc")
             with self.assertRaises(astral.AstralError):
                 await client.serve(FURRY_BOLT, None, mode="rpc")
+            self.assertEqual(mock.conn_count, 1, "connect's own dial, and no other")
 
     @bounded()
-    async def test_serving_names_the_module_it_lands_in(self):
-        """`FeatureUnavailable`, not `NotImplementedError`: the class exists, is
-        exported from `astral`, and is exactly this case, and a stub outside the
-        hierarchy escapes the documented `except astral.AstralError`."""
+    async def test_a_handler_mode_identity_that_is_not_the_guests_is_refused(self):
+        """`apphost.register_handler` takes no identity: astrald registers under
+        the query's caller. The message that could name another one,
+        `register_handler_msg`, is unreachable in astrald (bug G-16), so a caller
+        asking for one must be told rather than silently registered as itself."""
         async with MockApphost(token="secret") as mock:
             client = await self.client(mock, token="secret")
-            with self.assertRaises(astral.AstralError) as caught:
+            other = Identity.parse("02" + "11" * 32)
+            with self.assertRaises(BadArgument) as caught:
+                await client.serve(other, None)
+            self.assertIn("G-16", str(caught.exception))
+            self.assertIn(FURRY_BOLT.fingerprint(), str(caught.exception))
+
+    @bounded()
+    async def test_an_anonymous_client_cannot_name_the_identity_it_serves(self):
+        """Its `guest_id` is `None`, the core router substitutes the node's own
+        identity for the nil caller, and a client that cannot name the identity
+        it will be registered under cannot be asked to confirm it."""
+        async with MockApphost() as mock:
+            client = await self.client(mock)
+            with self.assertRaises(BadArgument) as caught:
                 await client.serve(FURRY_BOLT, None)
-            self.assertIsInstance(caught.exception, FeatureUnavailable)
-            self.assertIn("serve.py", str(caught.exception))
-            self.assertIn("authenticated", str(caught.exception))
+            self.assertIn("anonymous", str(caught.exception))
+
+    @bounded()
+    async def test_register_service_over_ipc_needs_the_experimental_flag(self):
+        """Design risk R-16 is unsettled: astrald closes the guest connection
+        unconditionally after `Guest.Serve` returns and guards that close on
+        `donated` only on the websocket path, so a donated responder stream over
+        IPC can be closed under it."""
+        async with MockApphost(token="secret") as mock:
+            client = await self.client(mock, token="secret")
+            with self.assertRaises(FeatureUnavailable) as caught:
+                await client.serve(FURRY_BOLT, None, mode="service")
+            self.assertIn("R-16", str(caught.exception))
+
+    @bounded()
+    async def test_a_registration_the_node_refuses_closes_what_it_opened(self):
+        """A node with no `apphost.bind` answers `route_not_found`. `serve()`
+        raises it rather than retrying: retrying belongs to a connection that
+        worked and then dropped, and a service the node has never heard of
+        answers nothing and reports nothing."""
+        baseline = socket_fds()
+        async with MockApphost() as mock:
+            client = await self.client(mock)
+            with self.assertRaises(RouteNotFound):
+                await client.serve(ready_timeout=2.0)
+            self.assertEqual(client.available_persistent, DEFAULT_MAX_PERSISTENT)
+        await self.assert_no_open_sockets(baseline)
 
 
 # --- the review's findings, one regression each ---------------------------
@@ -1289,16 +1323,46 @@ class PersistentLaneTest(ClientCase):
 
 
 class ModuleClientAttachmentTest(ClientCase):
-    """Design sections 4.1 and 5.1: `client.dir`, `client.apphost`."""
+    """Design sections 4.1 and 5.1: every module gets a cached `Client` property.
+
+    Walked from the directory, not enumerated by hand. The hand-written form is
+    what let five modules -- `objects`, `tree`, `crypto`, `auth`, `services` --
+    land with no property at all while `api/__init__.py` told every reader "a
+    test asserts `client.dir is client.dir` for every module": the claim was
+    false, the suite stayed green, and each of the five wrote the omission into
+    its own docstring as though it were somebody else's step. The sibling rule
+    one paragraph above -- every module is imported eagerly -- is walked from
+    the directory and it held. So this one is walked too.
+    """
 
     @bounded()
-    async def test_the_module_clients_attach_and_are_cached(self):
+    async def test_every_module_client_attaches_and_is_cached(self):
+        import astral.api
+
+        directory = pathlib.Path(astral.api.__file__).parent
+        modules = sorted(
+            path.stem
+            for path in directory.glob("*.py")
+            if not path.stem.startswith("_") and path.stem != "base"
+        )
+        self.assertGreaterEqual(len(modules), 7, "the walk found nothing to check")
         async with MockApphost() as mock:
             client = await self.client(mock)
-            self.assertIs(client.dir, client.dir)
-            self.assertIs(client.apphost, client.apphost)
-            self.assertIs(client.dir.client, client)
-            self.assertIs(client.apphost.client, client)
+            for name in modules:
+                with self.subTest(module=name):
+                    attribute = getattr(type(client), name, None)
+                    self.assertIsInstance(
+                        attribute,
+                        functools.cached_property,
+                        f"astral.api.{name} has no `client.{name}` property; "
+                        "design section 5.1 requires one per module",
+                    )
+                    got = getattr(client, name)
+                    self.assertIs(got, getattr(client, name), "not cached")
+                    self.assertIs(got.client, client)
+                    self.assertIs(
+                        type(got), getattr(astral.api, type(got).__name__)
+                    )
 
     @bounded()
     async def test_a_module_type_decodes_after_nothing_but_import_astral(self):
@@ -1441,10 +1505,10 @@ class OpModeHelperTest(ClientCase):
         separator. Nothing paired them, so each follow op remembered three
         unrelated things by hand or spent the budget forever."""
         async with MockApphost(
-            routes={"tree.get": Accept(objects=[u8(1)], eos=True, live=[u8(2)])}
+            routes={"objects.scan": Accept(objects=[u8(1)], eos=True, live=[u8(2)])}
         ) as mock:
             client = await self.client(mock, max_concurrency=1)
-            async with client.follow("tree.get?follow=true") as s:
+            async with client.follow("objects.scan?follow=true&repo=main") as s:
                 self.assertEqual([o async for o in s.snapshot()], [P.Uint8(1)])
                 # The budget is untouched: a follow stream on the query lane
                 # would have taken this client to zero permits forever.
@@ -1468,6 +1532,52 @@ class OpModeHelperTest(ClientCase):
             client = await self.client(mock)
             answers = await client.call_with("objects.store", P.Uint8(7), eos=True)
         self.assertEqual(answers, [P.Uint8(7)])
+
+    @bounded(30.0)
+    async def test_call_with_interleaves_its_batch_and_does_not_deadlock(self):
+        """`expect=n` declares that the op answers as it goes, and an op that
+        answers as it goes deadlocks against a caller that sends the whole batch
+        first: the answers fill this side's receive buffer, the responder's
+        `ch.Send` blocks, it stops reading, and this side's `send()` blocks on
+        its own drain. Neither moves until the budget expires.
+
+        Driven over a real loopback socket against astrald's own `ch.Switch`
+        shape -- read one frame, send one reply, flush -- because the deadlock is
+        a kernel-buffer fact and an in-memory transport cannot have it. Batched,
+        this wedged after 4,767 of 8,000 exchanges with the responder blocked
+        mid-`flush`; interleaved it completes.
+
+        The ops this reaches are every one that declares `expect`: `tree.set`,
+        `crypto.public_key`, `crypto.sign_hash`, `crypto.sign_text`,
+        `auth.sign_contract` and `apphost.sign_app_contract`.
+        """
+        inputs = 600
+        reply = b"z" * 60000
+        served = [0]
+
+        async def switch(conn, query):  # type: ignore[no-untyped-def]
+            """astrald's read-one, answer-one, flush loop."""
+            conn.send_raw(frame("mod.apphost.query_accepted_msg"))
+            await conn.flush()
+            while True:
+                got = await conn.recv_frame_or_none()
+                if got is None or got[0] == "eos":
+                    break
+                served[0] += 1
+                conn.send_frame("bytes16", len(reply).to_bytes(2, "big") + reply)
+                await conn.flush()
+            await conn.aclose()
+
+        async with MockApphost(routes={"tree.set": switch}) as mock:
+            endpoint = await mock.listen("tcp")
+            client = await connect(endpoint, query_timeout=10.0)
+            self.clients.append(client)
+            body = [P.Bytes16(b"y" * 60000)] * inputs
+            answers = await client.call_with(
+                "tree.set", *body, eos=True, expect=inputs
+            )
+        self.assertEqual(len(answers), inputs)
+        self.assertEqual(served[0], inputs)
 
     @bounded()
     async def test_stream_context_is_a_nameable_public_type(self):
@@ -1553,7 +1663,7 @@ class HierarchyTest(ClientCase):
                     FURRY_BOLT, duration=1.5
                 ),
                 "read after close": lambda: stream.first(),
-                "serve": lambda: client.serve(FURRY_BOLT, None),
+                "serve mode": lambda: client.serve(FURRY_BOLT, None, mode="rpc"),
             }
             for name, run in cases.items():
                 with self.subTest(case=name):

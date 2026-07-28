@@ -181,11 +181,13 @@ __all__ = [
     "BACKOFF_FACTOR",
     "BACKOFF_MAX",
     "BACKOFF_MIN",
+    "BACKOFF_STEP",
     "BindMsg",
     "CANCEL_TIMEOUT",
     "CONNECT_TIMEOUT",
     "Connector",
     "DEFAULT_REJECT_CODE",
+    "ERROR_HISTORY",
     "ERROR_CODES",
     "ErrorMsg",
     "FIRST_FRAME_TIMEOUT",
@@ -255,6 +257,28 @@ FIRST_FRAME_TIMEOUT: Final = 5.0
 BACKOFF_MIN: Final = 1.0
 BACKOFF_MAX: Final = 30.0
 BACKOFF_FACTOR: Final = 2.0
+
+BACKOFF_STEP: Final = 0.05
+"""The floor the geometric series grows from when the minimum is zero.
+
+`backoff_min=0` is a legitimate request -- retry the *first* time at once -- and
+eight tests in this tree ask for it so a reconnect does not cost a wall-clock
+second. It must not mean "retry forever at the speed of the event loop": zero
+times any factor is zero, so a registrar with a zero minimum against a node that
+refuses used to dial 158,000 times a second and retain 17 MB of exception
+objects per second of it. Growth starts here instead, so the first delay is
+still the caller's zero and every one after it is bounded.
+"""
+
+ERROR_HISTORY: Final = 32
+"""Faults a long-lived object keeps in its own log, newest last.
+
+Bounded because `Service` and `Registrar` both run for months and an unbounded
+fault log is a leak with a diagnostic excuse. Shared rather than declared twice
+so the two logs cannot drift: `Registrar.errors` was a plain `list` that the
+peer could grow at its own write rate -- one retained exception, with its
+traceback, for every frame the node wrote on the bind stream.
+"""
 
 # --- op names ------------------------------------------------------------
 
@@ -492,13 +516,6 @@ _SENDING: Final = (
     "closed before {what} was sent",
     "connection lost before {what} was sent: {exc}",
 )
-
-Connector = Callable[[], Awaitable["Session"]]
-"""How a session opens another one: for `apphost.cancel`, for `attach_query`, and
-for a reconnect. `Session.connect` builds one from its own arguments; a session
-over a transport the caller supplied is given one, or has none and then cannot
-cancel."""
-
 
 class Session:
     """One apphost connection, in whichever state the protocol has left it."""
@@ -1736,6 +1753,25 @@ class Session:
         tb: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+
+Connector = Callable[[], Awaitable[Session]]
+"""How a session opens another one: for `apphost.cancel`, for `attach_query`, and
+for a reconnect. `Session.connect` builds one from its own arguments; a session
+over a transport the caller supplied is given one, or has none and then cannot
+cancel.
+
+Declared **after** `Session` and holding the class rather than the string
+`"Session"`. A forward reference in an alias resolves against the globals of
+whichever module is doing the resolving, and `astral.stream` imports this alias
+without importing `Session`, so `typing.get_type_hints(Stream.__init__)` raised
+`NameError: name 'Session' is not defined`. The package ships `py.typed`, which
+makes its annotations a supported interface, and an interface that raises on
+introspection is not one: `inspect.signature(eval_str=True)`, doc generators and
+DI containers all read them at runtime. Holding the class makes the alias
+resolvable from any module that imports it, which is the property an exported
+alias needs.
+"""
 
 
 def _identity(value: Identity | str | None) -> Identity | None:

@@ -94,12 +94,22 @@ data  = await client.call_raw("objects.read?id=data1…") # RAW: unframed bytes
 outs  = await client.call_with("crypto.sign_text",      # WA: input on the body
                                text_object, expect=1)
 
-async with client.follow("tree.get?path=/mod&follow=true") as s:  # ST+follow
+async with client.follow("objects.scan?repo=main&follow=true") as s:  # ST+follow
     async for value in s.snapshot():                    # the stored state
         ...
     async for update in s.live():                       # everything after
         ...
 ```
+
+ST+follow means the op sends an `eos` that is a **snapshot/live separator**
+rather than a terminator, and that is a per-op fact the wire does not carry.
+`objects.scan?follow=true` and `services.discover?follow=true` send one;
+`tree.get?follow=true` does not — its single `eos` is the end, so it is read
+with `async for` and `client.stream()`, which is what `Tree.get_follow` returns.
+Both mismatches used to fail in silence, so the stream now refuses the reader
+its op does not have: `async for` on a follow stream would drop every live
+object, and `snapshot()` on `tree.get` would block until the deadline holding
+one of the node's 32 workers.
 
 `timeout` on `call`, `call_one`, `call_raw` and `call_with` bounds the **whole**
 call — route and answer together — because those own the stream. `query()` hands

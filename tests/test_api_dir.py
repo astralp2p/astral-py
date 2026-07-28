@@ -55,6 +55,7 @@ from astral.types import Identity
 from astral.wire import Writer
 
 import live_support
+import reference
 from astral.api import dir as dir_module
 from mock_apphost import (
     Accept,
@@ -833,7 +834,7 @@ class CitationTest(unittest.TestCase):
     test reads the line numbers out of the prose rather than restating them.
     """
 
-    ASTRALD = pathlib.Path("/home/intern0/work/astralp2p/astrald/master")
+    ASTRALD = reference.ASTRALD
 
     # What must appear on the line each anchor names, keyed by the file.
     EXPECTED = {
@@ -856,10 +857,12 @@ class CitationTest(unittest.TestCase):
         )
         for name, number in cited:
             with self.subTest(file=name, line=number):
-                path = self.ASTRALD / "mod/dir/src" / name
-                if not path.is_file():  # pragma: no cover -- astrald may be absent
-                    self.skipTest(f"{path} is not present")
-                line = path.read_text().splitlines()[int(number) - 1]
+                try:
+                    line = reference.cited_line(
+                        self.ASTRALD, f"mod/dir/src/{name}", int(number)
+                    )
+                except reference.Unavailable as exc:  # pragma: no cover
+                    self.skipTest(str(exc))
                 self.assertIn(self.EXPECTED[name], line)
 
     def test_the_bare_line_citations_still_land(self):
@@ -869,12 +872,242 @@ class CitationTest(unittest.TestCase):
             ("mod/dir/src/module.go", 56, 'if s == "" || s == "anyone"'),
         ):
             with self.subTest(file=relative, line=number):
-                path = self.ASTRALD / relative
-                if not path.is_file():  # pragma: no cover -- astrald may be absent
-                    self.skipTest(f"{path} is not present")
-                self.assertIn(
-                    expected, path.read_text().splitlines()[number - 1]
+                try:
+                    line = reference.cited_line(self.ASTRALD, relative, number)
+                except reference.Unavailable as exc:  # pragma: no cover
+                    self.skipTest(str(exc))
+                self.assertIn(expected, line)
+
+
+class QueryKeywordShadowTest(unittest.TestCase):
+    """No module-client method eats a routing keyword by accident.
+
+    `api/base.py` states the contract for every method of every subclass: "Every
+    method of every subclass takes the query keywords `Client.query` takes --
+    `target`, `caller`, `zone`, `filters`, ... -- and passes them through
+    unread." A method whose own parameter is named after one of them takes that
+    name for itself, and the routing lever becomes unreachable on that op with
+    nothing said about it.
+
+    Two ops did it and neither said so. `Tree.mount_remote(path, target)` spent
+    `target` on the mount's remote node, so `target=X` put X in the query string
+    and routed to the *local* node -- and this is the one op in the SDK where the
+    routing target and the op's own target are genuinely different nodes.
+    `Dir.apply_filters(filters)` spent `filters` on the op's filter names, which
+    are not `route_query_msg.Filters` at all. Both parameters are renamed.
+
+    `Objects` collides on `zone` for thirteen methods and is correct: there the
+    two levers really are one scope, so `_scope` forwards the value to both, and
+    the class docstring says so. That is what the allow-list records.
+    """
+
+    # name -> the reason the collision is deliberate.
+    ALLOWED = {
+        "zone": "Objects: one scope, two levers; `_scope` sends the value to both",
+        "timeout": "the query deadline itself, under its own name",
+    }
+
+    def test_no_method_shadows_a_query_keyword_without_declaring_it(self):
+        import importlib
+        import inspect
+
+        import astral.api
+        from astral.client import Client
+
+        keywords = {
+            p.name
+            for p in inspect.signature(Client.query).parameters.values()
+            if p.kind is inspect.Parameter.KEYWORD_ONLY
+        }
+        self.assertIn("target", keywords)
+        directory = pathlib.Path(astral.api.__file__).parent
+        checked = 0
+        for path in sorted(directory.glob("*.py")):
+            if path.stem.startswith("_") or path.stem == "base":
+                continue
+            module = importlib.import_module(f"astral.api.{path.stem}")
+            for cname in sorted(vars(module)):
+                cls = getattr(module, cname)
+                if not inspect.isclass(cls):
+                    continue
+                if getattr(cls, "__module__", None) != module.__name__:
+                    continue
+                for mname, method in sorted(vars(cls).items()):
+                    if mname.startswith("_") or not callable(method):
+                        continue
+                    try:
+                        sig = inspect.signature(method)
+                    except (TypeError, ValueError):  # pragma: no cover
+                        continue
+                    checked += 1
+                    for shadowed in sorted(set(sig.parameters) & keywords):
+                        with self.subTest(method=f"{cname}.{mname}", name=shadowed):
+                            self.assertIn(
+                                shadowed,
+                                self.ALLOWED,
+                                f"{cname}.{mname} takes `{shadowed}` for its own "
+                                f"and so eats the routing keyword of the same "
+                                f"name; rename the parameter, or forward the "
+                                f"value to both levers and add it here with the "
+                                f"reason",
+                            )
+        self.assertGreater(checked, 40, "the sweep found nothing to check")
+
+
+class ModulePatternPolicyTest(unittest.TestCase):
+    """One dialect, not thirteen. The rules `api/base.py` states, enforced.
+
+    `base.py` exists because two modules already had two message formats for the
+    same violation, and it says so: "which is how thirteen modules end up with
+    thirteen dialects of the same fault. One base class, one message." It caught
+    `_expect` and caught nothing else, and the six modules that landed after it
+    grew four spellings of the parameter encoder, three copies of `_object_id` in
+    two behaviours, two conventions for the batch form of an op and three for the
+    follow form. None of that was enforced anywhere, which is why it happened.
+    """
+
+    SHARED = ("_param", "_encode", "_object_id", "_expect")
+    """Helpers that live on `ModuleClient` and must not be reimplemented."""
+
+    def modules(self):  # type: ignore[no-untyped-def]
+        import astral.api
+
+        directory = pathlib.Path(astral.api.__file__).parent
+        return [
+            path
+            for path in sorted(directory.glob("*.py"))
+            if not path.stem.startswith("_") and path.stem != "base"
+        ]
+
+    def test_no_module_reimplements_a_helper_the_base_class_owns(self):
+        """A module may bind one of these to its own spec table -- that is a
+        partial application and its body is one call -- but may not grow a second
+        body for it. The divergence this catches was caller-visible:
+        `objects.probe('nope')` named the op that refused the id and
+        `auth.index('nope')` did not."""
+        import ast
+
+        from astral.api.base import ModuleClient
+
+        for name in self.SHARED:
+            self.assertTrue(hasattr(ModuleClient, name), f"{name} is not on the base")
+        for path in self.modules():
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if node.name not in self.SHARED:
+                    continue
+                with self.subTest(module=path.name, helper=node.name):
+                    body = [n for n in node.body if not isinstance(n, ast.Expr)]
+                    self.assertEqual(
+                        len(body),
+                        1,
+                        f"{path.name} reimplements {node.name}; it lives on "
+                        "ModuleClient, and a second body is a second dialect",
+                    )
+                    source = ast.unparse(body[0])
+                    self.assertIn(
+                        "ModuleClient." + node.name,
+                        source,
+                        f"{path.name}:{node.name} does not delegate to the base",
+                    )
+
+    def test_the_batch_and_follow_forms_use_one_naming_convention_each(self):
+        """`<op>_many` for the batch form, `<op>_follow` for the follow form.
+
+        A suffix applies mechanically to every op name where pluralising does
+        not, and `<op>_follow` avoids a method named `follow` on which
+        `Stream.follow()` is the one reader that must not be used -- which is
+        exactly what `Tree.follow` was. Before this rule: `Objects` used `_many`,
+        `Crypto` pluralised, `Objects` prefixed `follow_`, `Services` suffixed
+        `_follow`, and `Tree` used the bare name.
+        """
+        import importlib
+        import inspect
+
+        from astral.api.base import ModuleClient
+
+        checked = 0
+        for path in self.modules():
+            module = importlib.import_module(f"astral.api.{path.stem}")
+            for cname in sorted(vars(module)):
+                cls = getattr(module, cname)
+                if not inspect.isclass(cls) or not issubclass(cls, ModuleClient):
+                    continue
+                if getattr(cls, "__module__", None) != module.__name__:
+                    continue
+                for mname in sorted(vars(cls)):
+                    if mname.startswith("_"):
+                        continue
+                    checked += 1
+                    with self.subTest(method=f"{cname}.{mname}"):
+                        self.assertFalse(
+                            mname.startswith("follow_"),
+                            f"{cname}.{mname}: the follow form is `<op>_follow`",
+                        )
+                        self.assertNotEqual(
+                            mname,
+                            "follow",
+                            f"{cname}.follow: name it `<op>_follow`; a method "
+                            "called `follow` is the one you must not call "
+                            "`Stream.follow()` on",
+                        )
+        self.assertGreater(checked, 40, "the sweep found nothing to check")
+
+
+class ReferencePolicyTest(unittest.TestCase):
+    """No test reads a reference checkout by path. One pin, one reader.
+
+    Five files used to hardcode an absolute path into `astrald` or `astral-go`
+    and assert equality against whatever the working tree held. astrald moved two
+    commits, gained `op_delete_token.go`, and the apphost origin-guard census
+    went red -- over an op the running node does not serve and no SDK method
+    drives. That is the SDK's suite reporting a sibling repository's `git pull`,
+    and at thirteen modules it is thirteen files doing it.
+
+    So the paths live in `tests/reference.py` with the revision beside them, and
+    every read is `git show <rev>:<path>`. Bumping a reference is then a
+    deliberate edit in one place, and the citations that name it get re-read
+    because the suite says which ones stopped landing.
+    """
+
+    def test_no_test_file_hardcodes_a_reference_checkout_path(self):
+        # Assembled rather than written out, so this file does not match itself
+        # and the check is not silently vacuous.
+        needle = "astralp2p" + "/astral"
+        tests = pathlib.Path(__file__).resolve().parent
+        checked = 0
+        for path in sorted(tests.glob("*.py")):
+            if path.name == "reference.py":
+                continue
+            checked += 1
+            with self.subTest(module=path.name):
+                self.assertNotIn(
+                    needle,
+                    path.read_text(encoding="utf-8"),
+                    f"{path.name} reads a reference checkout by path; go through "
+                    "tests/reference.py, which pins the revision",
                 )
+        self.assertGreater(checked, 10, "the walk found nothing to check")
+        # And the one file that may name them does.
+        self.assertIn(
+            needle,
+            (tests / "reference.py").read_text(encoding="utf-8"),
+            "the guard's needle no longer matches the reader it exempts",
+        )
+
+    def test_the_pins_resolve_and_name_the_revisions_the_modules_cite(self):
+        """The pins are the revisions the module docstrings say they were read
+        against. If a pin is bumped without the prose, the citations move and
+        this suite says which ones."""
+        for repo, (_, rev) in reference.PINS.items():
+            with self.subTest(repo=repo):
+                try:
+                    resolved = reference.pin(repo)
+                except reference.Unavailable as exc:  # pragma: no cover
+                    self.skipTest(str(exc))
+                self.assertTrue(resolved.startswith(rev))
 
 
 class SharedPrecheckTest(unittest.TestCase):

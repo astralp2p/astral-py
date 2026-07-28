@@ -293,7 +293,7 @@ class StreamServer(Server):
         "_arrived",
         "_closing",
         "_closed",
-        "_released",
+        "_sweep",
         "_max_pending",
         "_unix_path",
         "accepted",
@@ -312,7 +312,9 @@ class StreamServer(Server):
         # every descriptor this server owns is gone.
         self._closing = False
         self._closed = False
-        self._released = asyncio.Event()
+        # A lock rather than an event: an event a cancelled drain sets anyway
+        # would report a listener shut with queued connections still open.
+        self._sweep = asyncio.Lock()
         self._max_pending = max_pending
         self._unix_path: str | None = None
         self.accepted = 0
@@ -405,35 +407,55 @@ class StreamServer(Server):
         flush per connection, and a second caller that returned during it would
         report a listener shut while connections it owns were still open. That
         is the same promise-ahead-of-fact this whole file was corrected for.
+
+        **A cancelled drain releases the queue anyway and does not claim to have
+        finished.** The drain used to `popleft()` and await one close at a time
+        with `_closed` latched in a `finally`, so a `CancelledError` landing in
+        it abandoned every remaining queued connection with `closed=True` --
+        measured at five of six still open, and a second `aclose()` returning at
+        once on the fast path. Each close is now shielded, so it completes
+        whatever happens here, the entry leaves the queue only once its close
+        returned, and `_closed` is latched only when the queue is empty.
         """
-        if self._closing:
-            await self._released.wait()
+        if self._closed:
             return
+        # Latched before anything is awaited: a drain cancelled a moment later
+        # still stopped `accept()` handing out connections.
         self._closing = True
-        try:
-            # Wake every waiter before anything else, so a task parked in
-            # accept() observes the close instead of the empty queue.
-            self._arrived.set()
-            if self._server is not None:
-                # `close()` closes the listening socket synchronously, which is
-                # the whole of "stop accepting". `wait_closed()` is deliberately
-                # not awaited: since Python 3.12.1 it waits for every open
-                # connection to finish, including the ones `accept()` handed to a
-                # caller, so awaiting it here would deadlock on connections this
-                # server does not own.
-                self._server.close()
-            while self._pending:
-                await self._pending.popleft().aclose()
-            # asyncio does not unlink a unix socket path on close; a file left
-            # behind is what forces astral-go's stale-socket dance at listen time.
-            if self._unix_path is not None:
-                try:
-                    os.unlink(self._unix_path)
-                except OSError:
-                    pass
-        finally:
-            self._closed = True
-            self._released.set()
+        async with self._sweep:
+            if self._closed:
+                return
+            try:
+                # Wake every waiter before anything else, so a task parked in
+                # accept() observes the close instead of the empty queue.
+                self._arrived.set()
+                if self._server is not None:
+                    # `close()` closes the listening socket synchronously, which
+                    # is the whole of "stop accepting". `wait_closed()` is
+                    # deliberately not awaited: since Python 3.12.1 it waits for
+                    # every open connection to finish, including the ones
+                    # `accept()` handed to a caller, so awaiting it here would
+                    # deadlock on connections this server does not own.
+                    self._server.close()
+                while self._pending:
+                    transport = self._pending[0]
+                    with contextlib.suppress(Exception):
+                        await asyncio.shield(transport.aclose())
+                    # Dropped only now: an entry removed before its close
+                    # returned is one a cancellation loses track of.
+                    if self._pending and self._pending[0] is transport:
+                        self._pending.popleft()
+                # asyncio does not unlink a unix socket path on close; a file
+                # left behind is what forces astral-go's stale-socket dance at
+                # listen time.
+                if self._unix_path is not None:
+                    try:
+                        os.unlink(self._unix_path)
+                    except OSError:
+                        pass
+                    self._unix_path = None
+            finally:
+                self._closed = not self._pending
 
     def __repr__(self) -> str:
         if self._closed:

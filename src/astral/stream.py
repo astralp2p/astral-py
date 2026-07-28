@@ -16,13 +16,27 @@ layer 2 cannot decide for itself:
    (design section 4.2).
 2. **What an `eos` means.** It is a convention the op handler emits, not a
    transport signal, and it is per-op and **not discoverable from the wire**
-   (design section 4.7). On an ordinary streaming op it terminates. On a
-   follow-mode op -- `tree.get?follow=true`, `services.discover?follow=true`,
-   `objects.scan?follow=true` -- the first one is a **snapshot/live separator**
-   and the channel stays open behind it. Conflating the two truncates a follow
-   stream at its separator or deadlocks an ordinary one waiting for a second
-   `eos` that never comes, so the caller declares which shape it expects by
-   choosing the iterator, and nothing here infers one.
+   (design section 4.7). On an ordinary streaming op it terminates. On an
+   ST+follow op -- `services.discover?follow=true`, `objects.scan?follow=true` --
+   the first one is a **snapshot/live separator** and the channel stays open
+   behind it. Conflating the two truncates a follow stream at its separator or
+   deadlocks an ordinary one waiting for a second `eos` that never comes, so the
+   caller declares which shape it expects and nothing here infers one.
+
+   **`tree.get?follow=true` is not in that list, and this docstring used to say
+   it was.** The op sends its current value, then one object per change, and one
+   `eos` at the very end: the single `eos` is the terminator, so `async for` is
+   its reader and the three separator readers would block until the deadline.
+   Verified live against `furry-bolt` -- one `nil` frame, no `eos`, the stream
+   still open four seconds later, while `objects.scan?repo=main&follow=true` and
+   `services.discover?follow=true` both ended at a separator. Design objection
+   D-T1; `api/tree.py` records it in full.
+
+   The declaration is `separator`, passed to `__init__` and enforced by the
+   readers, because both mismatches used to fail in silence: `async for` on a
+   follow stream returns the snapshot and drops every live object, and a
+   separator reader on `tree.get` holds one of the node's 32 workers until the
+   deadline.
 3. **When the stream is over.** `eos` **or** EOF, never `eos` alone:
    `apphost.whoami` sends one `identity` and closes, `dir.alias_map` sends one
    map and closes, and neither sends an `eos` (astral-docs bug D-23, verified
@@ -138,6 +152,7 @@ class Stream:
         "_cancel_timeout",
         "_on_close",
         "_raw",
+        "_separator",
         "_released_permit",
         "_terminated_by",
         "_live",
@@ -157,6 +172,7 @@ class Stream:
         cancel_timeout: float | None = CANCEL_TIMEOUT,
         on_close: Callable[["Stream"], None] | None = None,
         raw: bool = False,
+        separator: bool | None = None,
     ) -> None:
         """Wrap an accepted query's transport.
 
@@ -184,6 +200,29 @@ class Stream:
         bytes asked for as raw bytes arrive as raw bytes. The asymmetry is the
         hazard's, not the API's.
 
+        `separator` declares whether this op's first `eos` is the snapshot/live
+        boundary of design section 4.7's ST+follow mode, and it exists because
+        both ways of getting that wrong used to fail **silently**:
+
+        - Reading a real follow stream with `async for` returns the snapshot and
+          drops every live object, with no error and no signal. Verified against
+          `objects.scan?follow=true`: three ids, then silence.
+        - Reading a separator-less op with `follow()`, `snapshot()` or `live()`
+          blocks until the caller's deadline while holding one of the node's 32
+          workers. `tree.get?follow=true` is that op -- verified live: one `nil`
+          frame, no `eos`, the stream still open after four seconds.
+
+        The pairing was documentary, and the two docstrings that stated it stated
+        opposite rules for methods whose names suggested the reverse: the method
+        named `follow` was the one method you must not call `Stream.follow()` on.
+        So it is a declaration here instead.
+
+        `None`, the default, is an ordinary stream and constrains nothing --
+        every ST op, every RR op, every stream a caller opened by hand.
+        `True` is a follow stream: `__aiter__` refuses, because it would truncate
+        at the separator. `False` is a follow-shaped op that sends no separator:
+        the three separator readers refuse, because they would block forever.
+
         `on_close` runs exactly once, after the descriptor is gone. It is the
         client's permit release and stream deregistration, and it is
         synchronous because nothing in it may extend the window in which this
@@ -196,6 +235,7 @@ class Stream:
         self._cancel_timeout = cancel_timeout
         self._on_close = on_close
         self._raw = raw
+        self._separator = separator
         self._released_permit = False
         self._terminated_by: Literal["eos", "eof"] | None = None
         self._live = False
@@ -412,7 +452,12 @@ class Stream:
         `asyncio.timeout` rather than looking for a `timeout` argument here,
         because what a per-object deadline should be is per-op (`follow` streams
         are idle for as long as nothing happens) and only the caller knows.
+
+        Refused on a stream declared ST+follow, where the first `eos` is a
+        boundary and not a terminator: this would stop at it and silently drop
+        every live object.
         """
+        self._require_separator(False, "async for")
         return self._walk(until=_UNTIL_EOS, raise_on_error=True)
 
     def raw_objects(self) -> AsyncIterator[Any]:
@@ -438,8 +483,10 @@ class Stream:
         Ends at EOF, or at a second `eos` -- there is exactly one boundary, so a
         second one is the op ending. Never call this on a non-follow op: its
         terminating `eos` would be read as a boundary and the iterator would then
-        block until the responder closed.
+        block until the responder closed. A stream that declared it sends no
+        separator refuses here rather than demonstrating it.
         """
+        self._require_separator(True, "follow()")
         while True:
             obj = await self._next_object(until=_UNTIL_END, raise_on_error=True)
             if obj is _END:
@@ -452,6 +499,7 @@ class Stream:
         Exactly the separator is consumed and no live object is read, so
         `live()` afterwards resumes where this left off.
         """
+        self._require_separator(True, "snapshot()")
         return self._walk(until=_UNTIL_SEPARATOR, raise_on_error=True)
 
     async def live(self) -> AsyncIterator[Any]:
@@ -460,22 +508,56 @@ class Stream:
         On a stream whose separator has already been consumed -- by `snapshot()`
         -- nothing is discarded and this yields the updates from that point.
         """
+        self._require_separator(True, "live()")
         async for obj, live in self.follow():
             if live:
                 yield obj
+
+    def _require_separator(self, wanted: bool, what: str) -> None:
+        """Refuse a reader whose contract this op does not have.
+
+        Both mismatches are silent without this and neither is recoverable by the
+        caller: `async for` on a follow stream returns the snapshot and drops
+        every live object, and a separator reader on an op that sends no
+        separator blocks until the deadline while holding one of the node's 32
+        workers. `None` declares nothing and permits everything, which is every
+        ordinary ST and RR stream.
+        """
+        if self._separator is None or self._separator is wanted:
+            return
+        if wanted:
+            raise ProtocolError(
+                f"{self.query_string}: {what} reads the first `eos` as a "
+                "snapshot/live separator, and this op sends none -- its single "
+                "`eos` is the terminator and arrives only when the stream ends, "
+                "so this would block until the deadline. Use `async for`."
+            )
+        raise ProtocolError(
+            f"{self.query_string}: {what} stops at the first `eos`, which on "
+            "this op is the snapshot/live separator and not the end, so every "
+            "live object would be dropped in silence. Use `follow()`, "
+            "`snapshot()` or `live()`."
+        )
 
     # --- the shape helpers (design section 4.7) ---
 
     async def collect(self, *, timeout: float | None = None) -> list[Any]:
         """Every object to the terminator. The ST helper.
 
-        Never call this on a follow-mode op or on `user.sync_assets`: the first
-        ends at a separator this waits past, and the second ends with a bare
-        `uint64` and no `eos` at all, so both hang until the responder closes
-        (design section 3.10).
+        Refused on a stream declared ST+follow, where it stops at the separator
+        and returns the snapshot alone, dropping every live update **without
+        saying so** -- a silent loss, which is worse than a hang. `follow()`,
+        `snapshot()` and `live()` are the readers that op has.
+
+        Still never call this on `user.sync_assets`, which no declaration covers:
+        it ends with a bare `uint64` and no `eos` at all, so this hangs until the
+        responder closes (design section 3.10).
         """
+        self._require_separator(False, "collect()")
         async with self._deadline(timeout, "the stream did not end"):
-            return [obj async for obj in self]
+            return [obj async for obj in self._walk(
+                until=_UNTIL_EOS, raise_on_error=True
+            )]
 
     async def value(self, *, timeout: float | None = None) -> Any:
         """Exactly one object, then the end of the stream. The RR helper.

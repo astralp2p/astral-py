@@ -31,16 +31,29 @@ module-scope import the other way is what would close the cycle.
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any, AsyncIterator, Mapping, Sequence
 
+from .. import querystring
 from ..client import Client
-from ..errors import ProtocolError
+from ..errors import ParseError, ProtocolError
+from ..spec import Spec
+from ..types import ObjectID
 
 __all__ = ["ModuleClient"]
 
 
 class ModuleClient:
     """One node module's ops, bound to one `Client`.
+
+    **Naming conventions, decided here so thirteen modules do not each decide.**
+    A method is the op name with `.` as `_`; the batch form of an op is
+    `<op>_many`; the follow form is `<op>_follow`. Neither suffix is arbitrary:
+    a suffix applies mechanically to every op name, where pluralising does not --
+    `sign_hash` pluralises and `contains` does not -- and `<op>_follow` avoids the
+    trap of a method named `follow` on which `Stream.follow()` is the one reader
+    you must not use. Two conventions each for the same two shapes was the state
+    this rule replaces: `Objects` used `_many`, `Crypto` pluralised, `Objects`
+    prefixed `follow_`, `Services` suffixed `_follow` and `Tree` used a bare name.
 
     Every method of every subclass takes the query keywords `Client.query` takes
     -- `target`, `caller`, `zone`, `filters`, `timeout`, `persistent`, `raw`,
@@ -105,6 +118,74 @@ class ModuleClient:
                 f"{op}: expected {_name(kind)!r}, got {_name(type(obj))!r}"
             )
         return obj
+
+    # --- argument marshalling, once (design section 5.1, rule 2) ---
+    #
+    # `_expect` was factored here and nothing else was, and the six modules that
+    # landed after it grew **four spellings of the same parameter encoder** --
+    # `_param(spec, value)` byte-identical in two files, `_encode(specs, values)`
+    # byte-identical in two more, `_encode(values)` over a module-wide table, and
+    # `_params(op, **values)` -- plus three copies of `_object_id` in two
+    # behaviours. That last divergence was caller-visible: one form named the op
+    # it failed in and the other did not, so `objects.probe('nope')` said which
+    # op refused and `auth.index('nope')` did not. This is exactly what the class
+    # docstring above says one base class exists to prevent.
+
+    @staticmethod
+    def _param(spec: Spec, value: Any) -> str:
+        """One parameter value, in the bare payload half of its text encoding.
+
+        Design section 5.1 rule 2: the parameter's type comes from the op's
+        declaration, so it never travels, and `querystring.encode_param` is the
+        single implementation. A spec is what makes it one -- without one the
+        encoder dispatches on the *value*, so `b'ab'` silently becomes `YWI=`.
+        """
+        return querystring.encode_param(spec, value)
+
+    @staticmethod
+    def _encode(specs: Mapping[str, Spec], values: Mapping[str, Any]) -> dict[str, str]:
+        """Every parameter through its declared spec.
+
+        A key with no declared spec still travels, so nothing is silently
+        dropped; what the declaration buys is that a wrong-typed value is refused
+        here rather than encoded into a query the node reads as something else.
+        """
+        return querystring.encode_params(dict(specs), dict(values))
+
+    async def _follow_pairs(
+        self, context: Any, kind: type, op: str
+    ) -> AsyncIterator[tuple[Any, bool]]:
+        """`(object, live)` pairs from a follow stream, closed on exit.
+
+        The iterator form of an ST+follow op, for a consumer that wants the pairs
+        and not the stream. Closing is the iterator's: leaving the `async for` --
+        by `break`, by exception, or by exhaustion -- closes the stream, because
+        an undrained follow stream is one of the node's 32 workers held for the
+        life of the process.
+
+        Here rather than in one module, because it was `Services.updates()` alone
+        and `Objects.scan_follow` and every follow op to come have exactly the
+        call-site cost it exists to remove. One module's habit is how twelve
+        modules end up copying it inconsistently or not at all.
+        """
+        async with context as stream:
+            async for obj, live in stream.follow():
+                yield self._expect(obj, kind, op), live
+
+    @staticmethod
+    def _object_id(value: ObjectID | str, op: str) -> ObjectID:
+        """An `object_id.sha256` argument, from an ID or its `data1…` text form.
+
+        The op is named in the failure, which is the form `objects.py` had and
+        the two copies in `apphost.py` and `auth.py` did not: `'nope' has no
+        'data1' prefix` does not say that `auth.index` is what refused it.
+        """
+        if isinstance(value, ObjectID):
+            return value
+        try:
+            return ObjectID.parse(value)
+        except ParseError as exc:
+            raise ParseError(f"{op}: {value!r} is not an object id") from exc
 
 
 def _name(kind: type) -> str:
