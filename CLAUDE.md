@@ -5,9 +5,8 @@ Distribution `astral-ipc`, import package `astral`, standard library only,
 Python >= 3.11. The tree is a from-scratch rewrite; commit `e580b03` deleted the
 synchronous SDK, and no file in it is a reference for anything.
 
-Architecture reference:
-`/tmp/claude-1004/-home-intern0-work/a4aeec5c-215c-4d0c-82b3-29a0cc7015dd/scratchpad/design.md`.
-It is the binding specification; section numbers below cite it. Section 11 holds
+Architecture reference: `docs/architecture.md`. It is the binding specification;
+section numbers below cite it. Section 11 holds
 amendments that supersede the sections they name. **Section 11.4 is deferred**:
 the wire core's `Any`/nil behaviour stays as it is.
 
