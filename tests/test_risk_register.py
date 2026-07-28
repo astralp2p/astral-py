@@ -15,16 +15,18 @@ against a live node and asserts the same bytes come back, which is how a *node*
 changing under the SDK is caught.
 
 Four types below -- `mod.objects.repository_info`, `mod.objects.search_result`,
-`mod.objects.describe_result` and `routing.op_spec` -- belong to modules that
-have not landed (`api/objects.py`, `api/shell.py`, implementation steps 11 and
-12). They are declared here in a **private registry**, under `probe.`-prefixed
-names, so the shape a live node proved is pinned now and nothing breaks when
-those modules declare the real names. The prefix is not cosmetic: `Blueprints`
-rejects a name already present anywhere in the parent chain, so a probe record
-holding the real name would make importing `astral.api` and this module in the
-same process a hard failure. Each class carries `LIVE_TYPE`, the name the node
-actually sends, and that is the name the real declaration must match field for
-field.
+`mod.objects.describe_result` and `routing.op_spec` -- were declared here in a
+private registry under `probe.`-prefixed names while the modules that own them
+were unwritten, so that the shape a live node proved was pinned before there was
+anywhere else to put it. All four have since landed, in `api/objects.py` and
+`api/shell.py`, and this file now imports the **shipped** declarations and
+decodes the captured bytes through them. That is the regression the probes
+existed for and it is strictly stronger: a stand-in can agree with the node while
+the code that ships disagrees with both, which is exactly what a duplicate
+declaration stops anyone noticing.
+
+`PROBE_TYPES` remains, empty of records and parented on the default registry, for
+the next shape a node proves before a module claims it.
 
 **One live probe in this file's subject area must never be run again.**
 `objects.new?type=mod.nodes.node_info` **kills astrald** -- the registry's zero
@@ -46,12 +48,13 @@ import os
 import unittest
 
 from astral.codec.binary import object_reader, payload_bytes, read_fields, write_fields
-from astral.record import record, wire
 from astral.registry import Blueprints, default_blueprints
-from astral.spec import Any as AnySpec
-from astral.spec import Primitive, Ptr, Slice
 from astral.types import Identity, Nonce, ObjectID, Size
 from astral.wire import Reader, Writer
+
+from astral.api.objects import Descriptor as DescribeResult
+from astral.api.objects import RepositoryInfo, SearchResult
+from astral.api.shell import OpSpec
 
 from live_support import LiveCase
 from mock_apphost import bounded
@@ -69,84 +72,24 @@ FORBIDDEN_LIVE_QUERIES = ("objects.new?type=mod.nodes.node_info",)
 """Queries that crash astrald. Never sent, live tier or not (module docstring)."""
 
 
-# --- the types the not-yet-landed modules will declare -------------------
+# --- the shipped types these captures are decoded through -----------------
 #
-# In a private registry, so `api/objects.py` and `api/shell.py` can declare the
-# same names without a duplicate-registration failure. The parent chain reaches
-# every primitive, which is all these shapes need.
+# Imported rather than restated: a stand-in declared here could agree with the
+# node while `api/objects.py` and `api/shell.py` disagreed with both.
 
 PROBE_TYPES = Blueprints(parent=default_blueprints())
+"""A private registry for the next shape a node proves before a module owns it.
 
-
-@record("probe.mod.objects.repository_info", registry=PROBE_TYPES)
-class RepositoryInfo:
-    """`{Name String8, Label String8, Free Uint64}` -- astral-go
-    `api/objects/repository_info.go`. `Free` is unsigned and eight bytes wide
-    (R-8); astral-docs exampling it as a signed `-1` is bug D-22."""
-
-    LIVE_TYPE = "mod.objects.repository_info"
-
-    name: str = wire("Name", Primitive("string8"))
-    label: str = wire("Label", Primitive("string8"))
-    free: int = wire("Free", Primitive("uint64"))
-
-
-@record("probe.mod.objects.search_result", registry=PROBE_TYPES)
-class SearchResult:
-    """`{SourceID *Identity, ObjectID *ObjectID}` -- astral-go
-    `api/objects/search_result.go`. Two pointers, so a zero value is two nil
-    flags and nothing else (R-2)."""
-
-    LIVE_TYPE = "mod.objects.search_result"
-
-    source_id: Identity | None = wire("SourceID", Ptr("identity"))
-    object_id: ObjectID | None = wire("ObjectID", Ptr("object_id.sha256"))
-
-
-@record("probe.mod.objects.describe_result", registry=PROBE_TYPES)
-class DescribeResult:
-    """`{SourceID *Identity, ObjectID *ObjectID, Data astral.Object}` --
-    astral-go `api/objects/descriptor.go`. The `Data` field is polymorphic, so
-    its absent form is the zero-length type tag of design section 2.9 (R-7)."""
-
-    LIVE_TYPE = "mod.objects.describe_result"
-
-    source_id: Identity | None = wire("SourceID", Ptr("identity"))
-    object_id: ObjectID | None = wire("ObjectID", Ptr("object_id.sha256"))
-    data: object = wire("Data", AnySpec())
-
-
-@record("probe.routing.field_spec", registry=PROBE_TYPES)
-class FieldSpec:
-    """`query.FieldSpec{Name string, Type string, Required bool}` -- astral-go
-    `lib/query/editor.go`. Plain Go strings, so `string32` (R-14).
-
-    It has no type name of its own on the node: astral-go never registers
-    `FieldSpec`, and it only ever travels inside `routing.op_spec`.
-    """
-
-    LIVE_TYPE = ""
-
-    name: str = wire("Name", Primitive("string32"))
-    type: str = wire("Type", Primitive("string32"))  # noqa: A003
-    required: bool = wire("Required", Primitive("bool"))
-
-
-@record("probe.routing.op_spec", registry=PROBE_TYPES)
-class OpSpec:
-    """`{Name string, Parameters []query.FieldSpec}` -- astral-go
-    `lib/routing/op_spec.go`. A slice of struct **values**, so each element
-    carries the synthesized presence byte of design section 2.3."""
-
-    LIVE_TYPE = "routing.op_spec"
-
-    name: str = wire("Name", Primitive("string32"))
-    parameters: list = wire("Parameters", Slice("probe.routing.field_spec"))
+Empty today. It is kept because the mechanism is the point: `Blueprints` refuses
+a name already present anywhere in the parent chain, so a probe record holding a
+real type name would make importing `astral.api` and this module in the same
+process a hard failure, and the `probe.` prefix is what keeps the two apart.
+"""
 
 
 def decode(cls: type, payload: bytes):
-    """One captured payload, decoded through the private registry."""
-    r = object_reader(payload, registry=PROBE_TYPES)
+    """One captured payload, decoded through the type the SDK ships."""
+    r = object_reader(payload, registry=default_blueprints())
     obj = cls(**read_fields(r, cls.FIELDS))
     if r.remaining:
         raise AssertionError(f"{cls.__name__}: {r.remaining} bytes left over")
@@ -417,7 +360,7 @@ class R7PolymorphicNil(unittest.TestCase):
     DESCRIBE_RESULT_ZERO = bytes.fromhex("000000")
 
     def test_the_absent_any_is_a_single_zero_byte(self):
-        r = object_reader(self.ERR_UNEXPECTED_ZERO, registry=PROBE_TYPES)
+        r = object_reader(self.ERR_UNEXPECTED_ZERO, registry=default_blueprints())
         self.assertEqual(len(self.ERR_UNEXPECTED_ZERO), 1)
         self.assertEqual(r.uint8(), 0x00)
 
@@ -549,12 +492,21 @@ class R12IPAddress(unittest.TestCase):
 
     The legacy SDK carried two contradictory `_ip_str` helpers. The zero value
     settles the container -- one length byte and nothing else -- and the 4-or-16
-    half needs `ip.local_addrs`, which is not settled live (see the findings).
+    half is **settled**: `ip.local_addrs` on `furry-bolt` answered one address of
+    each family in one capture, four bytes for IPv4 and sixteen for IPv6. Both
+    payloads are below. `tests/test_api_ip.py` carries the whole settlement --
+    the frames, the text function against twenty Go-generated renderings, and
+    the live tier that re-asks the node.
     """
 
     # `objects.new?type=mod.ip.ip_address`, payload only.
     ZERO = bytes.fromhex("00")
     ZERO_JSON = '{"Type":"mod.ip.ip_address","Object":"\\u003cnil\\u003e"}'
+
+    # `ip.local_addrs` on `furry-bolt`, one payload per frame: `10.21.0.5` and
+    # `fe80::8aa2:9eff:fea8:4ab0`.
+    IPV4 = bytes.fromhex("040a150005")
+    IPV6 = bytes.fromhex("10fe800000000000008aa29efffea84ab0")
 
     def test_the_zero_value_is_one_length_byte(self):
         r = Reader(self.ZERO)
@@ -565,6 +517,15 @@ class R12IPAddress(unittest.TestCase):
         """A `bytes8` field would have marshalled to `""`; this type overrides
         JSON with its text form, so an empty address is Go's `<nil>`."""
         self.assertEqual(json.loads(self.ZERO_JSON)["Object"], "<nil>")
+
+    def test_the_payload_is_four_bytes_for_ipv4_and_sixteen_for_ipv6(self):
+        """R-12's open half, settled by one live capture. The length is the only
+        thing that says which family an address belongs to."""
+        for payload, length in ((self.IPV4, 4), (self.IPV6, 16)):
+            with self.subTest(length=length):
+                r = Reader(payload)
+                self.assertEqual(len(r.bytes8()), length)
+                self.assertEqual(r.remaining, 0)
 
 
 # --- the safety rail -----------------------------------------------------
@@ -638,10 +599,10 @@ class LiveRiskProbes(LiveCase):
             (SearchResult, R2OptionalObjectID.SEARCH_RESULT_ZERO),
             (DescribeResult, R2OptionalObjectID.DESCRIBE_RESULT_ZERO),
         ):
-            with self.subTest(type=cls.LIVE_TYPE):
-                data = await self.raw(f"objects.new?type={cls.LIVE_TYPE}")
+            with self.subTest(type=cls.ASTRAL_TYPE):
+                data = await self.raw(f"objects.new?type={cls.ASTRAL_TYPE}")
                 r = Reader(data)
-                self.assertEqual(r.string8(), cls.LIVE_TYPE)
+                self.assertEqual(r.string8(), cls.ASTRAL_TYPE)
                 self.assertEqual(r.bytes32(), expected)
         await self.assert_no_open_sockets()
 
@@ -655,7 +616,7 @@ class LiveRiskProbes(LiveCase):
             payload = r.bytes32()
             if name == "eos":
                 break
-            self.assertEqual(name, RepositoryInfo.LIVE_TYPE)
+            self.assertEqual(name, RepositoryInfo.ASTRAL_TYPE)
             info = decode(RepositoryInfo, payload)
             self.assertGreaterEqual(info.free, 0)
             self.assertEqual(encode(info), payload)
@@ -673,7 +634,7 @@ class LiveRiskProbes(LiveCase):
             payload = r.bytes32()
             if frame_type == "eos":
                 break
-            self.assertEqual(frame_type, OpSpec.LIVE_TYPE)
+            self.assertEqual(frame_type, OpSpec.ASTRAL_TYPE)
             spec = decode(OpSpec, payload)
             self.assertEqual(encode(spec), payload)
             names.append(spec.name)

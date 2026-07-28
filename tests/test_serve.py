@@ -49,6 +49,7 @@ from astral.client import DEFAULT_MAX_PERSISTENT, Client, connect
 from astral.errors import (
     BadArgument,
     Denied,
+    ParseError,
     NodeUnavailable,
     FeatureUnavailable,
     ProtocolError,
@@ -56,9 +57,9 @@ from astral.errors import (
     RemoteError,
     RouteNotFound,
     StreamClosed,
-    TransportUnsupported,
 )
 from astral.object import Ack, EOS, ErrorMessage
+from astral.primitives import Uint8
 from astral.registrar import (
     DEFAULT_JITTER,
     Gate,
@@ -581,23 +582,44 @@ class OpTableTest(ServeCase):
 
 class FramingTest(ServeCase):
     @bounded()
-    async def test_a_format_this_sdk_cannot_write_leaves_the_query_answerable(self):
-        """A node silently accepts an unknown `out=` and produces zero bytes
+    async def test_a_responder_writes_the_format_the_caller_asked_for(self):
+        """The caller's `out=json` names the framing this side writes, and the
+        responder writes it: one JSON envelope per line, terminator included.
+
+        A node silently accepts an unknown `out=` and produces zero bytes
         (astral-docs bug D-24). A responder that accepted and then wrote nothing
-        would reproduce it, so the acceptance is refused **before** it is claimed
-        and the query is skipped."""
+        would reproduce it, so what is refused is the token that names no
+        framing, and every token that names one is served."""
+        service = await self.service()
+
+        async def answer(q: PendingQuery) -> None:
+            async with await q.accept() as stream:
+                await stream.send(Uint8(21))
+
+        service.mount("x.json", answer)
+        answered = await self.dialer(service).query("x.json?out=json")
+        self.assertEqual(answered.kind, "ack")
+        self.assertEqual(
+            await answered.conn.read_raw(), b'{"Type":"uint8","Object":21}\n'
+        )
+
+    @bounded()
+    async def test_a_format_that_names_no_framing_leaves_the_query_answerable(self):
+        """`out=nonsense` is not a format, so no channel can be built from it and
+        the acceptance is refused **before** it is claimed: the query is skipped
+        and the node is free to route it elsewhere."""
         service = await self.service()
         seen: list[BaseException] = []
 
         async def try_accept(q: PendingQuery) -> None:
             try:
                 await q.accept()
-            except TransportUnsupported as exc:
+            except ParseError as exc:
                 seen.append(exc)
             self.assertFalse(q.answered)
 
         service.mount("x.json", try_accept)
-        answered = await self.dialer(service).query("x.json?out=json")
+        answered = await self.dialer(service).query("x.json?out=nonsense")
         self.assertTrue(answered.route_not_found, answered)
         self.assertEqual(len(seen), 1)
 
@@ -651,6 +673,53 @@ class FramingTest(ServeCase):
 
 
 # --- shutdown and leaks ---------------------------------------------------
+
+
+class _ClosesOnTheThirdAsk:
+    """A held resource whose first two closes release nothing.
+
+    `Session.aclose()` and `Stream.aclose()` returning no longer means the
+    connection is gone, so a teardown that dropped a member because its close
+    *returned* would throw that honesty away at the one place it is counted.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def closed(self) -> bool:
+        return self.calls >= 3
+
+    async def aclose(self) -> None:
+        self.calls += 1
+
+
+class CloseAllHonestyTest(ServeCase):
+    """`_close_all` drops a member on its own answer, and always terminates."""
+
+    @bounded()
+    async def test_a_member_that_did_not_close_stays_in_the_set(self):
+        service = Service()
+        self.services.append(service)
+        held = {_ClosesOnTheThirdAsk()}
+        member = next(iter(held))
+        await service._close_all(held)  # noqa: SLF001
+        self.assertEqual(held, {member}, "a live member was dropped")
+        self.assertEqual(member.calls, 1, "the walk must take each member once")
+        await service._close_all(held)  # noqa: SLF001
+        await service._close_all(held)  # noqa: SLF001
+        self.assertEqual(held, set())
+
+    @bounded()
+    async def test_the_walk_takes_each_member_once_and_ends(self):
+        """Looping while the set is non-empty would spin for ever on a member
+        that never closes. Each pass takes only members no pass has taken."""
+        service = Service()
+        self.services.append(service)
+        held = {_ClosesOnTheThirdAsk() for _ in range(4)}
+        await service._close_all(held)  # noqa: SLF001
+        self.assertEqual([m.calls for m in held], [1, 1, 1, 1])
+        self.assertEqual(len(held), 4)
 
 
 class ShutdownTest(ServeCase):
@@ -915,6 +984,46 @@ class GateTest(unittest.IsolatedAsyncioTestCase):
 
 
 # --- the registrar --------------------------------------------------------
+
+
+class _BindThatRefusesToClose:
+    """A bind stream whose first two closes release nothing."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def closed(self) -> bool:
+        return self.calls >= 3
+
+    async def aclose(self) -> None:
+        self.calls += 1
+
+
+class RegistrarCloseHonestyTest(ServeCase):
+    """`_close_bind` forgets the stream on the stream's answer, not on the call.
+
+    The two used to be the same fact because `Stream.aclose()` latched `closed`
+    whatever happened. It no longer does, so reading the call's return as the
+    fact would let `Registrar.closed` claim a bind stream is released while its
+    descriptor is open -- the defect this file was fixed for once already,
+    reintroduced by the fix one layer down.
+    """
+
+    @bounded()
+    async def test_a_bind_that_did_not_close_is_not_forgotten(self):
+        async with MockApphost() as mock:
+            client = await self.client(mock)
+            registrar = Registrar(client, backoff_min=0.0, jitter=0.0)
+            bind = _BindThatRefusesToClose()
+            registrar._bind = bind  # type: ignore[assignment]  # noqa: SLF001
+            await registrar._close_bind()  # noqa: SLF001
+            self.assertIs(registrar._bind, bind)  # noqa: SLF001
+            self.assertFalse(registrar.closed)
+            await registrar._close_bind()  # noqa: SLF001
+            await registrar._close_bind()  # noqa: SLF001
+            self.assertIsNone(registrar._bind)  # noqa: SLF001
+            await registrar.aclose()
 
 
 class RegistrarTest(ServeCase):

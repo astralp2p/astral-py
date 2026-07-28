@@ -530,6 +530,9 @@ class SearchGrammarTest(unittest.TestCase):
         self.assertEqual(q.text(), 'title:"around the world" -tag:x "word one"')
 
     def test_parsing_the_text_form_yields_an_equal_query(self):
+        """True for a query that came from `parse`, which is the only thing
+        `text()` promises. `test_a_constructed_query_is_lossy_on_the_text_form`
+        is the other half."""
         for text in (
             'title:"around the world" -tag:x ?a:b ~c:d word',
             "plain words only",
@@ -539,6 +542,37 @@ class SearchGrammarTest(unittest.TestCase):
             with self.subTest(text=text):
                 q = SearchQuery.parse(text)
                 self.assertEqual(SearchQuery.parse(q.text()), q)
+
+    def test_a_constructed_query_is_lossy_on_the_text_form(self):
+        """A query built rather than parsed can hold what the grammar cannot
+        spell, and the text channel loses it silently -- `bin`, `json` and
+        `canonical` all carry it exactly. The loss is astral-go's
+        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 5c18d9c),
+        which a registered searcher parses the same query with, so the SDK
+        matching it is what keeps the two agreeing about the question.
+
+        Pinned rather than repaired, and named in `SearchQuery.text`."""
+        cased = SearchQuery(query="Hello World", tags=[])
+        self.assertEqual(
+            SearchQuery.parse(cased.text()), SearchQuery(query="hello world", tags=[])
+        )
+        # A free word carrying a colon becomes a tag: a different search.
+        colon = SearchQuery(query="a:b", tags=[])
+        self.assertEqual(
+            SearchQuery.parse(colon.text()),
+            SearchQuery(query="", tags=[QueryTag(name="a", mod=TAG_REQUIRE, value="b")]),
+        )
+        # A modifier outside the three prefixed constants has no spelling.
+        odd = SearchQuery(query="", tags=[QueryTag(name="u", mod="u", value="v")])
+        self.assertEqual(
+            SearchQuery.parse(odd.text()),
+            SearchQuery(query="", tags=[QueryTag(name="u", mod=TAG_REQUIRE, value="v")]),
+        )
+        for value in (cased, colon, odd):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    SearchQuery.read_payload(object_reader(payload_bytes(value))), value
+                )
 
     def test_required_tags_in_ignores_optional_tags(self):
         q = SearchQuery.parse("a:1 -b:2 ?c:3 ~d:4")
@@ -2302,7 +2336,24 @@ class LiveObjectsTest(live_support.LiveCase):
 
     async def test_scan_follow_separates_the_snapshot_from_the_live_stream(self):
         """Drained and closed inside the block: a follow stream left open holds
-        one of the node's 32 workers until the node restarts."""
+        one of the node's 32 workers until the node restarts.
+
+        **Compared as a multiset, because order is not a property this op
+        offers.** The snapshot half of `objects.scan?follow=true` does not share
+        the plain scan's order and is not stable when scans overlap. Measured
+        against `furry-bolt`: solo, 30 of 30 plain scans and 30 of 30 snapshots
+        agreed on one order; with four snapshot-then-scan pairs running at once,
+        4 of 160 pairs disagreed and every divergence was on the snapshot side --
+        the plain scan answered `[rq4d…, rx47…, zspx…]` all 160 times while the
+        snapshot answered two other permutations of the same three IDs. An
+        `assertEqual` on the lists therefore failed under whole-suite
+        concurrency and passed every serial run, which is exactly the shape of
+        an unexplained live flake (design section 9.2).
+
+        The subject of the test is the separator, and it is asserted above: the
+        snapshot half terminates and `is_live` goes true afterwards. What the
+        node guarantees about the contents is which objects, not in what order.
+        """
         async with self.objects.scan_follow(REPO_MAIN) as stream:
             snapshot = []
             iterator = stream.snapshot()
@@ -2314,7 +2365,7 @@ class LiveObjectsTest(live_support.LiveCase):
                 await iterator.aclose()
             self.assertTrue(stream.is_live)
         stored = await self.objects.scan(REPO_MAIN, timeout=20)
-        self.assertEqual(snapshot, stored)
+        self.assertCountEqual(snapshot, stored)
 
     async def test_a_zone_argument_reaches_the_op(self):
         ids = await self.objects.scan(REPO_MAIN, zone=Zone.DEVICE, timeout=20)

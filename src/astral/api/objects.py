@@ -578,10 +578,23 @@ class SearchQuery:
     def text(self) -> str:
         """This query back in the grammar, tags first, then the words.
 
-        Not the inverse of `parse` on every input -- astral-go's `MarshalText`
-        emits the tags before the words whatever order they arrived in, and a
-        value with a space is re-quoted. Parsing the result yields an equal
-        query, which is the property that matters.
+        **Lossy, and the loss is astral-go's.** `parse` lowercases every name,
+        value and bare word and splits any token on its first `:`, so parsing
+        what this writes is an equal query only for a query already in that
+        form. Three shapes change and none of them raises:
+
+        - case: `SearchQuery(query='Hello World')` reads back `'hello world'`;
+        - structure: `SearchQuery(query='a:b')` reads back as no free text and
+          one `QueryTag(name='a', value='b')`, which is a different search;
+        - an unrecognised `mod`: only the three prefixed constants have a
+          spelling, so any other modifier is dropped.
+
+        `objects.search`'s `q=` argument travels as this text and a searcher
+        registered through `objects.register_searcher` parses it with the same
+        grammar, so the losses are what the node sees too and correcting them
+        here would make the SDK and the node disagree about the question.
+        `bin`, `json` and `canonical` all carry the exact value; the text
+        framing is the lossy one, and `test_api_objects.py` pins each shape.
         """
         tokens = [tag.text() for tag in self.tags]
         words = str(self.query).strip()

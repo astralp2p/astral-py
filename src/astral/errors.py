@@ -53,13 +53,23 @@ alternative -- narrowing the promise to protocol and transport faults -- was
 rejected because use-after-close is the commonest runtime fault in an async SDK
 and a caller who wrote the documented catch-all would crash on it.
 
-Seven guards stay bare, and every one of them answers a caller who used an
+Nine guards stay bare, and every one of them answers a caller who used an
 internal API wrongly rather than a caller who used the SDK: a negative length
-handed to `Reader`, `MemTransport` or `StreamTransport`; reframing a
-`QueryStream` that is already framed; reusing a `MemTransport` pair; and the
-abstract `read_payload` of the primitive base. None is reachable through
-`Client`, `Stream` or a module client, so none can surprise the documented
-catch-all.
+handed to `Reader` (twice), `MemTransport`, `StreamTransport`, `HTTPResponse` or
+`WebSocketByteTransport`; a base other than 10 or 16 handed to `ascii_int`;
+reframing a `QueryStream` that is already framed; a second reader on a
+`MemTransport`, which is test-only and mirrors `asyncio.StreamReader`
+deliberately; and the abstract `read_payload` of the primitive base. None is
+reachable through `Client`, `Stream` or a module client, so none can surprise the
+documented catch-all.
+
+The rule that decides it: a fault a caller can reach through a **public** object
+is an `AstralError`. `HTTPResponse.read` raised a bare `RuntimeError` for a
+second concurrent reader where `WebSocketClient.receive_frame` raises
+`ConcurrentRead` for the identical condition, and `TextChannel` raised a bare
+`ValueError` for an output format `parse_format` reports as a `ParseError` one
+line above; both are now the documented class, and both keep their stdlib base,
+so nothing that caught the old one stops working.
 """
 
 from __future__ import annotations
@@ -353,8 +363,19 @@ class ClientClosed(StreamClosed):
 
 
 class FeatureUnavailable(AstralError):
-    """An optional dependency is missing.
+    """This SDK will not do that in this configuration, and names what changes it.
 
-    Raised by the curve-dependent crypto helpers when the `secp256k1` extra is
-    not installed. Nothing else degrades without it.
+    Three raisers, one shape: the message says what is unavailable and what the
+    caller would pass or install to have it.
+
+    - The curve-dependent crypto helpers, when the `secp256k1` extra is not
+      installed. Nothing else degrades without that extra.
+    - `serve.require_service_transport`, for register-service over IPC, where
+      design risk R-16 is unsettled; `experimental=True` overrides it.
+    - The Tier 3 `nodes` and `nat` ops, and the two of them design section 4.5
+      drops in v1. `experimental=True` opens the gated ones; the dropped ones
+      name why no flag opens them.
+
+    It is deliberately not a `TransportError` or a `SessionError`: nothing was
+    sent, and nothing about the node or the connection is being reported.
     """

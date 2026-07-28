@@ -30,7 +30,7 @@ from astral.object import Ack, Query
 from astral.transport import MemTransport
 from astral.types import Identity, Nonce
 
-from mock_apphost import FURRY_BOLT, bounded, frame, until
+from mock_apphost import FURRY_BOLT, bounded, frame, refusing, until
 
 CALLER = Identity.parse("02" + "11" * 32)
 NONCE = Nonce(0x1122334455667788)
@@ -168,10 +168,26 @@ class FramedViewTest(unittest.IsolatedAsyncioTestCase):
             s.channel("json", "json")
 
     @bounded()
-    async def test_an_unbuilt_framing_is_named_rather_than_framed_as_binary(self):
+    async def test_a_line_framing_frames_the_same_stream(self):
+        """The framed view is whichever framing the formats name. `text` in and
+        out is one `TextChannel`, and it reads the node's `#[type] body` lines
+        off the same transport the binary view would have framed."""
+        from astral.channel.textchan import TextChannel
+
+        _, remote, s = stream()
+        remote.write(b"#[uint32] 9\n")
+        channel = s.channel("text", "text")
+        self.assertIsInstance(channel, TextChannel)
+        self.assertEqual(await s.receive("text", "text"), P.Uint32(9))
+
+    @bounded()
+    async def test_a_line_framing_cannot_be_handed_over_as_a_raw_stream(self):
+        """`detach()` is legal on the binary channel alone: a line receiver
+        reads ahead, so the bytes after a line are in the channel rather than in
+        the transport (design section 3.1)."""
         _, _, s = stream()
         with self.assertRaises(TransportUnsupported):
-            s.channel("text", "text")
+            s.channel("json", "json").detach()
 
     @bounded()
     async def test_send_and_receive_one_object(self):
@@ -298,6 +314,31 @@ class LifetimeTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(first, second)
         self.assertTrue(s.closed)
         self.assertTrue(local.closed)
+
+
+    @bounded()
+    async def test_closed_is_the_transports_answer_and_not_this_calls(self):
+        """`closed` used to be latched in a `finally`, whatever the carrier did.
+
+        Over a carrier whose close did not complete that made it a promise: a
+        cancelled teardown reported `closed=True` on a socket `ss` still called
+        ESTABLISHED with 2,428,928 bytes queued, and every later `aclose()`
+        returned in 0.0000 s on the idempotent fast path, so nothing could ever
+        release it again. The flag is now read from the transport, and a close
+        that reached nothing leaves the stream *closing* so the next one
+        resumes.
+        """
+        carrier = refusing()
+        s = QueryStream(carrier, query())
+        await s.aclose()
+        self.assertFalse(s.closed)
+        self.assertFalse(carrier.closed)
+        await s.aclose()
+        self.assertFalse(s.closed)
+        await s.aclose()
+        self.assertTrue(s.closed)
+        self.assertTrue(carrier.closed)
+        self.assertEqual(carrier.aclose_calls, 3)
 
 
 class _SlowClose(MemTransport):

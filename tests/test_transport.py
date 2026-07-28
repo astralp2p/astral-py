@@ -130,6 +130,68 @@ class EndpointStringTest(unittest.TestCase):
                 self.assertEqual(default_endpoint(), DEFAULT_UNIX_ENDPOINT)
 
 
+class FrameBoundarySeamTest(unittest.IsolatedAsyncioTestCase):
+    """`Transport.at_frame_boundary`: the boundary fact, one layer below a channel.
+
+    A channel knows whether it stranded half of an apphost frame. It cannot know
+    whether the transport under it stranded half of a WebSocket frame or half of
+    an HTTP chunk, and the carrier can be mid-frame before the channel has been
+    handed a byte -- which is how `BinaryChannel` came to answer `True` for a
+    stream the peer's own data would then reframe. So the transport answers for
+    itself and every channel conjoins the two (design section 11.5).
+    """
+
+    @bounded()
+    async def test_a_transport_that_frames_nothing_answers_true(self):
+        """`StreamTransport` reads through an `asyncio.StreamReader`, which
+        consumes its buffer only once a whole `readexactly` is present, so a
+        cancelled read there takes nothing."""
+        left, right = MemTransport.pair()
+        self.assertTrue(left.at_frame_boundary)
+        left.write(b"data")
+        self.assertEqual(await right.readexactly(4), b"data")
+        self.assertTrue(right.at_frame_boundary)
+
+    @bounded()
+    async def test_mem_reports_the_bytes_a_cancelled_readexactly_discarded(self):
+        """This transport accumulates chunk by chunk where a socket does not, so
+        it can strand bytes a socket cannot. That harshness is deliberate, and
+        it is only usable if it is reportable."""
+        left, right = MemTransport.pair(peer_max_chunk=1)
+        left.write(b"ab")
+        pending = asyncio.ensure_future(right.readexactly(4))
+        for _ in range(10):
+            await asyncio.sleep(0)
+        pending.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await pending
+        self.assertFalse(right.at_frame_boundary)
+
+    @bounded()
+    async def test_a_cancelled_read_to_eof_reports_the_same(self):
+        left, right = MemTransport.pair()
+        left.write(b"partial")
+        pending = asyncio.ensure_future(right.read(-1))
+        for _ in range(10):
+            await asyncio.sleep(0)
+        pending.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await pending
+        self.assertFalse(right.at_frame_boundary)
+
+    @bounded()
+    async def test_a_cancelled_read_that_took_nothing_is_still_a_boundary(self):
+        """The common case, and the one that keeps an idle deadline harmless."""
+        _left, right = MemTransport.pair()
+        pending = asyncio.ensure_future(right.readexactly(4))
+        for _ in range(10):
+            await asyncio.sleep(0)
+        pending.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await pending
+        self.assertTrue(right.at_frame_boundary)
+
+
 class MemTransportTest(unittest.IsolatedAsyncioTestCase):
     @bounded()
     async def test_a_round_trip_carries_bytes_both_ways(self):
@@ -514,9 +576,21 @@ class StreamTransportTest(unittest.IsolatedAsyncioTestCase):
                 await server.aclose()
 
     @bounded()
-    async def test_dialing_a_web_endpoint_names_the_module_that_lands_it(self):
-        with self.assertRaises(TransportUnsupported):
-            await dial("ws://127.0.0.1:8624/.ws")
+    async def test_a_web_endpoint_dials_through_the_transport_that_serves_it(self):
+        """Step 14 replaced the placeholder that refused all four web protocols.
+
+        `ws:` and `wss:` dial through the upgrade in `transport/websocket.py` and
+        hand back a byte stream, so the session above them is unchanged; the
+        connect fault of an unbound port surfaces as `NodeUnavailable` exactly as
+        a socket's does. `http:` and `https:` carry one query per request, so
+        there is no session to dial and the refusal names the entry point that
+        does exist. Port 1 rather than 8624: a test dials nothing that answers.
+        """
+        with self.assertRaises(TransportUnsupported) as caught:
+            await dial("http://127.0.0.1:1/apphost.whoami")
+        self.assertIn("http.query", str(caught.exception))
+        with self.assertRaises(NodeUnavailable):
+            await dial("ws://127.0.0.1:1/.ws", timeout=2)
 
 
 class _DeafPeer:

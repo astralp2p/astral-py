@@ -92,14 +92,13 @@ from types import MappingProxyType, TracebackType
 from typing import Any, Callable, Final, Iterable, Mapping, Protocol, Sequence
 
 from . import querystring
-from .channel import Format, parse_format
+from .channel import parse_format
 from .errors import (
     AstralError,
     BadArgument,
     FeatureUnavailable,
     StreamClosed,
     TransportError,
-    TransportUnsupported,
 )
 from .object import Query
 from .registrar import (
@@ -464,18 +463,16 @@ class _Inbound:
         caller built its own channel from those parameters, so a responder that
         quietly preferred either one would frame one exchange two ways. That is
         `Client._framing`'s rule from the other side of the wire.
+
+        Every token that parses here is a channel `open_channel` builds, so the
+        only refusal left is an unparsable one. A caller asking for `out=render`
+        gets the render sender and no receiver, which is what `render` is: the
+        format has no parser anywhere, in this SDK or in astral-go.
         """
         wanted_in = self._reconcile("in", fmt_in, output=False)
         wanted_out = self._reconcile("out", fmt_out, output=True)
         parsed_in = parse_format(wanted_in, output=False)
         parsed_out = parse_format(wanted_out, output=True)
-        if parsed_in is not Format.BIN or parsed_out is not Format.BIN:
-            raise TransportUnsupported(
-                f"{self.query_string}: this query asks to be served "
-                f"in={parsed_in.value} out={parsed_out.value}; the json, text, "
-                "canonical, base64 and render channels land with "
-                "channel/jsonl.py, channel/textchan.py and channel/canonical.py"
-            )
         return str(parsed_in), str(parsed_out)
 
     def _wrap(self, conn: Any, read_fmt: str, write_fmt: str, raw: bool) -> Stream:
@@ -988,6 +985,17 @@ class Service:
         What there is: the app serves inbound queries on its own identity, mounts
         the scoped op on itself, and re-runs the registration after every
         reconnect, because the node forgets it when the guest disconnects.
+
+        **This is what design section 4.6 names `SearcherService`,
+        `DescriberService` and `FinderService`.** They ship as `add_searcher`,
+        `add_describer` and `add_finder` on `Service` rather than as three
+        classes: each of the three would otherwise carry its own listener, its
+        own registrar and its own accept loop, and an app that provides two of
+        them would run two of everything against a node whose worker pool is 32.
+        One `Service` answers as many provider ops as it is given, and the
+        reconnect step -- the one an application forgets, because the node drops
+        the registration silently on disconnect -- is inside this call and not
+        beside it.
         """
         self.mount(op, handler, params=params, required=required)
         self._add_hook(op_hook(register_op))
@@ -1418,9 +1426,11 @@ class Service:
         5. close the registrar **last**, so the node's crash-safe deregistration
            fires with the handlers already torn down.
 
-        **Returning means closed**, for every caller: a concurrent second call
-        waits for the first rather than reporting a service shut down while its
-        descriptors are still open.
+        **Returning means the walk was made**, for every caller: a concurrent
+        second call waits for the first rather than reporting a service shut
+        down while its descriptors are still open. `closed` is then `_quiet()`
+        -- what the walk actually reached -- so a teardown that could not finish
+        leaves the service *closing* rather than claiming otherwise.
 
         **A cancelled teardown still releases everything, and does not claim to
         have finished.** Both halves are needed and neither is theoretical: the
@@ -1445,17 +1455,25 @@ class Service:
             if self._closed:
                 return
             try:
+                # Each handle is cleared only once its owner reports itself
+                # closed, never merely because `aclose()` returned. The two are
+                # not the same fact -- a close that could not finish returns
+                # having released nothing -- and `_quiet()` reads these
+                # attributes, so forgetting one early is how a service claims a
+                # descriptor is gone that is still open.
                 server = self._server
                 if server is not None:
                     with contextlib.suppress(Exception):
                         await asyncio.shield(server.aclose())
-                    self._server = None
+                    if server.closed:
+                        self._server = None
                 await self._close_all(self._sessions)
                 registration = self._registration
                 if registration is not None:
                     with contextlib.suppress(Exception):
                         await asyncio.shield(registration.aclose())
-                    self._registration = None
+                    if registration.closed:
+                        self._registration = None
                 await self._close_all(self._streams)
                 await self._stop_tasks()
                 # The reference is kept rather than dropped: `registrar` stays a
@@ -1491,19 +1509,29 @@ class Service:
         sequential closes bound at N times it and any sane teardown budget
         expires *inside* the walk by construction.
 
-        A member is dropped only once its own close returned in this frame, so a
-        cancellation mid-`gather` leaves it in the set and `closed` stays false.
-        The loop runs until the set is empty: a serving task spawned before the
-        close began can still add one, and the accept loop cannot, because it
-        re-checks `_closing` and closes the transport itself.
+        A member is dropped only once it **reports itself closed**, so a
+        cancellation mid-`gather` leaves it in the set and so does a close that
+        returned without releasing anything -- `Session.aclose` and
+        `Stream.aclose` now answer that honestly, and dropping on the call
+        having returned would have made this the place their honesty is thrown
+        away. `closed` stays false either way and a later `aclose()` retries.
+
+        Each pass takes only members no pass has taken, so the walk ends whatever
+        the members do. A serving task spawned before the close began can still
+        add one; the accept loop cannot, because it re-checks `_closing` and
+        closes the transport itself.
         """
-        while held:
-            batch = list(held)
+        attempted: set[Any] = set()
+        while True:
+            batch = [item for item in held if item not in attempted]
+            if not batch:
+                return
+            attempted.update(batch)
             await asyncio.gather(
                 *(asyncio.shield(item.aclose()) for item in batch),
                 return_exceptions=True,
             )
-            held.difference_update(batch)
+            held.difference_update([item for item in batch if item.closed])
 
     async def _stop_tasks(self) -> None:
         """Let the supervisor close its group, bounded, then cancel what is left.

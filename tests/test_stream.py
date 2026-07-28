@@ -44,7 +44,7 @@ from astral.transport import MemTransport
 from astral.types import Identity, Nonce
 from astral.wire import Writer
 
-from mock_apphost import EOS as EOS_TYPE, FURRY_BOLT, bounded, frame, until
+from mock_apphost import EOS as EOS_TYPE, FURRY_BOLT, bounded, frame, refusing, until
 
 CALLER = Identity.parse("02" + "11" * 32)
 NONCE = Nonce(0x1122334455667788)
@@ -496,6 +496,30 @@ class LifetimeTest(unittest.IsolatedAsyncioTestCase):
         _, s = make()
         async with s:
             self.assertFalse(await s.cancel())
+
+    @bounded()
+    async def test_the_permit_is_withheld_while_the_connection_is_still_open(self):
+        """The other half of the rule above, and the half that was wrong.
+
+        `_closed` was latched in a `finally` whatever the carrier did, so the
+        permit went back for a connection that was still open -- the client
+        bounded at N holding N+1, which is exactly the bound design section 3.9
+        says astrald's 32-worker pool cannot absorb. Both the flag and the
+        permit are now conditional on the connection actually being gone, and a
+        later `aclose()` resumes the walk instead of short-circuiting.
+        """
+        seen: list[Stream] = []
+        carrier = refusing()
+        s = Stream(QueryStream(carrier, a_query()), on_close=seen.append)
+        await s.aclose()
+        self.assertFalse(s.closed)
+        self.assertEqual(seen, [], "the permit went back for a live connection")
+        await s.aclose()
+        self.assertEqual(seen, [])
+        await s.aclose()
+        self.assertTrue(s.closed)
+        self.assertTrue(carrier.closed)
+        self.assertEqual(len(seen), 1)
 
     def test_repr_distinguishes_closing_from_closed(self):
         _, s = make()

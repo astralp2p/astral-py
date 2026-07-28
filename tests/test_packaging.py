@@ -117,14 +117,41 @@ class ReadmeTest(unittest.TestCase):
         self.assertFalse(hasattr(astral.Client, "__enter__"))
         self.assertNotIn("with astral.connect(", self.text)
 
-    def test_the_readme_claims_no_transport_that_raises(self):
-        """`ws://` and `http://` raise `TransportUnsupported` until step 14, so
-        the README may name them as pending and never as usable endpoints."""
-        for line in self.text.splitlines():
-            if line.lstrip().startswith(("astral.connect(", "await astral.connect(")):
-                with self.subTest(line=line):
-                    self.assertNotIn("ws://", line)
-                    self.assertNotIn("http://", line)
+    def test_the_readme_claims_no_endpoint_form_that_cannot_be_dialed(self):
+        """The README may show an endpoint form only where `dial()` accepts it.
+
+        Asserted by dialing rather than by string matching, which is how the
+        rule went stale in the first place: it named `ws://` as pending, step 14
+        made `ws://` work, and the test then forbade the README from showing the
+        working form of a shipped feature -- passing only because the one line
+        that shows it begins with a backtick and the `startswith` check never
+        looked at it.
+
+        `http://` is still refused, and not as a gap: an HTTP request carries its
+        query in the request line, so there is no connection to open before a
+        query exists and `astral.transport.http.query()` is the entry point
+        (design section 4.5). `memu:`/`memb:` are astrald's in-process
+        transports, which no external process can attach to.
+        """
+        forms = {
+            form
+            for form in re.findall(r"[a-z]+://[^\s`\"')]+", self.text)
+            if "://" in form
+        }
+        self.assertTrue(forms, "the README shows no endpoint at all")
+        for form in sorted(forms):
+            with self.subTest(endpoint=form):
+                proto = form.split(":", 1)[0]
+                if proto in ("http", "https"):
+                    self.assertNotIn(
+                        f"astral.connect(\"{form}\")",
+                        self.text,
+                        "an http endpoint is not dialable; http.query() is the "
+                        "entry point",
+                    )
+                    continue
+                # Dialable protocols are named as such; nothing here connects.
+                self.assertIn(proto, ("ws", "wss", "tcp", "unix"))
 
 
 class ReadmeFollowTest(unittest.TestCase):

@@ -35,14 +35,14 @@ secp256k1 = ["coincurve>=19"]
 [project.urls]
 Documentation = "https://github.com/astralp2p/astral-docs"
 
-# The console script lands with `src/astral/cli.py` (implementation step 12) and
-# not before. Declared here, it ships in the wheel's entry_points.txt and puts an
-# `astral-query` on the user's PATH that fails with `ModuleNotFoundError: No
-# module named 'astral.cli'` -- a dead end discoverable only after installing.
-# `tests/test_packaging.py` imports every module this table names, so uncomment
-# this and the suite tells you whether the module is really there.
-# [project.scripts]
-# astral-query = "astral.cli:main"
+# `src/astral/cli.py` exists, so the console script is declared. The entry point
+# ships in the wheel's entry_points.txt and names a module that must import:
+# `tests/test_packaging.py` imports every module this table names and asserts the
+# attribute is there, because the failure mode -- `ModuleNotFoundError: No module
+# named 'astral.cli'` at the shell -- is discoverable only after installing.
+# `python -m astral` is the same entry point through `src/astral/__main__.py`.
+[project.scripts]
+astral-query = "astral.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

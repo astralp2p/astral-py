@@ -367,14 +367,17 @@ class Signature:
 def _split_key_text(text: str, type_name: str) -> tuple[str, str]:
     """`"<prefix>:<body>"`, split once. astral-go's `strings.SplitN(s, ":", 2)`.
 
-    A missing colon is `invalid format` there and a `ParseError` here; the two
-    halves are never both optional, so an empty prefix is refused as well.
+    A missing colon is `invalid format` there and a `ParseError` here. **An empty
+    prefix is not refused**, because astral-go does not refuse it -- its
+    `UnmarshalText` checks the part count and nothing else (`api/crypto/
+    public_key.go` at `5c18d9c`) -- and because the zero value of all three types
+    is exactly the one this used to reject: `PublicKey().text()` is `":"`, so a
+    parser that refused it refused its own encoder's output and the text channel
+    was the one framing of four that could not carry a zero key.
     """
     prefix, separator, body = text.partition(":")
     if not separator:
         raise ParseError(f"{type_name}: {text!r} has no ':' separator")
-    if not prefix:
-        raise ParseError(f"{type_name}: {text!r} has an empty type")
     return prefix, body
 
 

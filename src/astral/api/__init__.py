@@ -21,18 +21,27 @@ imports this package and asserts that every module file in the directory is in
 instead of failing a decode later. `astral/__init__.py` imports this package in
 turn, so `import astral` is enough and no caller has to know the rule exists.
 
-**And every module gets a `Client` property too**, in `client.py`, named after
-the node module. That is the surface design sections 4.1 and 5.1 specify --
-`client.dir`, `client.objects` -- and it is what makes the module client
-reachable without the caller constructing one. The rule is enforced the same way
-the import rule is, and for the same reason it had to be: this paragraph used to
-claim a test walked every module and none did, so five modules landed with no
-property at all while the suite stayed green and each of the five wrote the
-omission into its own docstring as settled behaviour. A claim of enforcement
-that is not enforced is worse than no claim, because it stops the next reader
-looking. `tests/test_client.py::ModuleClientAttachmentTest` now globs this
-directory and asserts every module carries a `functools.cached_property` of its
-own name on `Client` and that the property caches.
+**And every module that declares ops gets a `Client` property too**, in
+`client.py`, named after the node module. That is the surface design sections
+4.1 and 5.1 specify -- `client.dir`, `client.objects` -- and it is what makes
+the module client reachable without the caller constructing one. The rule is
+enforced the same way the import rule is, and for the same reason it had to be:
+this paragraph used to claim a test walked every module and none did, so five
+modules landed with no property at all while the suite stayed green and each of
+the five wrote the omission into its own docstring as settled behaviour. A claim
+of enforcement that is not enforced is worse than no claim, because it stops the
+next reader looking. `tests/test_client.py::ModuleClientAttachmentTest` globs
+this directory and asserts every module carries a `functools.cached_property` of
+its own name on `Client` and that the property caches.
+
+**A module that declares no op has no property, and the walk skips it.** Two do:
+`exonet` is an abstract base class and a registry, `endpoints` is four wire
+types, and design section 0.1 puts both in this package for the same reason --
+excluding a module means excluding its ops, not its types, and
+`mod.nodes.node_info` cannot decode without `mod.tcp.endpoint`. A `client.exonet`
+would name a set of ops that does not exist. The walks identify such a module by
+what it declares rather than by a list: no subclass of `base.ModuleClient`, no
+property.
 
 Module *clients* are built lazily by that property and cached; that is a
 construction detail with no bearing on registration. Registration is eager,
@@ -41,8 +50,8 @@ module client would make `client.call_one("dir.alias_map")` raise
 `BlueprintNotFound` in any program that never touched `client.dir`.
 
 Each module client inherits `base.ModuleClient`, which carries the scaffolding
-(`__slots__`, `__init__`, `__repr__`, `client`, `TYPES`, `_expect`) so thirteen
-modules do not grow thirteen dialects of the same shape-violation message.
+(`__slots__`, `__init__`, `__repr__`, `client`, `TYPES`, `_expect`) so fourteen
+modules do not grow fourteen dialects of the same shape-violation message.
 """
 
 from __future__ import annotations
@@ -50,19 +59,42 @@ from __future__ import annotations
 from . import apphost
 from . import auth
 from . import base
+from . import bip137sig
 from . import crypto
 from . import dir  # noqa: A004 -- the node module is named `dir`; so is this one
+from . import endpoints
+from . import exonet
+from . import ip
+from . import nat
+from . import nodes
 from . import objects
 from . import services
+from . import shell
 from . import tree
+from . import user
 from .apphost import Apphost
 from .auth import Auth
 from .base import ModuleClient
+from .bip137sig import Bip137Sig
 from .crypto import Crypto
 from .dir import Dir
+from .endpoints import (
+    GatewayEndpoint,
+    IPEndpoint,
+    KcpEndpoint,
+    TcpEndpoint,
+    TorDigest,
+    TorEndpoint,
+)
+from .exonet import Endpoint, EndpointTypes, endpoint_types, parse_endpoint
+from .ip import IPAddress, Ip
+from .nat import Nat
+from .nodes import Nodes
 from .objects import Objects
 from .services import Services
+from .shell import Shell
 from .tree import Tree
+from .user import User
 
 # `dir` shadows the builtin for anyone who star-imports this package. It is named
 # here anyway: the submodule takes the node module's name, and omitting it from
@@ -70,18 +102,43 @@ from .tree import Tree
 __all__ = [
     "Apphost",
     "Auth",
+    "Bip137Sig",
     "Crypto",
     "Dir",
+    "Endpoint",
+    "EndpointTypes",
+    "GatewayEndpoint",
+    "IPAddress",
+    "IPEndpoint",
+    "Ip",
+    "KcpEndpoint",
     "ModuleClient",
+    "Nat",
+    "Nodes",
     "Objects",
     "Services",
+    "Shell",
+    "TcpEndpoint",
+    "TorDigest",
+    "TorEndpoint",
     "Tree",
+    "User",
     "apphost",
     "auth",
     "base",
+    "bip137sig",
     "crypto",
     "dir",
+    "endpoint_types",
+    "endpoints",
+    "exonet",
+    "ip",
+    "nat",
+    "nodes",
     "objects",
+    "parse_endpoint",
     "services",
+    "shell",
     "tree",
+    "user",
 ]

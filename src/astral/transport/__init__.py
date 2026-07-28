@@ -16,8 +16,16 @@ cheaper and because the node's TCP listener is the one that wedges (design
 section 3.9). Environment precedence over that default belongs to `client.py`;
 this module reads no environment.
 
-A dial fault is `NodeUnavailable` and nothing else. It is the one error the retry
-decorator retries, and it is safe to retry because no query has been sent yet.
+A dial fault is `NodeUnavailable`. It is the one error the retry decorator
+retries, and it is safe to retry because no query has been sent yet. A `ws:`
+upgrade the peer *answers* and refuses is a `TransportError` instead: the peer is
+reachable, and a retry would collect the same refusal.
+
+`tcp` and `unix` are sockets and are dialed and bound here. `ws` and `wss` are
+sockets under an upgrade and are dialed through `websocket.py`, which hands back
+a byte stream the session cannot tell from a socket. `http` and `https` carry one
+query per request and cannot be dialed at all: `http.query()` is their entry
+point, and `listen()` refuses every one of the four.
 """
 
 from __future__ import annotations
@@ -46,9 +54,11 @@ __all__ = [
     "DEFAULT_TCP_ENDPOINT",
     "DEFAULT_UNIX_ENDPOINT",
     "Endpoint",
+    "HTTP_PROTOCOLS",
     "IncompleteRead",
     "MemTransport",
     "STREAM_PROTOCOLS",
+    "WS_PROTOCOLS",
     "Server",
     "StreamServer",
     "StreamTransport",
@@ -64,10 +74,15 @@ __all__ = [
 DEFAULT_TCP_ENDPOINT: Final = "tcp:127.0.0.1:8625"
 DEFAULT_UNIX_ENDPOINT: Final = "unix:~/.apphost.sock"
 
-# Protos this module dials and binds today.
+# Protos this module binds, and dials as a socket.
 STREAM_PROTOCOLS: Final = frozenset({"tcp", "unix"})
+# Protos `dial()` reaches through the WebSocket upgrade. A byte stream, so the
+# session state machine above it is the same one the socket gets.
+WS_PROTOCOLS: Final = frozenset({"ws", "wss"})
+# Protos that carry one query per request and have no session to dial.
+HTTP_PROTOCOLS: Final = frozenset({"http", "https"})
 # Protos the parser accepts and the WebSocket and HTTP transports serve.
-_WEB_PROTOCOLS: Final = frozenset({"ws", "wss", "http", "https"})
+_WEB_PROTOCOLS: Final = WS_PROTOCOLS | HTTP_PROTOCOLS
 # astral-go's in-process transport. Recognised so the error names the reason.
 _MEM_PROTOCOLS: Final = frozenset({"memu", "memb"})
 
@@ -84,7 +99,12 @@ class Endpoint:
 
     @property
     def is_stream(self) -> bool:
-        """Whether `dial()` and `listen()` handle this proto today."""
+        """Whether this proto is a socket `listen()` binds and `dial()` opens raw.
+
+        False for the four web protocols. `ws:` and `wss:` are dialable all the
+        same -- through the upgrade in `websocket.py` -- so this property says
+        which mechanism reaches an endpoint, never whether one exists.
+        """
         return self.proto in STREAM_PROTOCOLS
 
 
@@ -147,13 +167,30 @@ async def dial(endpoint: str, *, timeout: float | None = None) -> Transport:
     Every fault -- a refused connect, a missing socket file, a name that does not
     resolve, an expired `timeout` -- raises `NodeUnavailable` with the original
     exception attached.
+
+    `ws:` and `wss:` dial through the WebSocket upgrade and hand back a byte
+    stream on the `astral.binary.v1` subprotocol, so the session above them is
+    the same state machine a socket gets. An upgrade the peer refuses is a
+    `TransportError` and not a `NodeUnavailable`: the peer answered, and
+    answering the same way again is all a retry would achieve.
+
+    `http:` and `https:` are not dialable. An HTTP request carries its query in
+    the request line, so there is no connection to open before a query exists;
+    `astral.transport.http.query()` is the entry point.
     """
     parsed = parse_endpoint(endpoint)
-    if not parsed.is_stream:
+    if parsed.proto in WS_PROTOCOLS:
+        from .websocket import open_websocket
+
+        return await open_websocket(endpoint, timeout=timeout)
+    if parsed.proto in HTTP_PROTOCOLS:
         raise TransportUnsupported(
-            f"{parsed.proto}: the websocket and http transports land with "
-            "transport/websocket.py and transport/http.py"
+            f"{parsed.proto}: an http request carries its query in the request "
+            "line, so there is no session to dial -- use "
+            "astral.transport.http.query(endpoint, query_string)"
         )
+    if not parsed.is_stream:  # pragma: no cover -- the parser accepts no other proto
+        raise TransportUnsupported(f"{parsed.proto}: unsupported protocol")
     addr = expand_path(parsed.addr) if parsed.proto == "unix" else parsed.addr
     if timeout is None:
         try:

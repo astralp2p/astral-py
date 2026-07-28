@@ -88,6 +88,7 @@ from .stream import Stream
 from .types import Nonce
 
 __all__ = [
+    "CLOSE_TIMEOUT",
     "DEFAULT_JITTER",
     "Gate",
     "OP_REGISTER_DESCRIBER",
@@ -115,6 +116,20 @@ READY_TIMEOUT: Final = 30.0
 Long enough to cover a node that is still starting, short enough that a service
 nobody can reach is reported rather than awaited forever. The registrar keeps
 retrying past it; only the caller's wait ends.
+"""
+
+CLOSE_TIMEOUT: Final = 5.0
+"""How long `aclose()` waits for the cancelled loop task to end.
+
+`Service._stop_tasks` bounds the same wait and this did not, which was safe only
+because every carrier's close happened to be bounded. It is the class of defect
+this file was already fixed for once: a teardown that awaits something with no
+bound is a teardown a peer can suspend. A loop that outlives the budget leaves
+the registrar *closing* rather than closed, and a later `aclose()` waits again --
+`_stop_tasks`' answer, for `_stop_tasks`' reason.
+
+`serve.CLOSE_TIMEOUT` in value; held here so `registrar` keeps importing nothing
+from `serve` (the arrow points the other way).
 """
 
 OP_REGISTER_SEARCHER: Final = "objects.register_searcher"
@@ -658,8 +673,10 @@ class Registrar:
         that is closing. `Service.aclose()` closes its listener and then calls
         this, which is the whole of that ordering.
 
-        Returning means closed, for a second concurrent caller as much as for the
-        first.
+        Returning means the walk was made, for a second concurrent caller as
+        much as for the first. `closed` is what that walk reached -- the bind
+        stream gone and the loop task ended -- so a teardown that could not
+        finish leaves the registrar *closing* and a later `aclose()` resumes it.
 
         **The bind stream is closed on the cancelled path too**, which is why the
         run task is cancelled but not awaited before it. The wait used to come
@@ -694,8 +711,18 @@ class Registrar:
                     # caller's teardown, and `await` would deliver it there --
                     # while a cancellation aimed at **this** task still
                     # propagates, which is what design section 3.5 requires.
-                    await asyncio.shield(asyncio.wait({task}))
-                    self._task = None
+                    #
+                    # Bounded, as `Service._stop_tasks` bounds the same wait: a
+                    # cancelled task parked in a carrier's close is a teardown
+                    # the peer decides the length of. The handle is cleared only
+                    # once the task has actually ended, so a loop that outlived
+                    # the budget leaves `closed` false and a later `aclose()`
+                    # waits for it again rather than reporting it gone.
+                    done, _ = await asyncio.shield(
+                        asyncio.wait({task}, timeout=CLOSE_TIMEOUT)
+                    )
+                    if done:
+                        self._task = None
                 # The loop may have promoted a fresh bind stream between the
                 # cancel and its own last breath.
                 await self._close_bind()
@@ -709,13 +736,21 @@ class Registrar:
         `closed` claiming a stream is released while its descriptor is open, so
         the order is close-then-forget and `Stream.aclose()` is idempotent for
         the retry that follows.
+
+        **Forgotten on the stream's own answer, not on the call returning.** The
+        two used to be the same because `Stream.aclose()` latched `closed`
+        whatever happened; it no longer does, so a close that released nothing
+        leaves the stream here and `closed` false, and the next `aclose()` tries
+        again. Reading the call's return as the fact is the defect this file was
+        fixed for once already.
         """
         stream = self._bind
         if stream is None:
             return
         with contextlib.suppress(Exception):
             await asyncio.shield(stream.aclose())
-        self._bind = None
+        if stream.closed:
+            self._bind = None
 
     async def __aenter__(self) -> "Registrar":
         await self.start()

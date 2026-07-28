@@ -116,6 +116,7 @@ from mock_apphost import (
     partial_frame,
     parse_attach_query,
     parse_query_rejected,
+    refusing,
     parse_register_service,
     parse_reject_incoming,
     socket_fds,
@@ -2161,6 +2162,109 @@ class BindTest(SessionCase):
             await self.assert_no_leaks(mock)
 
 
+# --- the second carrier ---------------------------------------------------
+
+
+class JSONCarrierTest(unittest.IsolatedAsyncioTestCase):
+    """A session over `astral.json.v1`: the seam's second implementation.
+
+    Design section 3.1 lists `WebSocketJSONChannel` as a `Channel` and section
+    3.4 says the carriers "differ only in which `Channel` implementation
+    `_open_channel()` returns". The class shipped and no entry point could reach
+    it: `Session.__init__` took a byte `Transport`, this carrier is a sequence of
+    WebSocket messages and is not one, so `supports_raw_stream` was a constant
+    `True` and the RAW guard in `Client.query` could never fire. The greeting is
+    hand-rolled JSON here, as every Tier-B mock is hand-rolled, so a wrong
+    envelope on this side cannot agree with a wrong envelope on the other.
+    """
+
+    GREETING = (
+        '{"Type":"mod.apphost.host_info_msg","Object":'
+        '{"Identity":"03b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df8'
+        '1185bd7ae1","Alias":"furry-bolt"}}\n'
+    )
+
+    async def session_over_json(self, server) -> Session:  # type: ignore[no-untyped-def]
+        from astral.transport.websocket import SUBPROTOCOL_JSON, connect_websocket
+
+        client = await connect_websocket(
+            server.endpoint, subprotocols=(SUBPROTOCOL_JSON,)
+        )
+        self.assertEqual(client.subprotocol, SUBPROTOCOL_JSON)
+        return await Session.over(client, endpoint=server.endpoint)
+
+    @bounded()
+    async def test_a_session_greets_over_one_json_envelope_per_frame(self):
+        from mock_web import WSMock
+
+        async def greet(conn) -> None:  # type: ignore[no-untyped-def]
+            await conn.send_text(self.GREETING)
+            await conn.recv_data()
+
+        async with WSMock(greet, subprotocols=["astral.json.v1"]) as server:
+            session = await self.session_over_json(server)
+            try:
+                self.assertEqual(session.host_alias, "furry-bolt")
+                self.assertEqual(
+                    type(session._channel).__name__, "WebSocketJSONChannel"
+                )
+            finally:
+                await session.aclose()
+            self.assertEqual(server.errors, [])
+
+    @bounded()
+    async def test_this_carrier_answers_false_to_supports_raw_stream(self):
+        """The property exists to gate `objects.read`, the one RAW-mode op. It
+        answered `True` for every session that could be built, so the guard at
+        `Client.query(raw=True)` was dead; this is the carrier that makes it
+        fire. The channel refuses `detach()` for the same reason -- there is no
+        byte stream to hand over."""
+        from mock_web import WSMock
+
+        async def greet(conn) -> None:  # type: ignore[no-untyped-def]
+            await conn.send_text(self.GREETING)
+            await conn.recv_data()
+
+        async with WSMock(greet, subprotocols=["astral.json.v1"]) as server:
+            session = await self.session_over_json(server)
+            try:
+                self.assertFalse(session.supports_raw_stream)
+                with self.assertRaises(TransportUnsupported):
+                    session._channel.detach()
+            finally:
+                await session.aclose()
+
+    @bounded()
+    async def test_a_binary_session_still_answers_true(self):
+        async with MockApphost() as mock:
+            session = await Session.over(await mock.open(), endpoint="mem:mock")
+            self.assertTrue(session.supports_raw_stream)
+            await session.aclose()
+
+    @bounded()
+    async def test_a_binary_websocket_is_refused_as_a_message_carrier(self):
+        """`astral.binary.v1` is a byte stream wearing a message stream's shape.
+        Framing it as JSON would meet the greeting halfway and report a corrupt
+        stream, so it is refused by name and pointed at `open_websocket`."""
+        from mock_web import WSMock
+
+        async def idle(conn) -> None:  # type: ignore[no-untyped-def]
+            await conn.recv_data()
+
+        from astral.transport.websocket import SUBPROTOCOL_BINARY, connect_websocket
+
+        async with WSMock(idle, subprotocols=["astral.binary.v1"]) as server:
+            client = await connect_websocket(
+                server.endpoint, subprotocols=(SUBPROTOCOL_BINARY,)
+            )
+            try:
+                with self.assertRaises(TransportUnsupported) as caught:
+                    await Session.over(client, endpoint=server.endpoint)
+                self.assertIn("open_websocket()", str(caught.exception))
+            finally:
+                await client.aclose()
+
+
 # --- the message channel itself ------------------------------------------
 
 
@@ -2253,7 +2357,7 @@ class MessageChannelTest(SessionCase):
 
 
 class CloseContractTest(SessionCase):
-    """`aclose()` returning means closed, at every layer and for every caller.
+    """`closed` is a fact, at every layer and for every caller.
 
     `StreamTransport` got this right and the two layers above it borrowed the
     closing/closed naming without the behaviour, so a second concurrent caller
@@ -2283,6 +2387,46 @@ class CloseContractTest(SessionCase):
         self.assertTrue(session.closed)
         self.assertTrue(transport.closed)
         self.assertIn("closed", repr(session))
+
+    @bounded()
+    async def test_closed_is_the_carriers_answer_and_not_this_calls(self):
+        """The flag was latched in a `finally`, so it answered for carriers that
+        had released nothing.
+
+        Over a WebSocket whose Close frame was not yet bounded, a cancelled
+        teardown left `closed=True` on a socket `ss` still reported ESTABLISHED
+        with 2,428,928 bytes queued, and every later `aclose()` returned in
+        0.0000 s on the idempotent fast path -- so the connection was
+        unreachable through the public API and only the collector could release
+        it. Sixth occurrence of a class already fixed in `Client`, `Service`,
+        `Registrar`, `StreamServer` and `StreamTransport`, and fixed the same
+        way: read the fact, and leave a teardown that could not finish
+        *closing*.
+        """
+        carrier = refusing("session")
+        carrier.feed(frame(HOST_INFO, host_info_payload(FURRY_BOLT, FURRY_BOLT_ALIAS)))
+        session = await Session.over(carrier, endpoint="mem:session")
+        await session.aclose()
+        self.assertFalse(session.closed)
+        self.assertIn("closing", repr(session))
+        await session.aclose()
+        self.assertFalse(session.closed)
+        await session.aclose()
+        self.assertTrue(session.closed)
+        self.assertTrue(carrier.closed)
+
+    @bounded()
+    async def test_a_session_that_handed_its_transport_over_is_closed(self):
+        """`_spent` is the other half of the fact: after the handover the
+        transport belongs to the `QueryStream`, so this session is closed
+        whatever the transport says."""
+        carrier = refusing("spent")
+        carrier.feed(frame(HOST_INFO, host_info_payload(FURRY_BOLT, FURRY_BOLT_ALIAS)))
+        session = await Session.over(carrier, endpoint="mem:spent")
+        session._spent = True  # noqa: SLF001
+        await session.aclose()
+        self.assertTrue(session.closed)
+        self.assertFalse(carrier.closed)
 
 
 class DeadPeerTypingTest(SessionCase):

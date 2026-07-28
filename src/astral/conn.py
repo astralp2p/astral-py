@@ -37,10 +37,14 @@ emits, and `apphost.whoami` and `dir.alias_map` end at bare EOF with no `eos`
 Deciding what an `error_message` object means is `Stream`'s job one layer up,
 because that decision belongs to the query, not to the bytes.
 
-`aclose()` is idempotent, raises no fault of its own, and **returns only once the stream is
-actually closed** -- a second concurrent caller waits for the first rather than
+`aclose()` is idempotent, raises no fault of its own, and **returns only once the transport's own
+close has returned** -- a second concurrent caller waits for the first rather than
 reporting a close that has not happened yet, exactly as the transport under it
-does. A stream is an async context manager
+does. `closed` is then read from the transport and not from the fact that the call
+returned: over every transport the SDK ships the two agree, because each one's
+`aclose()` is bounded and aborts what it cannot flush, and over one that returns
+having released nothing the flag stays false so a later `aclose()` retries.
+A stream is an async context manager
 and the SDK's own code always uses one: astrald serves apphost connections from a
 fixed pool of 32 workers and never notices a peer that vanished, so an abandoned
 stream burns one worker permanently and 32 of them wedge the node's whole app
@@ -86,7 +90,7 @@ class QueryStream:
         "_corrupt",
         "_closing",
         "_closed",
-        "_released",
+        "_sweep",
     )
 
     def __init__(
@@ -112,7 +116,10 @@ class QueryStream:
         self._corrupt = False
         self._closing = False
         self._closed = False
-        self._released = asyncio.Event()
+        # A lock rather than an event, for `Session.aclose`'s reason: an event a
+        # cancelled walk never sets hangs the second caller, and one set in a
+        # `finally` reports a release that did not happen.
+        self._sweep = asyncio.Lock()
 
     def __repr__(self) -> str:
         way = "outbound" if self._outbound else "inbound"
@@ -373,27 +380,42 @@ class QueryStream:
     async def aclose(self) -> None:
         """Close the transport. Idempotent, and never raises on a fault.
 
-        **Returning means closed**, for every caller and not only for the first
-        one. A concurrent second call waits for the first close to finish rather
-        than closing twice or walking away, so `closed` is true whenever this
-        returns. The alternative was measured -- a second caller returned in
-        0.00 s reporting `closed=False` with the descriptor still open, while
-        the first was two seconds into a bounded flush -- and a shutdown that
-        counted that stream as released would have counted a live one.
+        **Returning means the transport was reached**, for every caller and not
+        only for the first one: a concurrent second call waits for the first
+        close to finish rather than closing twice or walking away. The
+        alternative was measured -- a second caller returned in 0.00 s reporting
+        `closed=False` with the descriptor still open, while the first was two
+        seconds into a bounded flush -- and a shutdown that counted that stream
+        as released would have counted a live one.
+
+        It does not mean `closed` is true. Over every transport the SDK ships it
+        is, because each one's `aclose()` is bounded and aborts what it cannot
+        flush; over one that returns having released nothing, `closed` stays
+        false and the caller is told so.
 
         `_closing` latches first and `_closed` only once the transport is
-        actually gone, so `closed` stays a fact rather than an intention.
+        actually gone -- **asked, not assumed**. Setting the flag
+        unconditionally in the `finally` made it an intention: measured over a
+        carrier whose close did not complete, a cancelled teardown reported
+        `closed=True` with the descriptor still open, and the retry returned in
+        0.0000 s having done nothing. `Session.aclose` records the class and the
+        five earlier fixes of it; this is the same answer.
+
+        A teardown that could not finish leaves the stream *closing*, and a
+        later `aclose()` resumes it rather than short-circuiting on a claim that
+        is not true.
         """
-        if self._closing:
-            await self._released.wait()
+        if self._closed:
             return
         self._closing = True
-        try:
-            with contextlib.suppress(Exception):
-                await self._transport.aclose()
-        finally:
-            self._closed = True
-            self._released.set()
+        async with self._sweep:
+            if self._closed:
+                return
+            try:
+                with contextlib.suppress(Exception):
+                    await self._transport.aclose()
+            finally:
+                self._closed = self._transport.closed
 
     async def __aenter__(self) -> "QueryStream":
         return self

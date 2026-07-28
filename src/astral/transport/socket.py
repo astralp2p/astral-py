@@ -36,6 +36,7 @@ from collections import deque
 from typing import Awaitable, Callable, Final
 
 from ..errors import ParseError, TransportError, TransportUnsupported
+from ..types import ascii_int
 from .base import Server, Transport
 
 __all__ = [
@@ -610,9 +611,9 @@ def _split_host_port(addr: str) -> tuple[str, int]:
         host, sep, port_text = addr.rpartition(":")
         if not sep:
             raise ParseError(f"invalid tcp address {addr!r}: no port")
-    if not port_text.isdigit():
+    port = ascii_int(port_text)
+    if port is None:
         raise ParseError(f"invalid tcp address {addr!r}: port is not a number")
-    port = int(port_text)
     if not 0 <= port <= 65535:
         raise ParseError(f"invalid tcp address {addr!r}: port out of range")
     return host, port

@@ -270,15 +270,21 @@ class WireTypeTest(unittest.TestCase):
             with self.subTest(type=value.ASTRAL_TYPE):
                 self.assertEqual(type(value).parse(value.text()), value)
 
-    def test_a_text_form_with_no_colon_is_refused(self):
+    def test_a_text_form_with_no_colon_is_refused_and_an_empty_type_is_not(self):
         """astral-go's `UnmarshalText` splits on `:` and answers `invalid
-        format`; an unsplittable value is a `ParseError` here."""
+        format`; an unsplittable value is a `ParseError` here.
+
+        The part count is the whole of the check there -- `parts[0]` becomes the
+        type whatever it holds -- so an empty type parses in both. It has to:
+        `PublicKey().text()` is `":"`, so a parser that refused it refused its
+        own encoder's output, and the text channel was the one framing of the
+        four that could not carry a zero key."""
         for cls in (PrivateKey, PublicKey, Signature):
             with self.subTest(type=cls.__name__):
                 with self.assertRaises(ParseError):
                     cls.parse("secp256k1")
-                with self.assertRaises(ParseError):
-                    cls.parse(":abcd")
+                zero = cls()
+                self.assertEqual(cls.parse(zero.text()), zero)
 
     def test_a_signature_carries_its_scheme_and_the_scheme_is_load_bearing(self):
         """astrald dispatches on it and every engine refuses every scheme but its
@@ -1292,16 +1298,36 @@ class LiveCryptoTest(live_support.LiveCase):
     @bounded(30)
     async def test_sign_text_with_an_unusable_key_is_the_translated_reset(self):
         """astrald builds the text signer before reading anything, so it answers
-        and closes with the body unread and the connection resets. Pinned live
-        because it is the one failure mode a caller of this module will meet
-        that no mock would have predicted."""
+        and closes with the body unread. Pinned live because it is the one
+        failure mode a caller of this module will meet that no mock would have
+        predicted.
+
+        **Both arrival orders are legal and the test accepts both.** The op's
+        outcome is a race between astrald's `error_message` and its close: when
+        the reset reaches this side first, `_batch` translates the
+        `ConnectionResetError` and the caller sees `ProtocolError`; when the
+        `String16` and the `eos` reach the socket before the reset does, the
+        node's own error object is read cleanly and the caller sees
+        `RemoteError: … unsupported` -- which is what the sibling test three
+        cases up asserts for the identical condition on `sign_hash_many`.
+        Measured against `furry-bolt`: solo, every attempt resets; with six
+        concurrent attempts, 7 of 72 read the error object instead. Asserting
+        one branch made this an ERROR under whole-suite live load and a pass on
+        every serial run.
+
+        What is invariant, and what is asserted: the op fails, and the failure
+        names the key the node cannot hold.
+        """
         client = await self.client()
         try:
             api = Crypto(client)
             unheld = await api.public_key(await api.new_key(timeout=10), timeout=10)
-            with self.assertRaises(ProtocolError) as caught:
+            with self.assertRaises((ProtocolError, RemoteError)) as caught:
                 await api.sign_text("astral-py live tier", key=unheld, timeout=10)
-            self.assertIn("without reading the body", str(caught.exception))
+            if isinstance(caught.exception, ProtocolError):
+                self.assertIn("without reading the body", str(caught.exception))
+            else:
+                self.assertIn("unsupported", str(caught.exception))
         finally:
             await client.aclose()
 

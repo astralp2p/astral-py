@@ -70,6 +70,7 @@ from astral.transport import Transport
 from astral.types import Duration, Identity, Nonce, ObjectID, Time, Zone
 from astral.wire import Writer
 
+import api_walk
 import live_support
 import reference
 from mock_apphost import (
@@ -1019,17 +1020,19 @@ class ModulePatternTest(ApphostCase):
         """Walked from the directory, not enumerated by hand. Enumerating it by
         hand is what let five modules land with no `Client` property while this
         test and `ModuleClientAttachmentTest` both passed: each named `apphost`
-        and `dir` and neither looked at what else was in the package."""
+        and `dir` and neither looked at what else was in the package.
+
+        The walk is over the modules that declare **ops**. Design section 0.1
+        puts type-only modules in this package on purpose -- excluding a module
+        excludes its ops and not its types -- so `exonet` and `endpoints` have
+        no client and no property, and `api_walk` decides which is which by what
+        a module declares rather than by name.
+        """
         import astral.api
         from astral.api.base import ModuleClient
 
         self.assertEqual(tuple(Apphost.TYPES), tuple(APPHOST_TYPES))
-        directory = pathlib.Path(astral.api.__file__).parent
-        modules = sorted(
-            path.stem
-            for path in directory.glob("*.py")
-            if not path.stem.startswith("_") and path.stem != "base"
-        )
+        modules = api_walk.op_modules()
         self.assertGreaterEqual(len(modules), 7, "the walk found nothing to check")
         async with MockApphost() as mock:
             client = await self.client(mock)

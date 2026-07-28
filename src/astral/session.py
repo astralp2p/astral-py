@@ -1,10 +1,17 @@
-"""THE apphost session state machine, written once for every transport.
+"""THE apphost session state machine, written once for every carrier.
 
-Binary IPC, WebSocket-binary, WebSocket-JSON and HTTP differ in **one method**:
+Binary IPC, WebSocket-binary and WebSocket-JSON differ in **one method**:
 `Session._open_channel()`. Everything else -- the greeting, the optional auth
 exchange, the three session kinds, the failure mapping, the connection hygiene --
 is written here exactly once. That was the single best structural decision in the
 legacy SDK and it carries over unchanged (design section 3.4).
+
+HTTP is the carrier that is **not** here, and it is not an omission: one request
+is one query, there is no connection to hold a session on, and
+`astral.transport.http.query()` covers it as a function (design section 4.5).
+Design section 3.4's table lists it as a fourth variant of this seam; that is the
+one row of it this module does not implement, and the reason is structural
+rather than pending.
 
 The state machine, from astrald's `mod/apphost/src/guest.go` rather than from the
 prose::
@@ -125,10 +132,15 @@ rather than a missing answer -- `next_incoming`, `receive`, `read_query` -- the
 transport's own language stands: `Transport.write` on a raw stream reports a
 dead connection as `ConnectionResetError`, on every transport.
 
-**`aclose()` returning means closed**, at every layer of this stack and for
-every caller. A second concurrent close waits for the first rather than
-reporting a connection released while its descriptor is still open; a shutdown
-that counted the difference would count a node worker free that is still held.
+**`closed` is a fact, at every layer of this stack and for every caller.** A
+second concurrent close waits for the first rather than reporting a connection
+released while its descriptor is still open; a shutdown that counted the
+difference would count a node worker free that is still held. The flag is read
+from the carrier rather than latched by the call that returned, so a teardown
+that could not finish leaves the object *closing* and a later `aclose()` resumes
+it. Over every carrier the SDK ships the two coincide -- each one's `aclose()`
+is bounded and aborts what it cannot flush -- and where they do not, the flag is
+the one that is true.
 """
 
 from __future__ import annotations
@@ -143,6 +155,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Final, Sequence
 from . import querystring
 from .channel import Channel, open_channel
 from .channel.binary import BinaryChannel
+from .channel.jsonl import MessageStream
 from .conn import QueryStream
 from .context import Context
 from .errors import (
@@ -161,6 +174,7 @@ from .errors import (
     SessionError,
     StreamClosed,
     TargetNotAllowed,
+    TransportUnsupported,
     WireError,
     attributed,
 )
@@ -517,6 +531,14 @@ _SENDING: Final = (
     "connection lost before {what} was sent: {exc}",
 )
 
+_JSON_SUBPROTOCOL: Final = "astral.json.v1"
+"""The one WebSocket subprotocol a message carrier may be framed as.
+
+Named here rather than imported from `transport/websocket.py`: the carrier is a
+structural protocol -- `MessageStream` -- and a session must not depend on the
+one module that happens to implement it."""
+
+
 class Session:
     """One apphost connection, in whichever state the protocol has left it."""
 
@@ -535,14 +557,14 @@ class Session:
         "_spent",
         "_closing",
         "_closed",
-        "_released",
+        "_sweep",
         "_reading",
         "_inbound",
     )
 
     def __init__(
         self,
-        transport: Transport,
+        transport: "Transport | MessageStream",
         *,
         endpoint: str | None = None,
         registry: Blueprints | None = None,
@@ -568,7 +590,10 @@ class Session:
         self._spent = False
         self._closing = False
         self._closed = False
-        self._released = asyncio.Event()
+        # A lock rather than an event: an event a cancelled walk never sets
+        # would hang the second caller, and one set in a `finally` would tell it
+        # a connection was released that is not.
+        self._sweep = asyncio.Lock()
         self._reading = False
         self._inbound: HandleQueryMsg | None = None
 
@@ -590,9 +615,23 @@ class Session:
 
     # --- the one seam ---
 
-    def _open_channel(self, transport: Transport) -> Channel:
-        """THE transport seam. Binary IPC, WS-binary, WS-JSON and HTTP differ here
-        and nowhere else.
+    def _open_channel(self, carrier: Transport | MessageStream) -> Channel:
+        """THE carrier seam. Every framing this session can speak is chosen here.
+
+        Two carriers, and the difference between them is the whole reason the
+        `Transport` and `Channel` seams are separate (design section 3.1):
+
+        - a **byte stream** -- IPC over unix or tcp, and WS-binary, which
+          concatenates every binary frame into one -- is framed by the binary
+          channel, and an accepted query can take the transport over;
+        - a **message stream** -- `astral.json.v1`, one JSON envelope per
+          WebSocket text frame -- has no byte stream underneath it at all, so
+          `WebSocketJSONChannel` frames it and `supports_raw_stream` answers
+          false.
+
+        HTTP is neither: one request is one query and there is no session over
+        it, which is why `astral.transport.http.query()` is a function and not a
+        carrier here (design section 4.5).
 
         `allow_unparsed` is on: a control type this SDK does not know must be
         *named* in a `ProtocolError`, not raise `BlueprintNotFound` at the framing
@@ -600,8 +639,30 @@ class Session:
         frame. The framing an accepted query's body uses is a separate decision,
         made by `QueryStream`.
         """
-        return open_channel(
-            transport,
+        if isinstance(carrier, Transport):
+            return open_channel(
+                carrier,
+                allow_unparsed=True,
+                registry=self._registry,
+                max_alloc=self._max_alloc,
+            )
+        # A WebSocket that negotiated the *binary* subprotocol is a byte stream
+        # wearing a message stream's shape, and framing it as JSON would meet the
+        # greeting halfway and report a corrupt stream. `open_websocket()` is
+        # what turns that one into a `Transport`. Checked by attribute rather
+        # than by import: the carrier is a structural protocol and this module
+        # does not depend on the WebSocket one.
+        negotiated = getattr(carrier, "subprotocol", _JSON_SUBPROTOCOL)
+        if negotiated not in ("", _JSON_SUBPROTOCOL):
+            raise TransportUnsupported(
+                f"{self._endpoint}: a session over a message carrier frames "
+                f"{_JSON_SUBPROTOCOL}, and this one negotiated {negotiated!r}; "
+                "open_websocket() hands a binary subprotocol back as a Transport"
+            )
+        from .channel.jsonl import WebSocketJSONChannel
+
+        return WebSocketJSONChannel(
+            carrier,
             allow_unparsed=True,
             registry=self._registry,
             max_alloc=self._max_alloc,
@@ -610,7 +671,9 @@ class Session:
     # --- state ---
 
     @property
-    def transport(self) -> Transport:
+    def transport(self) -> "Transport | MessageStream":
+        """The carrier: a byte `Transport`, or the `MessageStream` of a
+        `astral.json.v1` WebSocket, which is not one."""
         return self._transport
 
     @property
@@ -668,9 +731,12 @@ class Session:
     def supports_raw_stream(self) -> bool:
         """Whether an accepted query can become a raw bytestream.
 
-        True for the binary framings, false for the line-oriented ones, where a
-        receiver may hold a partial line. A RAW-mode op -- `objects.read` is the
-        only one -- must check this rather than silently getting something else.
+        True for the binary framing, false for `astral.json.v1`, whose carrier
+        is a sequence of WebSocket messages with no byte stream underneath and
+        whose channel refuses `detach()` for that reason. A RAW-mode op --
+        `objects.read` is the only one -- checks this rather than silently
+        getting something else, and `Client.query(raw=True)` is where the check
+        lives.
         """
         return isinstance(self._channel, BinaryChannel)
 
@@ -758,7 +824,7 @@ class Session:
     @classmethod
     async def over(
         cls,
-        transport: Transport,
+        transport: "Transport | MessageStream",
         *,
         token: str | None = None,
         timeout: float | None = CONNECT_TIMEOUT,
@@ -774,11 +840,16 @@ class Session:
         Two budgets, as in `connect`: `timeout` for the greeting and
         `handshake_timeout` for the auth exchange.
 
-        The transport is closed on every failure path, cancellation included: a
+        The carrier is either a byte `Transport` or a `MessageStream`, and
+        `_open_channel` is what tells them apart: an `astral.json.v1` WebSocket
+        is handed over as the `WebSocketClient` itself, because that subprotocol
+        has no byte stream for a `Transport` to be.
+
+        The carrier is closed on every failure path, cancellation included: a
         session that never came up hands nothing back, so nothing else can close
-        it. That includes a constructor fault -- `_open_channel()` is the one
-        method every transport variant overrides, and it raises for every framing
-        not yet implemented -- which is why the construction is guarded too.
+        it. The construction is guarded for the same reason and not for a
+        different one: `__init__` builds the channel, so a fault there would
+        leave the carrier open with no session to own it.
         """
         try:
             session = cls(
@@ -1716,32 +1787,58 @@ class Session:
     async def aclose(self) -> None:
         """Close the connection. Idempotent, and never raises on a fault.
 
-        **Returning means closed**, for every caller and not only for the first
-        one. A concurrent second call does not close the connection twice and
-        does not walk away either: it waits for the first close to finish, so
-        `closed` is true whenever this returns. The alternative was measured --
-        a second caller returned in 0.00 s reporting `closed=False` with the
-        descriptor still open, while the first was two seconds into a bounded
-        flush -- and a shutdown that believed it would have reported a node
-        worker released that was still held.
+        **Returning means the carrier was reached**, for every caller and not
+        only for the first one: a concurrent second call does not close the
+        connection twice and does not walk away either, it waits for the first
+        close to finish. The alternative was measured -- a second caller
+        returned in 0.00 s reporting `closed=False` with the descriptor still
+        open, while the first was two seconds into a bounded flush -- and a
+        shutdown that believed it would have reported a node worker released
+        that was still held.
+
+        **It does not mean `closed` is true**, and the difference is the point.
+        Over every carrier the SDK ships it is: each one's `aclose()` is bounded
+        and aborts what it cannot flush. Over a carrier that returns having
+        released nothing, `closed` stays false and says so, rather than
+        promising a release nobody performed.
 
         `_closing` latches first and `_closed` only once the transport is
-        actually gone, so `closed` stays a fact rather than an intention.
+        actually gone -- **asked, not assumed**. The flag used to be set
+        unconditionally in the `finally`, which made it a promise rather than a
+        fact for any carrier whose close did not complete: over a WebSocket that
+        had not yet bounded its Close frame, a cancelled teardown left
+        `closed=True` on a socket `ss` still reported ESTABLISHED with 2,428,928
+        bytes queued, and every later `aclose()` returned in 0.0000 s on the
+        idempotent fast path. The connection was then unreachable through the
+        public API and only the collector could release it. This is the sixth
+        appearance of that class -- `Client`, `Service`, `Registrar`,
+        `StreamServer` and `StreamTransport` were each fixed the same way -- and
+        the fix is theirs: latch the fact, and let a teardown that could not
+        finish leave the session *closing* so a later `aclose()` resumes it.
+
+        The lock is what keeps "returning means closed" true for the second
+        caller. An event a cancelled walk never sets would hang it; an event set
+        in a `finally` would tell it a connection was released that is not. It
+        waits for the walk instead, and inherits the remainder if that walk was
+        abandoned.
 
         A no-op after the handover: the transport then belongs to the
-        `QueryStream`, which closes it.
+        `QueryStream`, which closes it, and `_spent` is that fact.
         """
-        if self._closing:
-            await self._released.wait()
+        if self._closed:
             return
+        # Latched before anything is awaited, so a teardown cancelled a moment
+        # later still stopped the session taking work.
         self._closing = True
-        try:
-            with contextlib.suppress(Exception):
-                # Detached after a handover, where this is already a no-op.
-                await self._channel.aclose()
-        finally:
-            self._closed = True
-            self._released.set()
+        async with self._sweep:
+            if self._closed:
+                return
+            try:
+                with contextlib.suppress(Exception):
+                    # Detached after a handover, where this is already a no-op.
+                    await self._channel.aclose()
+            finally:
+                self._closed = self._spent or self._transport.closed
 
     async def __aenter__(self) -> "Session":
         return self

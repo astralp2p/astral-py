@@ -76,6 +76,28 @@ class Transport(abc.ABC):
         the second is a fact. True whenever an `aclose()` has returned.
         """
 
+    @property
+    def at_frame_boundary(self) -> bool:
+        """Whether an abandoned read stranded nothing *inside this transport*.
+
+        `Channel.at_frame_boundary`'s question, asked one layer down. A channel
+        knows whether it stranded half of an apphost frame; it cannot know
+        whether the transport under it stranded half of a WebSocket frame or
+        half of an HTTP chunk, and the two are independent -- the carrier can be
+        mid-frame before the channel has been handed a single byte. So the
+        transport answers for itself and every channel conjoins the two.
+
+        True by default, which is the honest answer for a transport that frames
+        nothing: `StreamTransport` reads through an `asyncio.StreamReader`,
+        which consumes its buffer only once a whole `readexactly` is present, so
+        a cancelled read there takes nothing. An implementation that can lose
+        bytes to a cancellation -- one that accumulates into a local buffer, or
+        one that frames -- must override this and say so. Reporting a boundary
+        that is not one is how a peer's payload gets read as the next message's
+        header (design section 3.7).
+        """
+        return True
+
     @abc.abstractmethod
     async def readexactly(self, n: int) -> bytes:
         """Read exactly `n` bytes.

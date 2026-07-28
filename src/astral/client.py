@@ -38,8 +38,9 @@ Everything else here follows from that:
 - The bound queues rather than fails, in FIFO order, and the wait is inside the
   caller's own `timeout` so it cannot become an unbounded stall. A caller that
   runs out of budget is told which half of the deadline consumed it.
-- **`aclose()` returning means closed**, which costs more than it looks: the walk
-  cannot be abandoned half-done and then latch `closed`, the streams close
+- **`closed` is a fact rather than a claim**, which costs more than it looks: the
+  walk cannot be abandoned half-done and then latch `closed` -- it leaves the
+  client *closing* and a later `aclose()` resumes it -- the streams close
   concurrently so a bounded shutdown is one `CLOSE_TIMEOUT` rather than N of
   them, and a query already queued on the semaphore is failed rather than fed --
   a client that reported itself shut down and then dialed the node once per
@@ -88,7 +89,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, AsyncIterator, Final, Sequence
 
 from . import querystring
-from .channel import Format, parse_format
+from .channel import INPUT_FORMATS, Format, parse_format
 from .context import Context
 from .errors import (
     BadArgument,
@@ -117,11 +118,17 @@ from .wire import DEFAULT_MAX_ALLOC
 if TYPE_CHECKING:  # pragma: no cover -- typing only
     from .api.apphost import Apphost
     from .api.auth import Auth
+    from .api.bip137sig import Bip137Sig
     from .api.crypto import Crypto
     from .api.dir import Dir
+    from .api.ip import Ip
+    from .api.nat import Nat
+    from .api.nodes import Nodes
     from .api.objects import Objects
     from .api.services import Services
+    from .api.shell import Shell
     from .api.tree import Tree
+    from .api.user import User
     from .serve import Handler, Service
 
 __all__ = [
@@ -401,11 +408,69 @@ class Client:
         return Services(self)
 
     @functools.cached_property
+    def shell(self) -> "Shell":
+        """The `shell.spec` op: every op the node has registered, as objects.
+
+        The introspection helper of design section 0.1: one anonymous query
+        answers the node's whole routing table, which is how this SDK checks
+        itself against a node rather than against a document.
+        """
+        from .api.shell import Shell
+
+        return Shell(self)
+
+    @functools.cached_property
     def tree(self) -> "Tree":
         """The `tree` ops: get, list, set, mounts."""
         from .api.tree import Tree
 
         return Tree(self)
+
+    @functools.cached_property
+    def user(self) -> "User":
+        """The `user` ops: membership, siblings, assets, expulsions."""
+        from .api.user import User
+
+        return User(self)
+
+    @functools.cached_property
+    def bip137sig(self) -> "Bip137Sig":
+        """The `bip137sig` ops: entropy, mnemonics, seeds, BIP-32 derivation."""
+        from .api.bip137sig import Bip137Sig
+
+        return Bip137Sig(self)
+
+    @functools.cached_property
+    def ip(self) -> "Ip":
+        """The `ip` ops: the default gateway, local addresses, public candidates."""
+        from .api.ip import Ip
+
+        return Ip(self)
+
+    @functools.cached_property
+    def nodes(self) -> "Nodes":
+        """The `nodes` ops: links, sessions, endpoints. **Tier 3, gated.**
+
+        Reached like any other module client, and every op on it refuses until
+        the caller opts in: `await client.nodes.links(experimental=True)`, or
+        `Nodes(client, experimental=True)` to opt an instance in once. Design
+        section 0.1 makes `nodes` and `nat` experimental and `astral.api.nodes`
+        holds the gate.
+        """
+        from .api.nodes import Nodes
+
+        return Nodes(self)
+
+    @functools.cached_property
+    def nat(self) -> "Nat":
+        """The `nat` ops: holes, punching, the enable switch. **Tier 3, gated.**
+
+        Gated exactly as `nodes` is: `await client.nat.list_holes
+        (experimental=True)`.
+        """
+        from .api.nat import Nat
+
+        return Nat(self)
 
     # --- what the greeting said ---
 
@@ -1034,15 +1099,22 @@ class Client:
 
         A node silently accepts an unknown `out=` and then produces zero bytes
         (astral-docs bug D-24), so the validation is client-side and happens
-        before anything is dialed. `raw` relaxes only the "which channels have
-        landed" half of it: a RAW stream opens no channel, so a format this SDK
-        cannot frame is still a format it can hand to the caller as bytes -- and
-        that is how the risk register reads `apphost.whoami?out=json` off a live
-        node without a JSON channel existing. Note also that `in=` reaches only
-        seven of the nineteen ops these modules cover -- the other twelve build their channel
-        with `channel.WithOutputFormat(args.Out)` alone and drop `in=` in silence
-        -- so an `in=` that is not `bin` is a promise this SDK cannot keep for
-        every op, and step 14 has to gate it per op.
+        before anything is dialed. Two things are checked: that the token names
+        a format at all, and that a framed stream's `out=` is one this side can
+        **read**. The second is what refuses `out=base64` and `out=render`,
+        which are spellings a sender writes and no receiver anywhere parses; a
+        RAW stream opens no channel, so it may ask for either and take the bytes,
+        and its token is still validated because D-24's zero-byte answer is
+        worth catching whoever decodes it.
+
+        One hazard `out=` does not share and this method cannot check: **`in=`
+        reaches only seven of the nineteen ops these modules cover**. The other
+        twelve build their channel with `channel.WithOutputFormat(args.Out)`
+        alone and drop `in=` in silence, so they read the body as `bin` whatever
+        was asked, and objects written in another framing reach a binary reader.
+        Which ops honour it is a per-op fact of astrald's handler set, not
+        anything on the wire, so the caller who writes `in=` owns it; design
+        section 4.7 names the confirmed body-input set.
         """
         op, params = querystring.parse(qs)
         wanted = {"in": fmt_in, "out": fmt_out}
@@ -1063,20 +1135,18 @@ class Client:
 
         parsed_in = parse_format(wanted["in"], output=False)
         parsed_out = parse_format(wanted["out"], output=True)
-        # `raw=True` opens no channel at all: the caller reads the body as bytes
-        # and decides what it is. So the format is the *node's* business there
-        # and refusing it would refuse the one thing the raw view exists for --
-        # reading what a format this SDK cannot yet frame actually looks like on
-        # the wire. The token is still validated above, because an unknown `out=`
-        # makes the node produce zero bytes and report nothing (astral-docs bug
-        # D-24), and that is worth catching whoever decodes the answer.
-        if not raw and (parsed_in is not Format.BIN or parsed_out is not Format.BIN):
+        if not raw and parsed_out not in INPUT_FORMATS:
+            # `base64` and `render` are spellings a *sender* writes and no
+            # receiver anywhere reads: astral-go's `newReceiver` has no case for
+            # either, and a rendering resolves each object through astrald's own
+            # view registry, so there is nothing to parse it back into. Asking a
+            # node for one on a framed stream is asking for an answer this side
+            # cannot decode, and the honest form of that request is a raw read.
             raise TransportUnsupported(
-                f"channel format in={parsed_in.value} out={parsed_out.value}: the "
-                "json, text, canonical, base64 and render channels land with "
-                "channel/jsonl.py, channel/textchan.py and channel/canonical.py "
-                "(implementation step 14), together with the per-op gating that "
-                "`in=` needs"
+                f"{qs}: out={parsed_out.value} is an output-only spelling -- the "
+                "node writes it and no receiver in this SDK or in astral-go "
+                "parses it back. Read it with raw=True (call_raw / stream(..., "
+                "raw=True)), which hands the body over as bytes."
             )
         # Rebuilt only when a keyword adds something, so an ordinary query string
         # travels byte for byte as the caller wrote it.
@@ -1245,14 +1315,25 @@ class Client:
                 # `return_exceptions` keeps one stream's fault from cancelling
                 # its siblings mid-close.
                 #
-                # The loop runs at most twice. `_live` cannot grow behind it --
-                # `query()` re-checks `_closing` and closes the stream itself
-                # with no `await` between that check and the registration -- and
-                # every completed `Stream.aclose()` removes its own entry from
-                # `_forget` before it returns.
-                while self._live:
+                # Each pass takes only streams no pass has taken, so the walk
+                # ends whatever the streams do. It used to loop on `_live` being
+                # non-empty, which was safe only while every returning
+                # `Stream.aclose()` removed its own entry: a stream now keeps
+                # its entry when its connection did not actually close -- which
+                # is the point, the node's worker is still held -- and the old
+                # condition would have spun on it for ever. `_live` still cannot
+                # grow behind the walk, because `query()` re-checks `_closing`
+                # and closes the stream itself with no `await` between that
+                # check and the registration; the second pass is for a stream
+                # registered before the teardown began.
+                attempted: set[Stream] = set()
+                while True:
+                    batch = [s for s in self._live if s not in attempted]
+                    if not batch:
+                        break
+                    attempted.update(batch)
                     await asyncio.gather(
-                        *(asyncio.shield(s.aclose()) for s in list(self._live)),
+                        *(asyncio.shield(s.aclose()) for s in batch),
                         return_exceptions=True,
                     )
                 with contextlib.suppress(Exception):

@@ -19,8 +19,10 @@ docs and the wider form is the one that must be honoured:
 | `:` or `=`     | base64 of the binary payload                  |
 | nothing        | no payload; the zero value                     |
 
-Emission picks the text form whenever the type has one and base64 otherwise,
-which is astral-go's `TextSender` and not what the docs describe:
+Emission picks the text form whenever the type has one **and that form reads
+back**, and base64 otherwise. The first half is astral-go's `TextSender` and is
+not what the docs describe; the second is `channel_text_body`'s, which is where
+the two narrowings and their reasons are:
 
 - An untyped blob emits `#[] <base64>`, with a **space**, because `Blob`'s own
   text form is base64. The docs say `#[]:<base64>` with a colon. Both parse
@@ -42,7 +44,14 @@ import re
 from typing import Any as AnyValue
 from typing import Callable, Final, NamedTuple
 
-from ..errors import BlueprintNotFound, ParseError, RangeError, SchemaError, StreamCorrupted
+from ..errors import (
+    BlueprintNotFound,
+    ParseError,
+    RangeError,
+    SchemaError,
+    StreamCorrupted,
+    WireError,
+)
 from ..registry import Blueprints, default_blueprints
 from ..spec import Any, Array, Map, Primitive, Ptr, Ref, Slice, Spec
 from ..types import Duration, Identity, Nonce, ObjectID, Size, Time, Zone
@@ -64,6 +73,7 @@ __all__ = [
     "TEXT_SEP",
     "TEXT_SEPS",
     "TextScalar",
+    "channel_text_body",
     "decode",
     "decode_line",
     "encode",
@@ -304,6 +314,46 @@ def has_text_form(obj: AnyValue) -> bool:
     return True
 
 
+def channel_text_body(obj: AnyValue) -> str | None:
+    """The text body a channel may carry for this object, or `None` for base64.
+
+    astral-go's `TextSender` asks one question -- does this type marshal to text
+    -- and emits the answer. That predicate is wider than its own receiver's,
+    which needs an *un*marshaller, and wider than the framing can carry, which
+    ends a line at the first newline. Both gaps are silent, so this narrows the
+    emitter by the two conditions that make a line readable back:
+
+    - **A body carrying a newline is not one line.** The framing locates a line
+      by its terminator alone, so `String16('x\\n#[eos] ')` would be read back as
+      two objects, the second a forged `eos` that ends the stream early. astral-go
+      writes `" " + text + "\\n"` with no escaping (`astral/channel/text_sender.go`
+      at `5c18d9c`) and has the same hole; escaping instead would leave the node
+      behind, and base64 is a spelling its `TextReceiver` already reads.
+    - **A body its own type cannot parse is not a body.** `encode` used to take
+      the text branch for any object with a `text()` and `decode` needs a
+      `parse()`, so a type with one and not the other -- `objects.query_tag` --
+      wrote a line this SDK refused to read. astral-go's `QueryTag` declares no
+      `MarshalText` at all, so base64 is also what the node emits for it.
+
+    Where the text form is readable back, it is emitted unchanged, so every value
+    the node round-trips travels byte for byte as the node writes it. A body that
+    is *readable* but not *equal* is still emitted: `objects.search_query`
+    lowercases and `mod.gateway.endpoint` cannot spell a nil identity, and both
+    are astral-go's text form rather than this SDK's invention.
+    """
+    try:
+        body = to_text(obj)
+    except SchemaError:
+        return None
+    if "\n" in body:
+        return None
+    try:
+        _from_text(obj, body)
+    except WireError:
+        return None
+    return body
+
+
 def encode(obj: AnyValue, *, base64_only: bool = False) -> str:
     """One text-encoded object, header included and with no newline.
 
@@ -312,11 +362,8 @@ def encode(obj: AnyValue, *, base64_only: bool = False) -> str:
     """
     header = _HEADER_OPEN + getattr(obj, "ASTRAL_TYPE", "") + _HEADER_CLOSE
     if not base64_only:
-        try:
-            body = to_text(obj)
-        except SchemaError:
-            pass
-        else:
+        body = channel_text_body(obj)
+        if body is not None:
             return header + TEXT_SEP + body
     return header + BASE64_SEP + encode_base64(payload_bytes(obj))
 

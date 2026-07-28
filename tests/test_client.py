@@ -65,6 +65,7 @@ from astral.transport import Transport, dial
 from astral.types import Identity, Nonce, Zone
 from astral.wire import Writer
 
+import api_walk
 from mock_apphost import (
     ACK,
     Accept,
@@ -687,12 +688,14 @@ class ConcurrencyTest(ClientCase):
     @bounded()
     async def test_a_rejected_format_takes_no_permit_and_dials_nothing(self):
         """A node silently accepts an unknown `out=` and produces zero bytes
-        (astral-docs bug D-24), so the check is client-side and happens first."""
+        (astral-docs bug D-24), so the check is client-side and happens first.
+
+        Only an unparsable token is refused now that every parsable one has a
+        channel: `nonsense` is not a format at all, and `base64` is one no
+        receiver anywhere reads, so neither can name this side's framing."""
         async with MockApphost() as mock:
             client = await self.client(mock)
             before = mock.conn_count
-            with self.assertRaises(TransportUnsupported):
-                await client.call_one(WHOAMI, fmt_out=Format.JSON)
             with self.assertRaises(ValueError):
                 await client.call_one(WHOAMI, fmt_out="nonsense")
             with self.assertRaises(ValueError):
@@ -790,6 +793,49 @@ class CancellationTest(ClientCase):
 # --- shutdown ------------------------------------------------------------
 
 
+class _RefusesTwice(Transport):
+    """A carrier whose first two `aclose()` calls release nothing.
+
+    A stand-in for any transport whose close did not complete, which is the
+    only condition under which the layers above may report `closed=False`.
+    Everything else delegates, so the connection is a real one and the leak
+    detector still counts it.
+    """
+
+    def __init__(self, inner: Transport, refusals: int = 2) -> None:
+        self._inner = inner
+        self._left = refusals
+
+    @property
+    def endpoint(self) -> str:
+        return self._inner.endpoint
+
+    @property
+    def closed(self) -> bool:
+        return self._inner.closed
+
+    async def readexactly(self, n: int) -> bytes:
+        return await self._inner.readexactly(n)
+
+    async def read(self, n: int = -1) -> bytes:
+        return await self._inner.read(n)
+
+    def write(self, data: bytes) -> None:
+        self._inner.write(data)
+
+    async def drain(self) -> None:
+        await self._inner.drain()
+
+    def write_eof(self) -> None:
+        self._inner.write_eof()
+
+    async def aclose(self) -> None:
+        if self._left:
+            self._left -= 1
+            return
+        await self._inner.aclose()
+
+
 class ShutdownTest(ClientCase):
     """Design section 3.8 and the third gate of step 8."""
 
@@ -810,6 +856,35 @@ class ShutdownTest(ClientCase):
             self.assertTrue(persistent.closed)
             self.assertEqual(client.live_streams, 0)
             self.assertEqual(counter.open, 0)
+
+    @bounded()
+    async def test_a_stream_that_did_not_close_leaves_the_client_closing(self):
+        """The walk ends whatever the streams do, and does not claim otherwise.
+
+        `Stream.aclose()` returning no longer means the connection is gone, so
+        the stream keeps its entry in `_live` until it is -- which is the point,
+        the node's worker is still held. The teardown therefore takes each
+        stream once rather than looping while `_live` is non-empty, which would
+        have spun on that entry for ever, and `closed` stays false so a later
+        `aclose()` resumes the walk. This is the shape in which a fix for the
+        latch would otherwise have become a hang.
+        """
+        async with MockApphost(routes={"x.hold": Accept(objects=[u8(1)], hold=True)}) as mock:
+            client = await self.client(mock)
+            stream = await client.query("x.hold", timeout=None)
+            stream.conn._transport = _RefusesTwice(  # noqa: SLF001
+                stream.conn._transport  # noqa: SLF001
+            )
+            await client.aclose()
+            self.assertFalse(client.closed)
+            self.assertEqual(client.live_streams, 1)
+            self.assertIn("closing", repr(client))
+            await client.aclose()
+            self.assertFalse(client.closed)
+            # The carrier relents; the resumed walk finishes the job.
+            await client.aclose()
+            self.assertTrue(client.closed)
+            self.assertEqual(client.live_streams, 0)
 
     @bounded()
     async def test_a_closed_client_refuses_new_work(self):
@@ -1337,14 +1412,18 @@ class ModuleClientAttachmentTest(ClientCase):
 
     @bounded()
     async def test_every_module_client_attaches_and_is_cached(self):
+        """The walk is over the modules that declare **ops**.
+
+        Design section 0.1 keeps the wire types of four excluded modules, so
+        `exonet` (an abstract base class and a registry) and `endpoints` (four
+        wire types) are in this package with no ops at all. A `client.exonet`
+        would name a set of ops that does not exist. `api_walk` decides which
+        modules are which by what each declares, so a module that gained ops and
+        forgot its property still fails here.
+        """
         import astral.api
 
-        directory = pathlib.Path(astral.api.__file__).parent
-        modules = sorted(
-            path.stem
-            for path in directory.glob("*.py")
-            if not path.stem.startswith("_") and path.stem != "base"
-        )
+        modules = api_walk.op_modules()
         self.assertGreaterEqual(len(modules), 7, "the walk found nothing to check")
         async with MockApphost() as mock:
             client = await self.client(mock)
@@ -1395,17 +1474,29 @@ class FramingReconciliationTest(ClientCase):
     async def test_an_out_parameter_in_the_query_string_is_not_ignored(self):
         """`call_one('apphost.whoami?out=json')` passed every guard the SDK had
         and handed a JSON-lines body to a binary channel, because `_framing`
-        validated a keyword the node never sees."""
-        async with MockApphost() as mock:
+        validated a keyword the node never sees.
+
+        No keyword is given here, so the query string is the whole answer: the
+        JSON body the mock writes is read by a JSON channel and decodes to the
+        same identity a binary body would."""
+        body = b'{"Type":"identity","Object":"%s"}\n' % FURRY_BOLT.hex().encode()
+        async with MockApphost(
+            routes={
+                "apphost.whoami?out=json": Accept(raw=body),
+                "apphost.whoami?in=text": Accept(objects=[IDENTITY_FRAME]),
+            }
+        ) as mock:
             client = await self.client(mock)
-            # No keyword given, so the query string is the whole answer and
-              # the SDK is configured from it -- and refuses, because only the
-              # binary channel has landed.
-            with self.assertRaises(TransportUnsupported):
-                await client.query("apphost.whoami?out=json")
-            with self.assertRaises(TransportUnsupported):
-                await client.query("apphost.whoami?in=text")
-        self.assertEqual(mock.queries, [], "a refused format still reached the node")
+            # `out=json` says the node writes JSON, so this side reads JSON.
+            self.assertEqual(await client.call_one("apphost.whoami?out=json"), FURRY_BOLT)
+            # `in=text` says the node reads text, so this side writes text; the
+            # answer is still binary, because `out=` was not given.
+            self.assertEqual(await client.call_one("apphost.whoami?in=text"), FURRY_BOLT)
+        self.assertEqual(
+            [q.query for q in mock.queries],
+            ["apphost.whoami?out=json", "apphost.whoami?in=text"],
+            "the query string travels as the caller wrote it",
+        )
 
     @bounded()
     async def test_a_query_string_that_contradicts_the_keyword_is_refused(self):
@@ -1424,15 +1515,13 @@ class FramingReconciliationTest(ClientCase):
         self.assertEqual([q.query for q in mock.queries], [WHOAMI, f"{WHOAMI}?out=bin"])
 
     @bounded()
-    async def test_a_raw_stream_may_ask_for_a_format_this_sdk_cannot_frame(self):
+    async def test_a_raw_stream_hands_over_the_bytes_of_any_format(self):
         """A RAW stream opens no channel, so which encoder the node uses is the
-        caller's business and not this side's. Refusing `out=json` there would
-        refuse the one thing the raw view exists for -- reading what a format the
-        SDK cannot yet frame actually looks like on the wire, which is how
-        `tests/test_risk_register.py` reads `apphost.whoami?out=json` off a live
-        node with no JSON channel in the tree. The token is still validated,
-        because an unknown `out=` makes the node emit zero bytes and say nothing
-        (astral-docs bug D-24)."""
+        caller's business and not this side's: the same `out=json` body is bytes
+        here and an `Identity` through the framed path, and the raw view is what
+        `tests/test_risk_register.py` reads a live `out=json` answer with. The
+        token is still validated, because an unknown `out=` makes the node emit
+        zero bytes and say nothing (astral-docs bug D-24)."""
         body = b'{"Type":"identity","Object":"anyone"}\n'
         async with MockApphost(
             routes={"apphost.whoami?out=json": Accept(raw=body)}
@@ -1442,9 +1531,6 @@ class FramingReconciliationTest(ClientCase):
                 await client.call_raw("apphost.whoami?out=json", timeout=5.0), body
             )
             self.assertEqual(mock.queries[-1].query, "apphost.whoami?out=json")
-            # Framed, the same query string is still refused.
-            with self.assertRaises(TransportUnsupported):
-                await client.query("apphost.whoami?out=json")
             # And nonsense is refused either way.
             with self.assertRaises(astral.AstralError):
                 await client.call_raw("apphost.whoami?out=nonsense")

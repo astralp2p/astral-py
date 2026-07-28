@@ -458,16 +458,28 @@ class OpenChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(open_channel(t, "", ""), BinaryChannel)
 
     @bounded()
-    async def test_the_unbuilt_formats_are_named_rather_than_framed_as_binary(self):
+    async def test_another_format_is_never_framed_as_binary(self):
+        """Each format has its own implementation, and a pair that needs two of
+        them is a `SplitChannel`. The matrix itself is
+        `test_channel_formats.py`'s; what this pins is that `bin` is the one
+        `BinaryChannel` covers."""
         t = MemTransport.solo()
         for fmt in ("json", "text", "canonical"):
             with self.subTest(fmt=fmt):
-                with self.assertRaises(TransportUnsupported):
-                    open_channel(t, fmt, "bin")
+                self.assertNotIsInstance(open_channel(t, fmt, "bin"), BinaryChannel)
         for fmt in ("base64", "render"):
             with self.subTest(fmt=fmt):
+                self.assertNotIsInstance(open_channel(t, "bin", fmt), BinaryChannel)
+
+    @bounded()
+    async def test_detach_stays_the_binary_channels_alone(self):
+        """The one channel whose framing is byte-exact, so the one that can hand
+        a transport to a raw stream (design section 3.1)."""
+        t = MemTransport.solo()
+        for fmt_in, fmt_out in (("json", "json"), ("text", "text"), ("canonical", "canonical")):
+            with self.subTest(fmt=fmt_in):
                 with self.assertRaises(TransportUnsupported):
-                    open_channel(t, "bin", fmt)
+                    open_channel(t, fmt_in, fmt_out).detach()
 
     def test_format_tokens_are_validated_client_side(self):
         """A node silently accepts an unknown `out=` and then produces zero bytes

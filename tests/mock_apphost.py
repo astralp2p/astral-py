@@ -47,11 +47,14 @@ from typing import Awaitable, Callable, Coroutine, Final, Sequence
 
 from astral.errors import TransportError
 from astral.transport import MemTransport, Server, Transport, listen_any
+from astral.transport.mem import _Pipe
 from astral.types import Identity, Nonce
 from astral.wire import Reader, Writer
 
 __all__ = [
     "ACK",
+    "RefusesToClose",
+    "refusing",
     "ATTACH_QUERY",
     "AUTH_SUCCESS",
     "AUTH_TOKEN",
@@ -394,6 +397,44 @@ def parse_register_service(payload: bytes) -> Identity | None:
 def parse_reject_incoming(payload: bytes) -> tuple[Nonce, int]:
     r = Reader(payload)
     return Nonce(r.uint64()), r.uint8()
+
+
+# --- a carrier that does not honour the Transport contract ----------------
+
+
+class RefusesToClose(MemTransport):
+    """A transport whose `aclose()` returns having released nothing.
+
+    Every carrier the SDK ships closes: `StreamTransport` bounds its flush and
+    then aborts, `MemTransport` clears its pipes, and `WebSocketClient` reaches
+    that bounded close through a `finally`. This one does not, and it exists
+    because the layers above must not *assume* they do. Latching `closed` in a
+    `finally` made that assumption at three sites, and over a carrier whose
+    close had not completed it reported a released connection on a socket still
+    ESTABLISHED -- the sixth occurrence of a defect class already fixed five
+    times elsewhere.
+
+    It relents after `relents_after` calls, so a test can also assert that a
+    later `aclose()` resumes the walk rather than short-circuiting on a claim
+    that was never true.
+    """
+
+    relents_after = 3
+
+    def __init__(self, *args, **kw) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kw)
+        self.aclose_calls = 0
+
+    async def aclose(self) -> None:
+        self.aclose_calls += 1
+        if self.aclose_calls >= self.relents_after:
+            await super().aclose()
+
+
+def refusing(name: str = "refuses") -> "RefusesToClose":
+    """One `RefusesToClose` with no peer, for a test that only closes it."""
+    left, right = _Pipe(), _Pipe()
+    return RefusesToClose(left, right, f"mem:{name}")
 
 
 # --- test bounding -------------------------------------------------------

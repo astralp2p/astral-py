@@ -159,7 +159,7 @@ class Stream:
         "_reading",
         "_closing",
         "_closed",
-        "_released",
+        "_sweep",
     )
 
     def __init__(
@@ -242,7 +242,10 @@ class Stream:
         self._reading = False
         self._closing = False
         self._closed = False
-        self._released = asyncio.Event()
+        # A lock rather than an event, for `Session.aclose`'s reason: an event a
+        # cancelled walk never sets hangs the second caller, and one set in a
+        # `finally` reports a permit returned for a connection that is open.
+        self._sweep = asyncio.Lock()
 
     def __repr__(self) -> str:
         # Three states, not two: a close in flight is a stream still open.
@@ -722,27 +725,41 @@ class Stream:
         close that swallowed one would break structured cancellation while
         claiming to have done the caller a favour.
 
-        **Returning means closed**, for every caller: a concurrent second call
-        waits for the first rather than reporting a released connection whose
-        descriptor is still open, because a client that counted that as free
-        would count a node worker free that is still held.
+        **Returning means the connection was reached**, for every caller: a
+        concurrent second call waits for the first rather than reporting a
+        released connection whose descriptor is still open, because a client
+        that counted that as free would count a node worker free that is still
+        held. It does not mean `closed` is true -- over every carrier the SDK
+        ships it is, and over one that released nothing the flag says so.
 
-        The permit is released **after** the transport is gone and never before.
-        A release on entry would let the next queued query dial into the node
-        while this connection is still open, so a client bounded at N would hold
-        N+1 -- which is the bound failing in exactly the way design section 3.9
-        says the node cannot absorb.
+        The permit is released **after** the transport is gone and never before,
+        and "gone" is asked of the connection rather than assumed from the call
+        having returned. A release on entry would let the next queued query dial
+        into the node while this connection is still open, so a client bounded
+        at N would hold N+1 -- which is the bound failing in exactly the way
+        design section 3.9 says the node cannot absorb. Latching `_closed` in
+        the `finally` released the permit on exactly that failure: measured over
+        a carrier whose close did not complete, `closed=True` with the
+        descriptor open and the permit already handed to the next dialer.
+
+        A stream whose connection is still open therefore stays *closing* and
+        stays in the client's live set, so `Client.aclose()` reports itself
+        closing too and a later `aclose()` resumes the walk. That is
+        `Client.aclose`'s and `Service.aclose`'s contract, applied to the
+        resource they are counting.
         """
-        if self._closing:
-            await self._released.wait()
+        if self._closed:
             return
         self._closing = True
-        try:
-            await self._conn.aclose()
-        finally:
-            self._closed = True
-            self._release()
-            self._released.set()
+        async with self._sweep:
+            if self._closed:
+                return
+            try:
+                await self._conn.aclose()
+            finally:
+                self._closed = self._conn.closed
+                if self._closed:
+                    self._release()
 
     def _release(self) -> None:
         """Hand the client back its permit and its registration, exactly once."""

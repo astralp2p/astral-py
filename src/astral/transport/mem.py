@@ -129,7 +129,16 @@ class _Pipe:
 class MemTransport(Transport):
     """A byte stream over two in-process buffers."""
 
-    __slots__ = ("_in", "_out", "_endpoint", "_closed", "_wrote_eof", "_max_chunk", "writes")
+    __slots__ = (
+        "_in",
+        "_out",
+        "_endpoint",
+        "_closed",
+        "_wrote_eof",
+        "_max_chunk",
+        "_stranded",
+        "writes",
+    )
 
     def __init__(
         self,
@@ -145,6 +154,11 @@ class MemTransport(Transport):
         self._closed = False
         self._wrote_eof = False
         self._max_chunk = max_chunk
+        # Whether a multi-chunk read was abandoned holding bytes it had already
+        # taken out of the pipe. Deliberately reachable: this transport is
+        # harsher than a socket on purpose, and the harshness is only useful if
+        # a caller can ask about it.
+        self._stranded = False
         # Test instrumentation: one entry per `write()` call, in call order.
         self.writes: list[bytes] = []
 
@@ -207,6 +221,20 @@ class MemTransport(Transport):
     def closed(self) -> bool:
         return self._closed
 
+    @property
+    def at_frame_boundary(self) -> bool:
+        """False once a cancelled read has discarded bytes it had taken.
+
+        `StreamTransport` never answers false, because asyncio consumes its
+        buffer only when a whole `readexactly` is present. This transport
+        accumulates chunk by chunk and a cancellation drops the accumulator, so
+        it can strand bytes where a socket cannot -- which is the harsher oracle
+        this class exists to be, and the reason `BinaryChannel` reads a single
+        byte at a boundary rather than trusting `readexactly` to be atomic. The
+        harshness is only usable if it is reportable, so it is reported.
+        """
+        return not self._stranded
+
     async def readexactly(self, n: int) -> bytes:
         if n < 0:
             raise ValueError(f"negative read length {n}")
@@ -214,7 +242,14 @@ class MemTransport(Transport):
             return b""
         out = bytearray()
         while len(out) < n:
-            chunk = await self.read(n - len(out))
+            try:
+                chunk = await self.read(n - len(out))
+            except BaseException:
+                # The accumulator dies with the frame. `IncompleteRead` below is
+                # not this case: it hands the partial bytes to the caller.
+                if out:
+                    self._stranded = True
+                raise
             if not chunk:
                 if not out:
                     raise EOFError("stream closed")
@@ -228,7 +263,12 @@ class MemTransport(Transport):
         if n < 0:
             out = bytearray()
             while True:
-                await self._in.wait_readable()
+                try:
+                    await self._in.wait_readable()
+                except BaseException:
+                    if out:
+                        self._stranded = True
+                    raise
                 if self._in.at_eof:
                     return bytes(out)
                 out += self._in.take(-1, None)

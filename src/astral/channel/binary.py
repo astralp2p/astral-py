@@ -150,9 +150,18 @@ class BinaryChannel(Channel):
         Do not weaken that to a wider read on the assumption that `readexactly`
         is atomic. It is on `StreamTransport`, where asyncio consumes its buffer
         only once the whole request is present, but not on `MemTransport`, which
-        accumulates chunks into a local buffer that a cancellation discards.
+        accumulates chunks into a local buffer that a cancellation discards --
+        and `MemTransport.at_frame_boundary` says so, which is the other half of
+        this answer.
+
+        **The carrier's own framing counts too, and this channel cannot see it.**
+        Over `WebSocketByteTransport` a read abandoned between a WebSocket
+        frame's header and its payload strands half a frame before this channel
+        has been handed a single byte, so `_mid_frame` alone answered `True` for
+        a stream the peer's own data would then reframe. The transport answers
+        for its layer, this flag for ours, and a boundary is both.
         """
-        return not self._mid_frame
+        return not self._mid_frame and self._transport.at_frame_boundary
 
     async def receive(self) -> Any:
         if self._detached:

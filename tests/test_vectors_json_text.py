@@ -37,7 +37,16 @@ from astral.errors import ParseError, RangeError, SchemaError, StreamCorrupted, 
 from astral.primitives import SCALARS, Bytes8, String8, Uint8
 from astral.spec import Any as AnySpec
 from astral.spec import Array, Map, Primitive, Ptr, Ref, Slice
-from astral.types import Duration, Identity, Nonce, ObjectID, Size, Time, Zone
+from astral.types import (
+    Duration,
+    Identity,
+    Nonce,
+    ObjectID,
+    Size,
+    Time,
+    Zone,
+    ascii_int,
+)
 from astral.wire import Reader, Writer
 from test_codec_binary import _STANDIN
 from vectors import (
@@ -637,6 +646,42 @@ class TextEmissionTests(unittest.TestCase):
             with self.subTest(obj=obj):
                 line = text.encode_line(obj, base64_only=False)
                 self.assertEqual(text.decode_line(line, registry=_STANDIN), obj)
+
+
+class AsciiIntTests(unittest.TestCase):
+    """`ascii_int` is the one guard for text a peer wrote that must be a number.
+
+    `int()` is not that grammar -- it strips whitespace, takes a sign, takes PEP
+    515 underscores and takes an `0x` prefix at base 16 -- and `str.isdigit()`
+    is not a guard for it either, being true of U+00B2, which `int()` refuses.
+    The pair `isdigit()` then `int()` therefore raised a bare `ValueError` from
+    outside the SDK's hierarchy on peer bytes; it guarded an HTTP status line, a
+    `Content-Length`, a `tcp:` port and a `ws://` port.
+    """
+
+    def test_only_ascii_digits_are_a_number(self) -> None:
+        self.assertEqual(ascii_int("8625"), 8625)
+        self.assertEqual(ascii_int("007"), 7)
+        for bad in ("+5", "-5", "1_0", " 5", "5 ", "", "0x5", "²", "١٢", "5.0"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(ascii_int(bad))
+
+    def test_base_sixteen_is_hexdig_and_nothing_else(self) -> None:
+        self.assertEqual(ascii_int("ff", 16), 255)
+        self.assertEqual(ascii_int("FF", 16), 255)
+        for bad in ("0xff", "+ff", "f_f", " ff", "", "g"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(ascii_int(bad, 16))
+
+    def test_a_nonce_reads_hex_and_only_hex(self) -> None:
+        """A nonce is a correlator a peer supplies: `apphost.cancel?id=` carries
+        one back, so its parser is on the peer-facing surface."""
+        self.assertEqual(int(Nonce.parse("1122334455667788")), 0x1122334455667788)
+        self.assertEqual(int(Nonce.parse("ff")), 255)
+        for bad in ("0xff", "+ff", "f_f", " ff"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ParseError):
+                    Nonce.parse(bad)
 
 
 class TextScalarTests(unittest.TestCase):

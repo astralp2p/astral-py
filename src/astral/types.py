@@ -44,11 +44,56 @@ from typing import Any, ClassVar, Final
 from .errors import ParseError, RangeError
 from .wire import Reader, Writer
 
-__all__ = ["Duration", "Identity", "Nonce", "ObjectID", "Size", "Time", "Zone"]
+__all__ = [
+    "Duration",
+    "Identity",
+    "Nonce",
+    "ObjectID",
+    "Size",
+    "Time",
+    "Zone",
+    "ascii_int",
+]
 
 _INT64_MIN: Final = -(1 << 63)
 _INT64_MAX: Final = (1 << 63) - 1
 _UINT64_MAX: Final = (1 << 64) - 1
+
+_ASCII_DIGITS: Final[dict[int, Any]] = {
+    10: re.compile(r"\A[0-9]+\Z"),
+    16: re.compile(r"\A[0-9a-fA-F]+\Z"),
+}
+
+
+def ascii_int(text: str, base: int = 10) -> int | None:
+    """One unsigned integer from text a peer wrote, or `None` if it is not one.
+
+    **`int()` is not the grammar any of these formats declare** and
+    `str.isdigit()` is not the guard for it. `int()` strips surrounding
+    whitespace, accepts a leading `+` or `-`, accepts PEP 515 underscores, and
+    at base 16 accepts an `0x` prefix -- none of which is `1*DIGIT` in RFC 9112,
+    `1*HEXDIG` in its chunk grammar, or `strconv.ParseUint` in Go.
+    `str.isdigit()` is true of U+00B2 SUPERSCRIPT TWO and of every Unicode
+    decimal digit, and `int()` refuses the first and accepts the second, so a
+    guard written that way both passes input the conversion then rejects --
+    raising a bare `ValueError` from outside this SDK's hierarchy on bytes a
+    peer chooses -- and admits digits the reference implementations do not read.
+
+    Returning `None` rather than raising: each caller already has the fault it
+    reports -- `TransportError` for a malformed message, `ParseError` for a
+    malformed address -- and a shared helper that raised one of them would give
+    the other the wrong class.
+
+    A sign is deliberately absent. Every caller here parses an unsigned field: a
+    status code, a length, a chunk size, a port, a nonce. `api/endpoints.py`'s
+    `_PORT_DIGITS` accepts one, because Go's `strconv.Atoi` does and that
+    parser reproduces `net.SplitHostPort` exactly.
+    """
+    if base not in _ASCII_DIGITS:  # pragma: no cover -- two callers, two bases
+        raise ValueError(f"ascii_int: base {base} is not 10 or 16")
+    if not isinstance(text, str) or not _ASCII_DIGITS[base].match(text):
+        return None
+    return int(text, base)
 
 
 # --- identity -------------------------------------------------------------
@@ -168,11 +213,16 @@ class Nonce(int):
 
     @classmethod
     def parse(cls, text: str) -> "Nonce":
-        """Parse hex, padded or unpadded. Both forms occur on the wire."""
-        try:
-            return cls(int(text, 16))
-        except ValueError as exc:
-            raise ParseError(f"nonce64: {text!r} is not hex") from exc
+        """Parse hex, padded or unpadded. Both forms occur on the wire.
+
+        Hex digits and nothing else: `int(text, 16)` alone would also read
+        `0x1f`, `+1f` and `1_f`, none of which Go's `strconv.ParseUint(s, 16,
+        64)` reads, and a nonce is a correlator a peer supplies.
+        """
+        value = ascii_int(text, 16)
+        if value is None:
+            raise ParseError(f"nonce64: {text!r} is not hex")
+        return cls(value)
 
     def json(self) -> str:
         # Unpadded, bug-compatible with astral-go's strconv.FormatUint(u, 16).
