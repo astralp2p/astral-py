@@ -471,8 +471,46 @@ class JsonEnvelopeTests(unittest.TestCase):
             jsoncodec.read_envelope({"Object": 7})
 
     def test_an_absent_object_key_reads_as_the_zero_value(self) -> None:
-        # `omitempty` on Go's raw-message field can drop the key entirely.
+        # An absent payload, the same as an explicit null. `omitempty` on Go's
+        # raw-message field could in principle drop the key, though no astral-go
+        # MarshalJSON returns empty bytes, so nothing emits the form today; the
+        # spec admits it regardless (astral-docs `topics/json-encoding.md`).
         self.assertEqual(jsoncodec.read_envelope({"Type": "ack"}), objects.Ack())
+        self.assertEqual(
+            jsoncodec.read_envelope({"Type": "ack", "Object": None}), objects.Ack()
+        )
+
+    def test_an_unknown_envelope_key_is_rejected(self) -> None:
+        """A misspelled `Object` left the payload unread and reported no error.
+
+        `{"Type": "…slice_spec", "Obejct": …}` parsed to a heterogeneous
+        `SliceSpec` rather than the `uint32` slice meant, so a corrupted schema
+        registered silently. astral-go rejects the same shape in
+        `JSONAdapter.UnmarshalJSON`.
+        """
+        for envelope in (
+            {"Type": "uint8", "Obejct": 7},
+            {"Type": "uint8", "Object": 7, "Extra": 1},
+            {"Type": "uint8", "Objct": 7},
+        ):
+            with self.subTest(envelope=envelope):
+                with self.assertRaises(ParseError):
+                    jsoncodec.read_envelope(envelope)
+
+    def test_an_envelope_carrying_two_payloads_is_ambiguous(self) -> None:
+        # Go's encoding/json let the last key win, so one document holding both
+        # spellings resolved differently on each side rather than being refused.
+        with self.assertRaises(ParseError):
+            jsoncodec.read_envelope({"Type": "uint8", "Object": 7, "OBJECT": 9})
+
+    def test_a_conforming_envelope_still_decodes(self) -> None:
+        for envelope in (
+            {"Type": "uint8", "Object": 7},
+            {"type": "uint8", "object": 7},
+            {"Object": 7, "Type": "uint8"},
+        ):
+            with self.subTest(envelope=envelope):
+                self.assertEqual(jsoncodec.read_envelope(envelope), Uint8(7))
 
 
 class JsonFieldTests(unittest.TestCase):

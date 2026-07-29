@@ -621,13 +621,25 @@ def read_envelope(data: AnyValue, *, registry: Blueprints | None = None) -> AnyV
 
     `null` is the absent form a polymorphic field takes, mirroring the
     zero-length type tag on the binary wire.
+
+    A key other than `Type` and `Object` is an error, as at the record level:
+    ignoring it left the payload unread and the named type at its zero value
+    with no error, so `{"Type": "…slice_spec", "Obejct": {"Type": "uint32"}}`
+    parsed to a heterogeneous `SliceSpec` and registered a corrupted schema.
+    Sourced: astral-docs `topics/json-encoding.md`, and astral-go `JSONAdapter.
+    UnmarshalJSON` (`astral/object.go`), which rejects the same shape.
+
+    A missing `Object` key is not an error -- it carries an absent payload, the
+    same as an explicit `null`, and every SDK emits both keys unconditionally so
+    the form does not arise in practice.
     """
     if data is None:
         return None
     if not isinstance(data, dict):
         raise ParseError(f"envelope: expected a JSON object, got {type(data).__name__}")
     folded = _fold(data, "envelope")
-    type_name = folded.get(ENVELOPE_TYPE.lower())
+    type_name = folded.pop(ENVELOPE_TYPE.lower(), None)
+    payload = folded.pop(ENVELOPE_OBJECT.lower(), None)
     if not isinstance(type_name, str) or not type_name:
         # The failure a peer's inline polymorphic field produces, so the message
         # names the shape rather than the missing key: Go's `encoding/json`
@@ -635,9 +647,11 @@ def read_envelope(data: AnyValue, *, registry: Blueprints | None = None) -> AnyV
         # decoder can resolve back to a type.
         raise ParseError(
             "envelope: missing or empty Type -- a polymorphic field carries "
-            f'{{"Type": …, "Object": …}}, got keys {sorted(folded)}'
+            f'{{"Type": …, "Object": …}}, got keys {sorted(data)}'
         )
-    return unmarshal(type_name, folded.get(ENVELOPE_OBJECT.lower()), registry=registry)
+    if folded:
+        raise ParseError(f"envelope: unknown keys {sorted(folded)}")
+    return unmarshal(type_name, payload, registry=registry)
 
 
 # --- the field walker ------------------------------------------------------
