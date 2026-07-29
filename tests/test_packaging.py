@@ -308,5 +308,25 @@ class AnnotationTest(unittest.TestCase):
         self.assertGreater(checked, 20, "the sweep found no dataclasses")
 
 
+class VersionTest(unittest.TestCase):
+    """The version is written twice and nothing made the two agree.
+
+    `pyproject.toml` names what the wheel reports and `astral.__version__` names
+    what a caller reads, so a bump that misses one ships a package whose metadata
+    and code disagree -- and a tag cut from it would be wrong in one of the two
+    places whichever one the tagger checked.
+    """
+
+    def test_the_two_declared_versions_agree(self):
+        root = pathlib.Path(__file__).resolve().parent.parent
+        with open(root / "pyproject.toml", "rb") as handle:
+            declared = tomllib.load(handle)["project"]["version"]
+        self.assertEqual(
+            declared,
+            astral.__version__,
+            "pyproject.toml and astral.__version__ disagree",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
