@@ -810,17 +810,18 @@ class Client:
         per-op contracts that the wire does not carry:
 
         `eos=True` sends the terminator after the inputs, for an op that reads to
-        one. The default is off because astrald's `apphost.sign_app_contract`
-        loop dispatches on the object's type and has no branch for `eos`, so the
-        terminator would end that exchange as an error; closing the stream is
-        what tells it the input is complete.
+        one. Batch ops mirror the input stream's terminator (op-modes.md): an
+        explicit `eos` is answered with a final `eos`, so a batch exchange that
+        sends one also ends in one. The default is off because the terminator
+        is a per-op contract: an op outside the batch family may have no `eos`
+        branch, and closing the stream always marks the input complete.
 
         `expect=None` reads to the stream's own end, `eos` or EOF, which is the
         WA termination design section 4.7 states and needs the op to end its
-        stream. `expect=n` reads exactly n answers and stops, for an op that
-        answers one per input and then waits for the caller to close --
-        `sign_app_contract` again. Reading to the end of a stream that never ends
-        blocks until the responder closes, which for that op is never.
+        stream -- with `eos=True` a mirroring batch op ends it with the
+        answering `eos`. `expect=n` reads exactly n answers and stops, for an
+        exchange that sends no `eos` and would otherwise be read until the
+        responder closes, and for the interleave below.
 
         **`expect=n` interleaves: one send, then one read.** That declaration is
         exactly the statement that the op answers as it goes, and an op that

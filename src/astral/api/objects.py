@@ -1193,9 +1193,10 @@ class Objects(ModuleClient):
         argument instead is the single most common way to get an op wrong
         (design section 4.7).
 
-        No `eos` is sent: astrald's handler ignores it and keeps reading, so what
-        ends this op is the stream closing. Verified live -- after `send_eos()`
-        the node answered nothing further and the stream stayed open.
+        No `eos` is sent: the answer count is known, so the exchange ends by
+        closing the stream. A node with the terminator mirror answers an
+        explicit `eos` with a final `eos`; an older node ignores the terminator
+        and keeps reading -- closing works against both.
         """
         objects = [_object_id(i, OP_CONTAINS) for i in ids]
         qs = querystring.build(OP_CONTAINS, _encode({"repo": _repo(repo, OP_CONTAINS)}))

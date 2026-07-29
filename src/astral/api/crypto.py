@@ -936,9 +936,11 @@ class Crypto(ModuleClient):
         """Send the body, terminate it with `eos`, read one answer per input.
 
         `expect=len(inputs)` rather than reading to the end: every op here
-        answers exactly once per object, so the count is known, and an op that
-        answers and then waits for the caller to close would otherwise be read
-        until the deadline. A short list is `_answers`' to report.
+        answers exactly once per object, so the count is known, and counting
+        holds against any node -- one with the terminator mirror answers the
+        sent `eos` with a final `eos`, an older one answers nothing after the
+        batch; the unread final `eos` dies with the stream. A short list is
+        `_answers`' to report.
         """
         try:
             answers = await self._c.call_with(

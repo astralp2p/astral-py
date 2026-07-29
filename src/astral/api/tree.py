@@ -318,7 +318,8 @@ class Tree(ModuleClient):
         `RemoteError` from that point; the answers before it are not returned,
         and nothing is returned on success either. An answer count that does not
         match the input count is the op having stopped early, and raises
-        `ProtocolError`.
+        `ProtocolError`. The final `eos` a mirroring node answers to the sent
+        terminator is deliberately left unread; the stream closes over it.
         """
         objects = list(values)
         if not objects:
