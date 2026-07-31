@@ -1,0 +1,3 @@
+[submodule ".ai/system"]
+	path = .ai/system
+	url = https://github.com/astralp2p/astral-docs.git
