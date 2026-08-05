@@ -33,6 +33,14 @@ feature, because a real node misbehaves:
 A handler never propagates an exception into the enclosing `TaskGroup`: faults land
 in `errors` for the test to assert on. `bounded` wraps every test in
 `asyncio.timeout`, because a hanging test in an async suite wedges the whole run.
+
+**Importing this module blanks the ambient node.** `blank_ambient_environment()`
+runs at import and empties the endpoint and token variables of design section
+3.3, so a developer's own `ASTRALD_APPHOST_TOKEN` cannot make a client
+authenticate against a mock that has no token. That is the one import side effect
+here and it is deliberate: a stdlib `unittest` run has no fixture that covers
+`discover`, a single module and a single test alike, and every test module that
+reaches `connect()` imports this one.
 """
 
 from __future__ import annotations
@@ -45,6 +53,7 @@ import os
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Coroutine, Final, Sequence
 
+from astral.client import ENDPOINT_VARS, TOKEN_VARS
 from astral.errors import TransportError
 from astral.transport import MemTransport, Server, Transport, listen_any
 from astral.transport.mem import _Pipe
@@ -53,6 +62,7 @@ from astral.wire import Reader, Writer
 
 __all__ = [
     "ACK",
+    "AMBIENT_VARS",
     "RefusesToClose",
     "refusing",
     "ATTACH_QUERY",
@@ -87,6 +97,7 @@ __all__ = [
     "auth_success_payload",
     "auth_token_payload",
     "bind_payload",
+    "blank_ambient_environment",
     "bounded",
     "error_msg_payload",
     "frame",
@@ -115,6 +126,52 @@ __all__ = [
     "socket_fds",
     "until",
 ]
+
+# --- the ambient node, neutralised ---------------------------------------
+
+AMBIENT_VARS: Final = ENDPOINT_VARS + TOKEN_VARS
+"""The production variables `connect()` falls back to when given neither.
+
+Design section 3.3 makes that fallback the library's behaviour, and it is right
+for an application and wrong for a test. The mock host in this module has no
+token, so a developer's own `ASTRALD_APPHOST_TOKEN` reaches it as an
+`auth_token_msg` it can only refuse, and the test dies on `AuthFailed` against an
+in-process server that was never meant to authenticate anybody. Verified: with
+that one variable exported, `test_api_crypto.ResetTest`,
+`test_client.OpModeHelperTest` and `test_websocket.SessionOverWebSocketTest` each
+lost the one test in it that calls `connect()` with an endpoint rather than a
+connector -- three of 3,254, and the same `AuthFailed` in all three.
+
+Neutralising these costs the live tier nothing, because the suite's own opt-ins
+are deliberately not these names: design section 7.3 gates Tier C on
+`ASTRAL_TEST_ENDPOINT` and its serving half on `ASTRAL_TEST_TOKEN`, which
+`test_serve.py` reads and passes explicitly. The read-only half is the
+anonymous-safe op set by design, and it answers the same way anonymous. Verified
+against `furry-bolt`: the tier's results are identical with the ambient token
+present and absent.
+"""
+
+
+def blank_ambient_environment() -> None:
+    """Blank the production endpoint and token variables for this process.
+
+    Blanked, not deleted, for two reasons: both resolvers skip an empty value, so
+    blank is as good as absent, and an empty variable is inherited by the
+    subprocesses `test_cli` spawns, which take a copy of `os.environ` and would
+    otherwise resolve the developer's node all over again.
+
+    Called at import rather than from a fixture, because import is the only hook
+    a stdlib `unittest` run offers that covers every entry point -- `discover`, a
+    single module, a single test -- and there is no package `__init__` to hang
+    one on. Both halves of that reach are pinned by
+    `test_mock_apphost.AmbientEnvironmentTest`: that the variables are blank once
+    this module is imported, and that every test module which calls `connect`
+    imports it.
+    """
+    os.environ.update({name: "" for name in AMBIENT_VARS})
+
+
+blank_ambient_environment()
 
 # The live node this design was surveyed against: alias `furry-bolt`, identity
 # 03b2704948bb...ae1. Its host_info_msg frame is pinned as a byte vector.

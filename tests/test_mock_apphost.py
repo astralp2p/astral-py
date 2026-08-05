@@ -18,20 +18,24 @@ handler fault and leaked no transport.
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import os
 import unittest
 
 from astral import primitives as P
 from astral.channel.binary import BinaryChannel
+from astral.client import resolve_endpoint, resolve_token
 from astral.errors import AllocationLimit, BlueprintNotFound, StreamCorrupted
 from astral.object import Ack, EOS
 from astral.registry import Blueprints, default_blueprints
 from astral.session import HostInfoMsg, QueryAcceptedMsg, RouteQueryMsg
-from astral.transport import MemTransport, Transport, dial
+from astral.transport import MemTransport, Transport, default_endpoint, dial
 from astral.types import Identity, Nonce, Zone
 
 from mock_apphost import (
     ACK,
+    AMBIENT_VARS,
     AUTH_SUCCESS,
     ERROR_CODES,
     ERROR_MSG,
@@ -724,6 +728,84 @@ class PayloadCodecTest(unittest.TestCase):
     def test_a_blob_frame_and_an_ack_frame(self):
         self.assertEqual(frame("", b"raw"), b"\x00\x00\x00\x00\x03raw")
         self.assertEqual(frame(ACK), b"\x03ack\x00\x00\x00\x00")
+
+
+# --- the safety rail -----------------------------------------------------
+
+
+class AmbientEnvironmentTest(unittest.TestCase):
+    """The developer's own node reaches no test in this suite.
+
+    `connect()` resolves an endpoint and a token from the environment when it is
+    given neither (design section 3.3), so on a machine where astrald runs the
+    suite would otherwise dial that node, or offer that node's token to a mock
+    which has none and be refused. This is the case that actually happened: one
+    exported `ASTRALD_APPHOST_TOKEN` cost three tests in three files, all three
+    with the same `AuthFailed` against an in-process host.
+
+    `mock_apphost.blank_ambient_environment()` runs at import and is therefore
+    only as good as its reach, which is the second test here. The suite's own
+    variables -- `ASTRAL_TEST_ENDPOINT`, `ASTRAL_TEST_TOKEN` -- are different
+    names and are untouched, which is what keeps Tier C opt-in-able.
+    """
+
+    def test_every_production_variable_is_blank_once_the_harness_is_imported(self):
+        """Blank, not absent: both resolvers skip an empty value, and an empty
+        value is inherited by a subprocess where a deletion in this process would
+        be, too -- but a variable that is present and empty also says the guard
+        ran, which an absent one cannot."""
+        for name in AMBIENT_VARS:
+            with self.subTest(variable=name):
+                self.assertEqual(os.environ.get(name), "")
+        self.assertIsNone(resolve_token())
+        self.assertEqual(resolve_endpoint(), default_endpoint())
+
+    def test_every_test_module_that_calls_connect_imports_the_harness(self):
+        """The reach of an import-time guard is which modules import it.
+
+        Parsed rather than grepped, because `test_packaging` quotes
+        `astral.connect(` inside the README text it asserts on and never calls
+        it. A module reaching `connect` without this import is one ambient
+        variable away from the failure this rail exists for; `live_support`
+        counts because it imports the harness itself.
+        """
+        here = os.path.dirname(os.path.abspath(__file__))
+        carriers = {"mock_apphost", "live_support"}
+        for name in sorted(os.listdir(here)):
+            if not name.endswith(".py"):
+                continue
+            with open(os.path.join(here, name), encoding="utf-8") as fh:
+                tree = ast.parse(fh.read(), filename=name)
+            calls_connect = any(
+                isinstance(node, ast.Call)
+                and (
+                    (isinstance(node.func, ast.Name) and node.func.id == "connect")
+                    or (
+                        isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "connect"
+                    )
+                )
+                for node in ast.walk(tree)
+            )
+            if not calls_connect:
+                continue
+            imported = {
+                alias.name.split(".")[0]
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Import)
+                for alias in node.names
+            } | {
+                node.module.split(".")[0]
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.module
+            }
+            with self.subTest(module=name):
+                self.assertTrue(
+                    imported & carriers,
+                    f"{name} calls connect() and imports neither "
+                    f"{' nor '.join(sorted(carriers))}, so the ambient endpoint "
+                    "and token reach it unblanked",
+                )
 
 
 if __name__ == "__main__":

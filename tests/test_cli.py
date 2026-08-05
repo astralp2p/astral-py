@@ -37,7 +37,6 @@ from unittest import mock as mocklib
 
 import astral
 from astral import cli
-from astral.client import ENDPOINT_VARS, TOKEN_VARS
 from astral.wire import Writer
 
 import api_walk
@@ -114,19 +113,18 @@ class Capture:
 class CliCase(unittest.IsolatedAsyncioTestCase):
     """One mock node on this loop, one `main()` on a worker thread.
 
-    The endpoint and token variables are blanked for every test: both resolvers
-    skip an empty value, so a developer's own `ASTRALD_TOKEN` cannot make the
-    command authenticate against a mock that has no token and fail the whole
-    file with `AuthFailed`.
+    The endpoint and token variables this file used to blank per test are blanked
+    for the whole process by `mock_apphost.blank_ambient_environment()`, which
+    this module's import runs: a developer's own `ASTRALD_TOKEN` cannot make the
+    command authenticate against a mock that has no token and fail the whole file
+    with `AuthFailed`. The guard moved because three other files needed it and
+    did not have it. A second copy here would restore the same blank over a blank
+    and read as though it were what stops the failure.
     """
 
     async def asyncSetUp(self) -> None:
         self.out = Capture()
         self.err = Capture()
-        blanked = {name: "" for name in ENDPOINT_VARS + TOKEN_VARS}
-        patch = mocklib.patch.dict(os.environ, blanked)
-        patch.start()
-        self.addCleanup(patch.stop)
 
     async def run_argv(self, argv: Sequence[str]) -> int:
         """Run `main` on a worker thread, with both streams captured."""

@@ -1361,6 +1361,15 @@ so the socket path is exercised too.
   wrong first frame type, the first-frame timeout, and concurrent inbound connections (the
   test that would have caught astral-go's serial accept loop).
 
+**The ambient environment is blanked before any of this runs.** §3.3's fallback is
+what an application wants and what a Tier-B test cannot survive: a developer's exported
+`ASTRALD_APPHOST_TOKEN` is offered to a mock that has no token, refused, and the test dies
+on `AuthFailed` without a node being involved anywhere. `mock_apphost` empties the six
+production endpoint and token variables at import — the only hook a stdlib `unittest` run
+offers that covers `discover`, one module and one test alike — and a rail in
+`test_mock_apphost.py` asserts both that it happened and that every test module calling
+`connect` imports it. Tier C keeps its own names (§7.3) and is untouched.
+
 Specific invariant tests that exist because a survey found a hazard:
 
 1. **No stranded bytes at the handover.** The mock sends `query_accepted_msg` and the first
