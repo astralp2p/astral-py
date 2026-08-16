@@ -194,11 +194,11 @@ from ..registrar import (
 from ..spec import PRIMITIVE_TYPES, AnySpec, Primitive, Ptr, Slice, Spec, referenced_type
 from ..stream import Stream
 # `Nonce` is imported for its annotation, not for a reference in this file:
-# `ReadObjectAction` and `CreateObjectAction` inherit `auth.Action`'s
-# `nonce: Nonce`, and the `__init__` a dataclass generates for them resolves its
+# `CreateObjectAction` inherits `auth.Action`'s
+# `nonce: Nonce`, and the `__init__` a dataclass generates for it resolves its
 # annotations against **this** module's globals. Without the name here,
-# `inspect.signature(ReadObjectAction, eval_str=True)` and
-# `typing.get_type_hints(ReadObjectAction.__init__)` both raise `NameError` --
+# `inspect.signature(CreateObjectAction, eval_str=True)` and
+# `typing.get_type_hints(CreateObjectAction.__init__)` both raise `NameError` --
 # the exact py.typed failure `api/base.py` exists to prevent, and one that
 # `get_type_hints(cls)` does not show, because that walks `__mro__` and uses each
 # base's own globals.
@@ -253,7 +253,6 @@ __all__ = [
     "REPO_REMOVABLE",
     "REPO_SYSTEM",
     "REPO_VIRTUAL",
-    "ReadObjectAction",
     "RepositoryInfo",
     "SearchQuery",
     "SearchResult",
@@ -623,22 +622,6 @@ class CommitMsg:
     Sent by `Writer.commit()` and by nothing else. The node's own blueprint for
     the type declares no fields, verified live.
     """
-
-
-@record("mod.objects.read_object_action")
-class ReadObjectAction(Action):
-    """The authorization action `objects.read` submits before serving bytes.
-
-    A denial is a **query rejection**, not an `error_message`: `op_read.go` calls
-    `q.Reject()`, so the caller sees `QueryRejected` and never an object stream.
-
-    `Action`'s two fields come first, matching Go's promotion order for the
-    embedded `auth.Action`, so the zero value is ten bytes -- an eight-byte
-    nonce and two absent pointers. Verified live: `objects.new?type=…` answers
-    `00000000000000000000`.
-    """
-
-    object_id: ObjectID | None = wire("ObjectID", Ptr("object_id.sha256"))
 
 
 @record("mod.objects.create_object_action")
@@ -1338,7 +1321,7 @@ class Objects(ModuleClient):
         an object larger than memory needs.
 
         Denial is a **query rejection**, not an `error_message`: the op submits a
-        `mod.objects.read_object_action` and calls `q.Reject()` when it is
+        `mod.auth.see_objects_action` and calls `q.Reject()` when it is
         refused, so a denied read raises `QueryRejected`. astral-go's client
         hardcodes `zone=dvn`; this one sends what the caller asked for and
         nothing else.
@@ -1524,8 +1507,8 @@ class Objects(ModuleClient):
         value-embedded non-`Object` struct, or a primitive newtype that does not
         implement `PrimitiveAlias`. Swept live over `furry-bolt`: 97 of the 134
         non-primitive registered names answered and 37 refused, including this
-        module's own `mod.objects.read_object_action` and
-        `mod.objects.create_object_action`, both of which embed `auth.Action`.
+        this module's own `mod.objects.create_object_action`, which embeds
+        `auth.Action`.
         The refusal is an `error_message`, so it arrives as `RemoteError` and
         never as a wrong schema.
 
@@ -1989,7 +1972,6 @@ OBJECTS_TYPES: Final[Sequence[type]] = (
     Descriptor,
     Probe,
     QueryTag,
-    ReadObjectAction,
     RepositoryInfo,
     SearchQuery,
     SearchResult,
@@ -2004,10 +1986,9 @@ registry that can decode this module's answers. Naming `astral.blueprint` alone
 would not: its `Fields` slot references `astral.blueprint.field`, which
 references the seven carriers through a polymorphic slot.
 
-`mod.objects.commit_msg`, `mod.objects.read_object_action` and
-`mod.objects.create_object_action` are declared here even though no op answers
-with one: the first is sent, and the two actions name themselves inside a
-`mod.auth.permit` and inside an authorization bundle.
+`mod.objects.commit_msg` and `mod.objects.create_object_action` are declared
+here even though no op answers with one: the first is sent, and the action names
+itself inside a `mod.auth.permit` and inside an authorization bundle.
 """
 
 Objects.TYPES = OBJECTS_TYPES

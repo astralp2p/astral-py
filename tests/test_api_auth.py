@@ -148,22 +148,18 @@ NODE_ZERO_JSON = {
 # façades, captured the same way.
 NODE_ACTION_BINARY = {
     "mod.auth.sudo_action": "00000000000000000000",
-    "mod.objects.read_object_action": "00000000000000000000",
     "mod.objects.create_object_action": "000000000000000000",
     "mod.user.adopt_action": "00000000000000000000",
 }
 NODE_ACTION_JSON = {
     "mod.auth.sudo_action": '{"Nonce":"0","ActorID":null,"AsID":null}',
-    "mod.objects.read_object_action": (
-        '{"Nonce":"0","ActorID":null,"ObjectID":null}'
-    ),
     "mod.objects.create_object_action": '{"Nonce":"0","ActorID":null}',
     "mod.user.adopt_action": '{"Nonce":"0","ActorID":null,"Subject":null}',
 }
 
 # The blueprint every action type is refused, and the reason astral-go gives.
 NODE_ACTION_BLUEPRINT_ERROR = (
-    "BlueprintFromType mod.objects.read_object_action.Action: type auth.Action "
+    "BlueprintFromType mod.objects.create_object_action.Action: type auth.Action "
     "does not implement Object and is not a supported container"
 )
 
@@ -184,7 +180,7 @@ def a_contract() -> Contract:
         subject=OTHER,
         permits=[
             Permit(
-                action="mod.objects.read_object_action",
+                action="mod.auth.see_objects_action",
                 constraints=None,
                 delegation=2,
             )
@@ -423,13 +419,13 @@ class EmbedTest(unittest.TestCase):
         self.assertIn(inner, payload_bytes(signed))
 
     def test_an_action_s_value_embed_flattens_in_both_facades(self):
-        """`mod.objects.read_object_action` on the node: ten binary bytes and
-        three top-level JSON keys, with no `Action` key anywhere."""
-        theirs = json.loads(NODE_ACTION_JSON["mod.objects.read_object_action"])
-        self.assertEqual(sorted(theirs), ["ActorID", "Nonce", "ObjectID"])
+        """`mod.user.adopt_action` on the node: ten binary bytes and three
+        top-level JSON keys, with no `Action` key anywhere."""
+        theirs = json.loads(NODE_ACTION_JSON["mod.user.adopt_action"])
+        self.assertEqual(sorted(theirs), ["ActorID", "Nonce", "Subject"])
         self.assertNotIn("Action", theirs)
         self.assertEqual(
-            len(bytes.fromhex(NODE_ACTION_BINARY["mod.objects.read_object_action"])),
+            len(bytes.fromhex(NODE_ACTION_BINARY["mod.user.adopt_action"])),
             10,
         )
 
@@ -439,31 +435,31 @@ class ActionBaseTest(unittest.TestCase):
 
     def setUp(self) -> None:
         # A private registry with no parent, so this fixture never claims a name
-        # in the process-wide one -- `astral.api.objects` owns these two types
-        # and a child registry would collide with it the moment it lands.
+        # in the process-wide one -- `astral.api.user` owns this type and a child
+        # registry would collide with it the moment it lands.
         self.registry = Blueprints()
 
-        @record("mod.objects.read_object_action", registry=self.registry)
-        class ReadObjectAction(Action):
-            object_id: ObjectID | None = wire("ObjectID", Ptr("object_id.sha256"))
+        @record("mod.user.adopt_action", registry=self.registry)
+        class AdoptAction(Action):
+            subject: Identity | None = wire("Subject", Ptr("identity"))
 
-        self.cls = ReadObjectAction
+        self.cls = AdoptAction
 
     def test_the_base_fields_come_first_and_in_the_node_s_order(self):
         self.assertEqual(
-            [f.wire_name for f in self.cls.FIELDS], ["Nonce", "ActorID", "ObjectID"]
+            [f.wire_name for f in self.cls.FIELDS], ["Nonce", "ActorID", "Subject"]
         )
 
     def test_the_zero_payload_is_the_node_s(self):
         self.assertEqual(
             payload_bytes(self.cls()).hex(),
-            NODE_ACTION_BINARY["mod.objects.read_object_action"],
+            NODE_ACTION_BINARY["mod.user.adopt_action"],
         )
 
     def test_the_zero_json_is_the_node_s(self):
         self.assertEqual(
             jsoncodec.marshal(self.cls()),
-            json.loads(NODE_ACTION_JSON["mod.objects.read_object_action"]),
+            json.loads(NODE_ACTION_JSON["mod.user.adopt_action"]),
         )
 
     def test_an_action_with_no_extra_field_is_nine_bytes(self):
@@ -480,7 +476,7 @@ class ActionBaseTest(unittest.TestCase):
         )
 
     def test_a_populated_action_round_trips(self):
-        value = self.cls(nonce=Nonce(0x1122334455667788), actor_id=FURRY_BOLT, object_id=OID)
+        value = self.cls(nonce=Nonce(0x1122334455667788), actor_id=FURRY_BOLT, subject=OTHER)
         raw = payload_bytes(value)
         back = self.cls.read_payload(object_reader(raw, registry=self.registry))
         self.assertEqual(back, value)
@@ -495,10 +491,10 @@ class PermitTest(unittest.TestCase):
     """`allows`, the constraints bundle, and the delegation byte."""
 
     def test_a_permit_allows_its_own_action_type_and_no_other(self):
-        permit = Permit(action="mod.objects.read_object_action")
+        permit = Permit(action="mod.auth.see_objects_action")
 
         class Anything:
-            ASTRAL_TYPE = "mod.objects.read_object_action"
+            ASTRAL_TYPE = "mod.auth.see_objects_action"
 
         class Other:
             ASTRAL_TYPE = "mod.user.adopt_action"
@@ -578,19 +574,19 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(payload_bytes(back), raw)
 
     def test_has_permit_selects_by_action_type(self):
-        read = Permit(action="mod.objects.read_object_action")
+        read = Permit(action="mod.auth.see_objects_action")
         adopt = Permit(action="mod.user.adopt_action")
         contract = Contract(permits=[read, None, adopt, read])
         self.assertEqual(
-            contract.has_permit("mod.objects.read_object_action"), [read, read]
+            contract.has_permit("mod.auth.see_objects_action"), [read, read]
         )
         self.assertEqual(contract.has_permit("mod.nodes.relay_for_action"), [])
 
     def test_has_permit_accepts_an_action_object(self):
-        read = Permit(action="mod.objects.read_object_action")
+        read = Permit(action="mod.auth.see_objects_action")
 
         class ReadAction:
-            ASTRAL_TYPE = "mod.objects.read_object_action"
+            ASTRAL_TYPE = "mod.auth.see_objects_action"
 
         self.assertEqual(Contract(permits=[read]).has_permit(ReadAction()), [read])
 
@@ -1027,7 +1023,7 @@ class LiveAuthTest(live_support.LiveCase):
         async with await self.client() as client:
             with self.assertRaises(RemoteError) as caught:
                 await client.call_one(
-                    "objects.get_blueprint?type=mod.objects.read_object_action",
+                    "objects.get_blueprint?type=mod.objects.create_object_action",
                     timeout=20.0,
                 )
         self.assertTrue(
