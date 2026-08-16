@@ -95,8 +95,8 @@ Go's default showing through a gap.
 
 **No action type has a blueprint.** `objects.get_blueprint` answers
 `error_message` for every one of them -- verified live for
-`mod.auth.sudo_action`, `mod.objects.read_object_action`,
-`mod.objects.create_object_action` and `mod.user.adopt_action`, each with
+`mod.auth.sudo_action`, `mod.objects.create_object_action` and
+`mod.user.adopt_action`, each with
 `BlueprintFromType <type>.Action: type auth.Action does not implement Object and
 is not a supported container`. `auth.Action` has no `ObjectType` method, so
 astral-go's blueprint derivation stops at the embedded field. A peer therefore
@@ -193,19 +193,21 @@ _INDEX: Final[dict[str, Spec]] = {"id": Primitive("object_id.sha256")}
 class Action:
     """The two fields every concrete action type carries, and no wire type.
 
-    astral-go's `auth.Action` is embedded by value into `mod.objects.*_action`,
-    `mod.user.*_action`, `mod.nodes.relay_for_action` and astrald's
-    `mod.auth.sudo_action`. A value embed flattens in binary **and** in JSON, so
-    a concrete action inherits this class rather than referencing it:
+    astral-go's `auth.Action` is embedded by value into `mod.auth.*_action`,
+    `mod.objects.*_action`, `mod.user.*_action`, `mod.nodes.relay_for_action` and
+    astrald's `mod.auth.sudo_action`. A value embed flattens in binary **and** in
+    JSON, so a concrete action inherits this class rather than referencing it:
 
-        @record("mod.objects.read_object_action")
-        class ReadObjectAction(Action):
+        @record("mod.auth.see_objects_action")
+        class SeeObjectsAction(Action):
             object_id: ObjectID | None = wire("ObjectID", Ptr("object_id.sha256"))
+            repo: str = wire("Repo", Primitive("string8"))
 
     `dataclasses.fields()` returns base fields first, which is Go's promotion
-    order, so `FIELDS` is `Nonce, ActorID, ObjectID` and the payload is
-    `00000000000000000000` for the zero value -- the bytes the live node answers
-    for that type, verified this session.
+    order, so `FIELDS` is `Nonce, ActorID, ObjectID, Repo` and the payload is
+    `0000000000000000000000` for the zero value -- eleven bytes: an eight-byte
+    nonce, two absent pointers and an empty `string8`. Verified against
+    astral-go's own encoder at `456347b`.
 
     Not decorated with `@record`: `mod.auth.action` is not registered on any
     node, and a record would both invent a registry name and nest these two
@@ -233,7 +235,7 @@ class Permit:
     """One grant: an action type, its constraints, and how far it delegates.
 
     `action` is the **object type name** of an action, not a verb:
-    `mod.objects.read_object_action`, `mod.user.adopt_action`. A permit whose
+    `mod.auth.see_objects_action`, `mod.user.adopt_action`. A permit whose
     action names a type the node does not know grants nothing, because
     authorization matches on the string the concrete action reports.
 

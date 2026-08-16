@@ -206,9 +206,9 @@ class AnnotationTest(unittest.TestCase):
     `get_type_hints(cls.__init__)` and `inspect.signature(cls, eval_str=True)`
     resolve the generated `__init__` against the *subclass's* globals.
 
-    - `ReadObjectAction` and `CreateObjectAction` inherit `auth.Action`'s
-      `nonce: Nonce` into `astral.api.objects`, which had no reason of its own to
-      import `Nonce`. Every remaining action type -- `mod.user.*_action`,
+    - `CreateObjectAction` inherits `auth.Action`'s `nonce: Nonce` into
+      `astral.api.objects`, which had no reason of its own to import `Nonce`.
+      Every remaining action type -- `mod.auth.*_action`, `mod.user.*_action`,
       `mod.nodes.relay_for_action` -- would have repeated it.
     - `Connector` was `Callable[[], Awaitable["Session"]]`, a forward reference
       in an exported alias, and `astral.stream` imports the alias without the

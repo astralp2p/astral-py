@@ -74,7 +74,6 @@ from astral.api.objects import (
     Objects,
     Probe,
     QueryTag,
-    ReadObjectAction,
     RepositoryInfo,
     SearchQuery,
     SearchResult,
@@ -146,7 +145,6 @@ LIVE_ZEROS = {
     "mod.objects.search_result": bytes.fromhex("0000"),
     "objects.search_query": bytes.fromhex("000000000000"),
     "mod.objects.commit_msg": b"",
-    "mod.objects.read_object_action": bytes.fromhex("00000000000000000000"),
 }
 
 # Three object ids `objects.scan?repo=main` answered on `furry-bolt`.
@@ -293,30 +291,28 @@ class SearchResultWireTest(unittest.TestCase):
 
 
 class ActionWireTest(unittest.TestCase):
-    """The two authorization actions, and the embedded `auth.Action`."""
+    """The module's authorization action, and the embedded `auth.Action`."""
 
     def test_the_field_order_is_gos_promotion_order(self):
         """A value embed flattens in binary, and `dataclasses.fields()` returns
         base fields first, which is what Go promotion does."""
         self.assertEqual(
-            [f.wire_name for f in ReadObjectAction.FIELDS],
-            ["Nonce", "ActorID", "ObjectID"],
-        )
-        self.assertEqual(
             [f.wire_name for f in CreateObjectAction.FIELDS], ["Nonce", "ActorID"]
         )
 
-    def test_the_read_action_zero_value_is_the_bytes_the_node_answers(self):
-        """Ten bytes: an eight-byte nonce and two absent pointers."""
-        self.assertEqual(
-            payload_bytes(ReadObjectAction()),
-            LIVE_ZEROS["mod.objects.read_object_action"],
-        )
+    def test_the_create_action_zero_value_is_nine_bytes(self):
+        """An eight-byte nonce and one absent pointer.
 
-    def test_a_populated_read_action_round_trips(self):
-        value = ReadObjectAction(actor_id=FURRY_BOLT, object_id=ID_A)
+        `LIVE_ZEROS` carries no entry for this type -- `objects.new` was swept
+        for the retired `mod.objects.read_object_action`, not for this one -- so
+        the expectation is astral-go's encoder at `456347b`, not the node.
+        """
+        self.assertEqual(payload_bytes(CreateObjectAction()), bytes.fromhex("000000000000000000"))
+
+    def test_a_populated_create_action_round_trips(self):
+        value = CreateObjectAction(actor_id=FURRY_BOLT)
         raw = payload_bytes(value)
-        self.assertEqual(ReadObjectAction.read_payload(object_reader(raw)), value)
+        self.assertEqual(CreateObjectAction.read_payload(object_reader(raw)), value)
 
 
 class CommitMsgWireTest(unittest.TestCase):
@@ -339,7 +335,6 @@ class ObjectsTypesTest(unittest.TestCase):
             "objects.search_query",
             "objects.query_tag",
             "mod.objects.commit_msg",
-            "mod.objects.read_object_action",
             "mod.objects.create_object_action",
         ):
             with self.subTest(type=name):
