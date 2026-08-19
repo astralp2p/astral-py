@@ -36,7 +36,6 @@ from astral.api.apphost import (
     OP_CANCEL,
     OP_CREATE_TOKEN,
     OP_HOLD_OBJECT,
-    OP_INSTALL_APP,
     OP_LIST_HELD_OBJECTS,
     OP_LIST_TOKENS,
     OP_NEW_APP_CONTRACT,
@@ -503,15 +502,6 @@ class TokenAndContractTest(ApphostCase):
         )
 
     @bounded()
-    async def test_install_app_sends_the_same_arguments(self):
-        async with MockApphost(
-            routes={OP_INSTALL_APP: Accept(objects=(IDENTITY_FRAME,))}
-        ) as mock:
-            api = await self.apphost(mock)
-            await api.install_app(ID_HEX)
-        self.assertEqual(mock.queries[-1].query, f"{OP_INSTALL_APP}?id={ID_HEX}")
-
-    @bounded()
     async def test_sign_app_contract_puts_the_contract_on_the_channel_body(self):
         """The confirmed way to get a body-input op wrong is passing the input as
         a query argument. Here the query string carries no parameter at all and
@@ -874,13 +864,11 @@ class NameResolutionTest(ApphostCase):
             OP_LIST_TOKENS: lambda a: a.list_tokens("furry-bolt"),
             OP_CREATE_TOKEN: lambda a: a.create_token("furry-bolt"),
             OP_NEW_APP_CONTRACT: lambda a: a.new_app_contract("furry-bolt"),
-            OP_INSTALL_APP: lambda a: a.install_app("furry-bolt"),
         }
         answer = {
             OP_LIST_TOKENS: Accept(objects=(TOKEN_FRAME,), eos=True),
             OP_CREATE_TOKEN: Accept(objects=(TOKEN_FRAME,)),
             OP_NEW_APP_CONTRACT: Accept(objects=(ACK_FRAME,)),
-            OP_INSTALL_APP: Accept(objects=(ACK_FRAME,)),
         }
         for op, run in cases.items():
             with self.subTest(op=op):

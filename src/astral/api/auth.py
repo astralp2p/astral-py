@@ -4,7 +4,7 @@ Tier 1, two ops, three wire types and one field base. The ops are the smallest
 surface of any module in this SDK; the types are the largest part of it, because
 `mod.auth.contract` and `mod.auth.signed_contract` are what two other modules
 exchange -- `apphost.new_app_contract`, `apphost.sign_app_contract`,
-`apphost.install_app`, `user.accept_contract`, `user.accept_membership`,
+`user.accept_contract`, `user.accept_membership`,
 `user.adopt`, `user.request_membership` and `user.new_node_contract` all answer
 with one or read one.
 

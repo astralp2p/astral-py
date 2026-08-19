@@ -15,7 +15,6 @@ being collected. Thirteen ops, all of them confirmed present on the live node's
 | `apphost.register` | RR | `apphost.access_token` | policy-gated |
 | `apphost.new_app_contract` | RR | `mod.auth.contract` | |
 | `apphost.sign_app_contract` | WA | `mod.auth.signed_contract` | contract on the body |
-| `apphost.install_app` | RR | `mod.auth.signed_contract` | local-only |
 | `apphost.hold_object` | RR | `ack` | local-only, needs a caller |
 | `apphost.unhold_object` | RR | `ack` | local-only, needs a caller |
 | `apphost.register_handler` | RR | `ack` | local-only |
@@ -30,9 +29,7 @@ node in the same run: `whoami` answers with one object and a bare EOF, while
 
 **"Local-only" is the node's word, not a hint.** Those ops answer
 `query_rejected_msg` when `q.Origin()` is the network, so they work from an IPC
-guest and never from a peer. `install_app` rejects with code **3** where every
-other local-only op rejects with the default 1; 3 is `canceled` in astral-go's
-own code table, so the code is misleading rather than op-specific.
+guest and never from a peer.
 
 **The `mod.apphost.*_msg` control types are declared in `astral.session`** and
 re-exported here. Design section 1 files them under this module, but they are
@@ -62,6 +59,12 @@ thirteen ops guard on origin -- `bind`, `hold_object`, `unhold_object`,
 `grep OriginNetwork mod/apphost/src/op_*.go` matches at astrald `154ba3ae`. The
 seven that do not are `whoami`, `list_tokens`, `create_token`, `register`,
 `new_app_contract`, `sign_app_contract` and `cancel`.
+
+That census counts thirteen because it is read at the pin, and astrald has since
+retired `install_app` (`b51743cd`) along with the `apphost__local_apps` table it
+was the only writer of. This SDK no longer drives it; the census keeps naming it
+until `tests/reference.py` moves, which is a deliberate act that re-reads every
+`path:line` this module cites.
 
 **`apphost.create_token` is the sharper end of the same defect.** It has neither
 an origin guard nor an authorization check, and it *mints* a bearer token for any
@@ -129,7 +132,6 @@ __all__ = [
     "OP_CANCEL",
     "OP_CREATE_TOKEN",
     "OP_HOLD_OBJECT",
-    "OP_INSTALL_APP",
     "OP_LIST_HELD_OBJECTS",
     "OP_LIST_TOKENS",
     "OP_NEW_APP_CONTRACT",
@@ -154,7 +156,6 @@ __all__ = [
 
 OP_CREATE_TOKEN: Final = "apphost.create_token"
 OP_HOLD_OBJECT: Final = "apphost.hold_object"
-OP_INSTALL_APP: Final = "apphost.install_app"
 OP_LIST_HELD_OBJECTS: Final = "apphost.list_held_objects"
 OP_LIST_TOKENS: Final = "apphost.list_tokens"
 OP_NEW_APP_CONTRACT: Final = "apphost.new_app_contract"
@@ -233,10 +234,9 @@ class AccessToken:
 class App:
     """An app installed on a node: its identity, the node's, and when.
 
-    Codec-only. `apphost.install_app` creates one and `Module.LocalApps` reads
-    them back, but astrald exposes no op that returns one, so nothing in this
-    SDK can obtain one from a node. It is declared so that a peer handing one
-    over in band decodes.
+    Codec-only, and now unproduced: astrald retired `apphost.install_app` and
+    `Module.LocalApps` in b51743cd, so no node creates or serves one. Kept so
+    that a peer handing an older one over in band still decodes.
     """
 
     app_id: Identity | None = wire("AppID", Ptr("identity"))
@@ -401,9 +401,9 @@ class Apphost(ModuleClient):
     ) -> Any:
         """An **unsigned** app contract for an identity. RR.
 
-        The first of the three-step install: this makes the contract,
-        `sign_app_contract` signs and indexes it, `install_app` does both plus
-        the local-app record.
+        The first of two steps: this makes the contract and
+        `sign_app_contract` signs and indexes it. `apphost.register` does the
+        whole flow itself for an identity it provisions.
 
         The answer is a `mod.auth.contract`, which belongs to `astral.api.auth`
         and is returned here undecoded rather than reached for across a module
@@ -449,30 +449,6 @@ class Apphost(ModuleClient):
                 "contract"
             )
         return answers[0]
-
-    async def install_app(
-        self,
-        id: Identity | str,  # noqa: A002
-        *,
-        duration: Duration | int | _dt.timedelta | None = None,
-        **kw: Any,
-    ) -> Any:
-        """Create, sign, index and record an app contract in one call. RR.
-
-        Local-only, and the node signs as both issuer and subject because it
-        holds both keys at install time. The answer is a
-        `mod.auth.signed_contract`, declared by `astral.api.auth`.
-
-        A network-origin query is rejected with code 3, which astral-go's own
-        table reads as `canceled` rather than as a refusal; the rejection is
-        real, the code is astrald's mistake.
-        """
-        params: dict[str, Any] = {"id": await self._c.resolve_identity(id, **kw)}
-        span = _duration(duration)
-        if span is not None:
-            params["duration"] = span
-        qs = querystring.build(OP_INSTALL_APP, _encode(_IDENTITY_ID, params))
-        return await self._c.call_one(qs, **kw)
 
     # --- object holds ---
 
