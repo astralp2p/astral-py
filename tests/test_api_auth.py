@@ -826,9 +826,10 @@ class SignContractOpTest(AuthCase):
 
     @bounded()
     async def test_the_terminator_is_sent_because_this_op_breaks_on_it(self):
-        """`auth.sign_contract`'s reader is `ch.Switch(handler, BreakOnEOS)`;
-        `apphost.sign_app_contract`'s is not, and answers `error_message` for
-        the same frame. One op name apart, opposite terminators."""
+        """`auth.sign_contract`'s reader is `ch.Switch(handler, BreakOnEOS)`,
+        so the terminator ends the exchange cleanly. A body-input op whose reader
+        omits `BreakOnEOS` answers the same frame with an `error_message`, which
+        is why the terminator is a per-op contract rather than a protocol rule."""
         api, route, _ = await self.node(self.signed_frame())
         await api.sign_contract(a_contract())
         self.assertEqual(route.types[-1], "eos")

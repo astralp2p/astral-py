@@ -13,8 +13,6 @@ being collected. Thirteen ops, all of them confirmed present on the live node's
 | `apphost.list_held_objects` | ST | `object_id.sha256`* + `eos` | local-only, per caller |
 | `apphost.create_token` | RR | `apphost.access_token` | |
 | `apphost.register` | RR | `apphost.access_token` | policy-gated |
-| `apphost.new_app_contract` | RR | `mod.auth.contract` | |
-| `apphost.sign_app_contract` | WA | `mod.auth.signed_contract` | contract on the body |
 | `apphost.hold_object` | RR | `ack` | local-only, needs a caller |
 | `apphost.unhold_object` | RR | `ack` | local-only, needs a caller |
 | `apphost.register_handler` | RR | `ack` | local-only |
@@ -61,9 +59,11 @@ seven that do not are `whoami`, `list_tokens`, `create_token`, `register`,
 `new_app_contract`, `sign_app_contract` and `cancel`.
 
 That census counts thirteen because it is read at the pin, and astrald has since
-retired `install_app` (`b51743cd`) along with the `apphost__local_apps` table it
-was the only writer of. This SDK no longer drives it; the census keeps naming it
-until `tests/reference.py` moves, which is a deliberate act that re-reads every
+retired three of them: `install_app` (`b51743cd`) along with the
+`apphost__local_apps` table it was the only writer of, and `new_app_contract`
+and `sign_app_contract`, whose contract `apphost.register` mints in one call.
+This SDK no longer drives any of the three; the census keeps naming them until
+`tests/reference.py` moves, which is a deliberate act that re-reads every
 `path:line` this module cites.
 
 **`apphost.create_token` is the sharper end of the same defect.** It has neither
@@ -158,9 +158,7 @@ OP_CREATE_TOKEN: Final = "apphost.create_token"
 OP_HOLD_OBJECT: Final = "apphost.hold_object"
 OP_LIST_HELD_OBJECTS: Final = "apphost.list_held_objects"
 OP_LIST_TOKENS: Final = "apphost.list_tokens"
-OP_NEW_APP_CONTRACT: Final = "apphost.new_app_contract"
 OP_REGISTER: Final = "apphost.register"
-OP_SIGN_APP_CONTRACT: Final = "apphost.sign_app_contract"
 OP_UNHOLD_OBJECT: Final = "apphost.unhold_object"
 
 
@@ -389,66 +387,6 @@ class Apphost(ModuleClient):
         Absent from astral-go entirely; the docs are ahead of it here.
         """
         return self._expect(await self._c.call_one(OP_REGISTER, **kw), AccessToken, OP_REGISTER)
-
-    # --- app contracts ---
-
-    async def new_app_contract(
-        self,
-        id: Identity | str,  # noqa: A002
-        *,
-        duration: Duration | int | _dt.timedelta | None = None,
-        **kw: Any,
-    ) -> Any:
-        """An **unsigned** app contract for an identity. RR.
-
-        The first of two steps: this makes the contract and
-        `sign_app_contract` signs and indexes it. `apphost.register` does the
-        whole flow itself for an identity it provisions.
-
-        The answer is a `mod.auth.contract`, which belongs to `astral.api.auth`
-        and is returned here undecoded rather than reached for across a module
-        boundary. It decodes as soon as that module exists, because importing
-        `astral.api` imports every module in the package; while it does not, the
-        reply raises `StreamCorrupted` naming the unregistered type.
-        """
-        params: dict[str, Any] = {"id": await self._c.resolve_identity(id, **kw)}
-        span = _duration(duration)
-        if span is not None:
-            params["duration"] = span
-        qs = querystring.build(OP_NEW_APP_CONTRACT, _encode(_IDENTITY_ID, params))
-        return await self._c.call_one(qs, **kw)
-
-    async def sign_app_contract(self, contract: Any, **kw: Any) -> Any:
-        """Sign, index and store an app contract. WA.
-
-        **The contract travels on the channel body, not in the query string.**
-        That is the single most common way to get an op wrong (design section
-        4.7), and here there is no parameter it could be mistaken for: the op
-        reads objects off the stream and answers one `mod.auth.signed_contract`
-        per input.
-
-        No `eos` is sent after the contract. astrald's handler loop reads until
-        EOF and dispatches on the object's type, so a terminator it has no branch
-        for would end the exchange as an error; closing the stream is what tells
-        it there is no more input, and closing the stream is what this does as
-        soon as the answer is in hand.
-
-        `Client.call_with` is the generic form and this is its one caller today.
-        The send, the answer and the route share one deadline there, so an op
-        that accepts the contract and then says nothing costs `timeout` rather
-        than the rest of the process's life. `expect=1` and no `eos`: this op
-        neither terminates its own stream nor reads one, so both of `call_with`'s
-        terminator declarations are the non-default here.
-        """
-        answers = await self._c.call_with(
-            OP_SIGN_APP_CONTRACT, contract, expect=1, **kw
-        )
-        if not answers:
-            raise ProtocolError(
-                f"{OP_SIGN_APP_CONTRACT}: the stream ended without answering the "
-                "contract"
-            )
-        return answers[0]
 
     # --- object holds ---
 

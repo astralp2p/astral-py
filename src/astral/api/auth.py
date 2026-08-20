@@ -3,10 +3,9 @@
 Tier 1, two ops, three wire types and one field base. The ops are the smallest
 surface of any module in this SDK; the types are the largest part of it, because
 `mod.auth.contract` and `mod.auth.signed_contract` are what two other modules
-exchange -- `apphost.new_app_contract`, `apphost.sign_app_contract`,
-`user.accept_contract`, `user.accept_membership`,
-`user.adopt`, `user.request_membership` and `user.new_node_contract` all answer
-with one or read one.
+exchange -- `user.accept_contract`, `user.accept_membership`, `user.adopt`,
+`user.request_membership` and `user.new_node_contract` all answer with one or
+read one.
 
 **Op surface, and the shape each one declares** (design section 4.7; a shape is
 a per-op contract and is not discoverable from the wire):
@@ -47,10 +46,6 @@ therefore: sign, `objects.store` the answer, index the ID that store returns.
 `astral.objectid.object_id(signed)` computes the same ID locally without a
 query.
 
-`apphost.sign_app_contract` is the one-call form of all three and is a different
-op: it signs, indexes, stores and pushes to the local swarm
-(`astrald/mod/apphost/src/op_sign_app_contract.go`).
-
 **`auth.sign_contract` signs both halves or fails.** The node signs as the
 issuer *and* as the subject, so it must hold both private keys; `signAs` resolves
 each identity to a key it owns (`astrald/mod/auth/src/signing.go`). It cannot
@@ -60,14 +55,12 @@ that is already set (`auth.ErrAlreadySigned`), which this op can never reach.
 A contract between two identities whose keys live on different nodes is signed
 one half at a time through `user.accept_membership`, not here.
 
-**The two sibling body-input ops disagree about `eos`, and both disagreements are
-load-bearing.** `auth.sign_contract`'s reader is
-`ch.Switch(handler, channel.BreakOnEOS)`, so a terminator ends the exchange
-cleanly and this module sends one. `apphost.sign_app_contract`'s reader is
-`ch.Switch(handler)` with no `BreakOnEOS`, so a terminator there reaches
-`astral.NewErrUnexpectedObject` and comes back as an `error_message`
-(`astral-go/astral/channel/switch.go:101`). One op name apart, opposite
-terminators; neither is inferable from the wire.
+**`auth.sign_contract` takes an `eos`, and that is not inferable from the wire.**
+Its reader is `ch.Switch(handler, channel.BreakOnEOS)`, so a terminator ends the
+exchange cleanly and this module sends one. A body-input op whose reader omits
+`BreakOnEOS` answers the same terminator with an `error_message`
+(`astral-go/astral/channel/switch.go:101`), so the terminator is a per-op
+contract rather than a protocol rule.
 
 **An embedded struct nests in JSON when it is a pointer and flattens when it is a
 value.** Both halves are verified live against `furry-bolt`:
@@ -444,9 +437,9 @@ class Auth(ModuleClient):
         authorizes nothing until `index()`.
 
         An `eos` terminates the input, because this op's reader breaks on one
-        (`channel.BreakOnEOS`). `apphost.sign_app_contract`'s reader does not,
-        and sends an `error_message` for the same terminator -- the two ops are
-        one name apart and take opposite terminators.
+        (`channel.BreakOnEOS`). A body-input op whose reader omits `BreakOnEOS`
+        answers the same terminator with an `error_message`, so the terminator is
+        a per-op contract.
 
         `expect=1` rather than reading to the stream's end: the answer is one
         object and the op then loops on its own reader until the stream closes,

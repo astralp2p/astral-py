@@ -16,8 +16,9 @@ Rules that are not negotiable, every one of them observed on the live node:
   characters is exactly that set.
 - **Key matching on the node is case-sensitive and an unknown key is silently
   dropped.** A capitalised key therefore does nothing at all -- no error, no
-  effect -- which is why astral-go's own `apphost.new_app_contract` sending `ID`
-  and `Duration` is a no-op bug. Send lowercase always.
+  effect. astral-go shipped one such client, `apphost.new_app_contract` sending
+  `ID` and `Duration` (bug G-9), fixed there since and retired with the op.
+  Send lowercase always.
 - **`arg` is reserved** for the positional argument: a CLI token with no `-key`
   in front of it lands there, and a later positional overwrites an earlier one.
 - **The 255-byte cap is advice, not a wire limit.** `route_query_msg.Query` is a

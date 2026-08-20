@@ -2055,10 +2055,11 @@ class ModuleClientContractTest(ObjectsCase):
 
     @bounded()
     async def test_a_misspelled_keyword_fails_rather_than_being_dropped(self):
-        """The defect astral-go ships in its own clients: its
-        `apphost.new_app_contract` sends `ID` and `Duration` capitalised, the
-        node's parameter matching is case-sensitive, and unknown keys are
-        silently discarded."""
+        """The node's parameter matching is case-sensitive and unknown keys are
+        silently discarded, so a capitalised key never reaches it and never
+        reports that it did not. astral-go shipped one such client,
+        `apphost.new_app_contract` (bug G-9), fixed there since and retired with
+        the op."""
         mock = MockApphost()
         async with mock:
             o = await self.objects(mock)

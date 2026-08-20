@@ -1634,8 +1634,8 @@ class OpModeHelperTest(ClientCase):
         mid-`flush`; interleaved it completes.
 
         The ops this reaches are every one that declares `expect`: `tree.set`,
-        `crypto.public_key`, `crypto.sign_hash`, `crypto.sign_text`,
-        `auth.sign_contract` and `apphost.sign_app_contract`.
+        `crypto.public_key`, `crypto.sign_hash`, `crypto.sign_text` and
+        `auth.sign_contract`.
         """
         inputs = 600
         reply = b"z" * 60000
