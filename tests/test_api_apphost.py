@@ -38,10 +38,8 @@ from astral.api.apphost import (
     OP_HOLD_OBJECT,
     OP_LIST_HELD_OBJECTS,
     OP_LIST_TOKENS,
-    OP_NEW_APP_CONTRACT,
     OP_REGISTER,
     OP_REGISTER_HANDLER,
-    OP_SIGN_APP_CONTRACT,
     OP_UNHOLD_OBJECT,
     OP_WHOAMI,
     AccessToken,
@@ -486,44 +484,6 @@ class TokenAndContractTest(ApphostCase):
             with self.assertRaises(QueryRejected):
                 await api.register()
 
-    @bounded()
-    async def test_new_app_contract_sends_id_and_duration_and_returns_the_object(self):
-        """The answer is a `mod.auth.contract`, which `astral.api.auth` declares;
-        this module neither decodes nor inspects it, so the assertion is that
-        whatever the stream carried is what comes back."""
-        async with MockApphost(
-            routes={OP_NEW_APP_CONTRACT: Accept(objects=(IDENTITY_FRAME,))}
-        ) as mock:
-            api = await self.apphost(mock)
-            answer = await api.new_app_contract(ID_HEX, duration=Duration(10**9))
-        self.assertEqual(answer, FURRY_BOLT)
-        self.assertEqual(
-            mock.queries[-1].query, f"{OP_NEW_APP_CONTRACT}?duration=1s&id={ID_HEX}"
-        )
-
-    @bounded()
-    async def test_sign_app_contract_puts_the_contract_on_the_channel_body(self):
-        """The confirmed way to get a body-input op wrong is passing the input as
-        a query argument. Here the query string carries no parameter at all and
-        the object is written onto the accepted stream."""
-        async with MockApphost(
-            routes={OP_SIGN_APP_CONTRACT: Accept(echo=True)}
-        ) as mock:
-            api = await self.apphost(mock)
-            answer = await api.sign_app_contract(Ack())
-        self.assertIsInstance(answer, Ack)
-        self.assertEqual(mock.queries[-1].query, OP_SIGN_APP_CONTRACT)
-
-    @bounded()
-    async def test_sign_app_contract_reports_a_stream_that_answered_nothing(self):
-        async with MockApphost(
-            routes={OP_SIGN_APP_CONTRACT: Accept()}
-        ) as mock:
-            api = await self.apphost(mock)
-            with self.assertRaises(ProtocolError):
-                await api.sign_app_contract(Ack())
-
-
 class HoldTest(ApphostCase):
     @bounded()
     async def test_hold_object_with_no_duration_is_a_permanent_hold(self):
@@ -863,12 +823,10 @@ class NameResolutionTest(ApphostCase):
         cases = {
             OP_LIST_TOKENS: lambda a: a.list_tokens("furry-bolt"),
             OP_CREATE_TOKEN: lambda a: a.create_token("furry-bolt"),
-            OP_NEW_APP_CONTRACT: lambda a: a.new_app_contract("furry-bolt"),
         }
         answer = {
             OP_LIST_TOKENS: Accept(objects=(TOKEN_FRAME,), eos=True),
             OP_CREATE_TOKEN: Accept(objects=(TOKEN_FRAME,)),
-            OP_NEW_APP_CONTRACT: Accept(objects=(ACK_FRAME,)),
         }
         for op, run in cases.items():
             with self.subTest(op=op):

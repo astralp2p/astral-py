@@ -1109,8 +1109,7 @@ is why "every accepted query yields objects" must never be assumed.
 The single most common way to get an op wrong is passing channel-body input as a query
 argument. The confirmed body-input ops: `tree.set` (batch form), `crypto.public_key`,
 `crypto.sign_hash`, `crypto.sign_text`, `crypto.verify_hash_signature`,
-`crypto.verify_text_signature`, `auth.sign_contract`, `apphost.sign_app_contract`,
-`user.accept_contract`, `user.accept_membership`, `objects.store`, `objects.push`,
+`crypto.verify_text_signature`, `auth.sign_contract`, `user.accept_contract`, `user.accept_membership`, `objects.store`, `objects.push`,
 `objects.create`, `objects.register_blueprint`, and the streamed-id forms of
 `objects.contains` / `objects.delete` / `objects.load` / `objects.probe`. A query argument on
 `crypto.verify_*` **silently never verifies**.
@@ -1152,8 +1151,9 @@ Rules every module client obeys:
 
 1. **Argument names are the server's field names snake-cased** (`SessionID` → `session_id`,
    `ObjectID` → `object_id`). Matching is **case-sensitive** and unknown keys are **silently
-   dropped**, so a capitalised key does nothing at all. astral-go ships two bugs of exactly
-   this kind (`apphost.new_app_contract` sending `ID`/`Duration`); we send lowercase always.
+   dropped**, so a capitalised key does nothing at all. astral-go shipped one bug of exactly
+   this kind (`apphost.new_app_contract` sending `ID`/`Duration`, G-9), fixed there since and
+   retired with the op; we send lowercase always.
 2. **Parameter values use the bare payload half of the text encoding** — no `#[type]` header.
    The parameter's type comes from the op's declaration, so it never travels.
    `querystring.encode_param(spec, value)` is the single implementation.
@@ -1546,7 +1546,7 @@ implementation step 0.
 | G-6 | `String16.ReadFrom` assigns partial data **before** checking the error, so a caller ignoring the error gets a silently truncated string. |
 | G-7 | The query-cancel-on-context-cancellation path dials with the already-cancelled context, so `apphost.cancel` is **never sent**. |
 | G-8 | `api/dir/client/apply_filters.go` queries `dir.set_alias` — it can mutate an alias. |
-| G-9 | `api/apphost/client/new_app_contract.go` sends capitalised arg keys, which are silently dropped. |
+| G-9 | `api/apphost/client/new_app_contract.go` sent capitalised arg keys, which are silently dropped. Fixed in astral-go; the client is retired with the op. |
 | G-10 | `objects.register_blueprint` and `objects.store` clients never send the terminating `eos`. |
 | G-11 | `tree.Node.Create` issues `tree.set` and never reads the response, leaving an `ack` on the wire. |
 | G-12 | astrald's IPC guest channel is created **without** locked writes while the WS one is not; concurrent `incoming_query_msg` pushes can interleave a frame's three writes. |

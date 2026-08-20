@@ -59,10 +59,11 @@ class ModuleClient:
     -- `target`, `caller`, `zone`, `filters`, `timeout`, `persistent`, `raw`,
     `fmt_in`, `fmt_out`, `nonce`, `allow_unparsed`, `context` -- and passes them
     through unread. A misspelled one therefore fails in `query()` rather than
-    being dropped, which is the defect astral-go ships in its own clients: its
-    `apphost.new_app_contract` sends `ID` and `Duration` capitalised, the node's
-    parameter matching is case-sensitive, and unknown keys are silently
-    discarded, so both arguments have never once reached the node (bug G-9).
+    being dropped, which is the defect this guards against: the node's parameter
+    matching is case-sensitive and unknown keys are silently discarded, so a
+    capitalised key never reaches the node and never reports that it did not.
+    astral-go shipped exactly that in `apphost.new_app_contract` (bug G-9),
+    fixed there since and retired with the op.
     """
 
     __slots__ = ("_c",)
