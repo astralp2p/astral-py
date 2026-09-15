@@ -444,11 +444,12 @@ class Tree(ModuleClient):
         would mount a subtree of `anyone`.
 
         **`node`, not `target`, and the name is the whole point.** The op's wire
-        argument is `target=` and it travels as one, but `target` is also the
-        routing keyword every method of every module client forwards to
-        `Client.query` -- "route this query to node X" -- and this op is the one
-        place in the SDK where those are two different nodes. Taking the op's
-        argument under that name ate the routing keyword: `mount_remote(p, X)`
+        argument is `identity=`; astrald `bd98bbe8` renames it from `target=` and
+        ignores the old name. `target` is the routing keyword every method of
+        every module client forwards to `Client.query` -- "route this query to
+        node X" -- and this op is the one place in the SDK where those are two
+        different nodes. Taking the op's argument under its old wire name,
+        `target`, ate the routing keyword: `mount_remote(p, X)`
         put X in the query string and routed to the local node, with no way to
         reach the routing target on this op at all and nothing said about it.
         `Objects` met the same collision on `zone`, where the two levers really
@@ -465,7 +466,7 @@ class Tree(ModuleClient):
         """
         params = {
             "path": _param(_STRING8, _path(path, OP_MOUNT_REMOTE)),
-            "target": _param(_STRING8, _target(node, OP_MOUNT_REMOTE)),
+            "identity": _param(_STRING8, _target(node, OP_MOUNT_REMOTE)),
         }
         if root is not None:
             params["root"] = _param(_STRING8, _path(root, OP_MOUNT_REMOTE))

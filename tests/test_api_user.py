@@ -1164,7 +1164,7 @@ class SyncWithOpTest(UserCase):
         out of its own tree. An implicit `start=0` is identical today and would
         mean "re-read the whole log" the moment the argument is wired up, which
         is not what a caller who named no height asked for."""
-        query = f"{OP_SYNC_WITH}?node={FURRY_BOLT.text()}"
+        query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
         self.assertIsNone(await api.sync_with(FURRY_BOLT))
         self.assertEqual(self.sent(), query)
@@ -1172,7 +1172,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_a_named_start_height_travels(self):
-        query = f"{OP_SYNC_WITH}?node={FURRY_BOLT.text()}&start=12"
+        query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}&start=12"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
         await api.sync_with(FURRY_BOLT, start=12)
         self.assertEqual(self.params()[1]["start"], "12")
@@ -1181,15 +1181,18 @@ class SyncWithOpTest(UserCase):
     async def test_a_start_of_zero_is_sent_when_it_is_asked_for(self):
         """Naming the height is a different statement from omitting it, so an
         explicit zero travels."""
-        query = f"{OP_SYNC_WITH}?node={FURRY_BOLT.text()}&start=0"
+        query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}&start=0"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
         await api.sync_with(FURRY_BOLT, start=0)
         self.assertEqual(self.params()[1]["start"], "0")
 
     @bounded()
     async def test_a_directory_name_never_reaches_the_node(self):
-        """The op parses this argument as an identity, so a name arrives as a
-        rejected query rather than as an error message."""
+        """This client parses the argument as an identity and names the fix.
+        astrald `bd98bbe8` resolves a name here and rejects one that does not
+        resolve with code 3; a node that predates it parses the argument as an
+        identity, so a name arrives as a rejected query rather than as an error
+        message."""
         api = await self.serving({OP_SYNC_WITH: Accept(objects=[ACK_FRAME])})
         with self.assertRaises(ParseError) as caught:
             await api.sync_with(FURRY_BOLT_ALIAS)
@@ -1200,7 +1203,7 @@ class SyncWithOpTest(UserCase):
     async def test_an_error_message_surfaces_as_a_remote_error(self):
         """`syncAssets` returns `ErrNoActiveContract` as an object on the
         stream, not as a rejection: the op accepts before it runs."""
-        query = f"{OP_SYNC_WITH}?node={FURRY_BOLT.text()}"
+        query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}"
         api = await self.serving(
             {query: Accept(objects=[frame_error("no active contract")])}
         )
@@ -1210,7 +1213,7 @@ class SyncWithOpTest(UserCase):
 
 
 class AdoptAndExpelOpTest(UserCase):
-    """`user.adopt` and `user.expel`: RR, one `target=` argument each."""
+    """`user.adopt` and `user.expel`: RR, one `identity=` argument each."""
 
     def signed_frame(self) -> tuple[str, bytes]:
         return (SignedContract.ASTRAL_TYPE, payload_bytes(a_signed_contract()))
@@ -1220,35 +1223,35 @@ class AdoptAndExpelOpTest(UserCase):
         return (SignedExpulsion.ASTRAL_TYPE, payload_bytes(signed))
 
     @bounded()
-    async def test_adopt_sends_the_target_and_returns_the_signed_contract(self):
+    async def test_adopt_sends_the_identity_and_returns_the_signed_contract(self):
         api = await self.serving(
-            {f"{OP_ADOPT}?target=somebody": Accept(objects=[self.signed_frame()])}
+            {f"{OP_ADOPT}?identity=somebody": Accept(objects=[self.signed_frame()])}
         )
         signed = await api.adopt("somebody")
         self.assertIsInstance(signed, SignedContract)
-        self.assertEqual(self.sent(), f"{OP_ADOPT}?target=somebody")
+        self.assertEqual(self.sent(), f"{OP_ADOPT}?identity=somebody")
 
     @bounded()
-    async def test_expel_sends_the_target_and_returns_the_signed_expulsion(self):
+    async def test_expel_sends_the_identity_and_returns_the_signed_expulsion(self):
         api = await self.serving(
-            {f"{OP_EXPEL}?target=somebody": Accept(objects=[self.expulsion_frame()])}
+            {f"{OP_EXPEL}?identity=somebody": Accept(objects=[self.expulsion_frame()])}
         )
         signed = await api.expel("somebody")
         self.assertIsInstance(signed, SignedExpulsion)
         self.assertEqual(signed.expulsion.subject, OTHER)
-        self.assertEqual(self.sent(), f"{OP_EXPEL}?target=somebody")
+        self.assertEqual(self.sent(), f"{OP_EXPEL}?identity=somebody")
 
     @bounded()
     async def test_an_identity_travels_as_sixty_six_hex_characters(self):
         api = await self.serving(
             {
-                f"{OP_ADOPT}?target={OTHER.text()}": Accept(
+                f"{OP_ADOPT}?identity={OTHER.text()}": Accept(
                     objects=[self.signed_frame()]
                 )
             }
         )
         await api.adopt(OTHER)
-        self.assertEqual(self.params()[1], {"target": OTHER.text()})
+        self.assertEqual(self.params()[1], {"identity": OTHER.text()})
 
     @bounded()
     async def test_the_routing_target_is_still_reachable_on_these_two_ops(self):
@@ -1256,13 +1259,13 @@ class AdoptAndExpelOpTest(UserCase):
         meaning the node this query is routed to. On these two ops those are
         genuinely different nodes."""
         api = await self.serving(
-            {f"{OP_ADOPT}?target=somebody": Accept(objects=[self.signed_frame()])}
+            {f"{OP_ADOPT}?identity=somebody": Accept(objects=[self.signed_frame()])}
         )
         await api.adopt("somebody", target=OTHER, caller=FURRY_BOLT)
         query = self.mock.queries[0]
         self.assertEqual(query.target, OTHER)
         self.assertEqual(query.caller, FURRY_BOLT)
-        self.assertEqual(parse(query.query)[1], {"target": "somebody"})
+        self.assertEqual(parse(query.query)[1], {"identity": "somebody"})
 
     @bounded()
     async def test_an_empty_target_never_reaches_the_node(self):
@@ -1279,7 +1282,7 @@ class AdoptAndExpelOpTest(UserCase):
 
     @bounded()
     async def test_an_unauthorized_caller_is_a_rejection_with_code_four(self):
-        api = await self.serving({f"{OP_EXPEL}?target=somebody": Reject(4)})
+        api = await self.serving({f"{OP_EXPEL}?identity=somebody": Reject(4)})
         with self.assertRaises(QueryRejected) as caught:
             await api.expel("somebody")
         self.assertEqual(caught.exception.code, 4)
@@ -1287,7 +1290,7 @@ class AdoptAndExpelOpTest(UserCase):
     @bounded()
     async def test_a_wrong_answer_type_is_a_protocol_error(self):
         api = await self.serving(
-            {f"{OP_ADOPT}?target=somebody": Accept(objects=[self.expulsion_frame()])}
+            {f"{OP_ADOPT}?identity=somebody": Accept(objects=[self.expulsion_frame()])}
         )
         with self.assertRaises(ProtocolError) as caught:
             await api.adopt("somebody")

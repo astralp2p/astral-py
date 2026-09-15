@@ -144,7 +144,7 @@ class QueryStream:
 
     @property
     def nonce(self) -> Nonce:
-        """The query's correlator. What `apphost.cancel?id=` names."""
+        """The query's correlator. What `apphost.cancel?query_id=` names."""
         return self._query.nonce
 
     @property

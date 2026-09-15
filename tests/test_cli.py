@@ -451,9 +451,9 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(caught.exception.status, cli.EXIT_USAGE)
 
     def test_free_form_pairs_become_parameters(self):
-        command = self.parse("dir.resolve", "-name", "alice")
+        command = self.parse("dir.resolve", "-identity", "alice")
         self.assertEqual(command.operation, "dir.resolve")
-        self.assertEqual(command.query_string, "dir.resolve?name=alice")
+        self.assertEqual(command.query_string, "dir.resolve?identity=alice")
 
     def test_one_dash_and_two_dashes_name_the_same_parameter(self):
         self.assertEqual(
@@ -471,10 +471,10 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(command.target, "bob")
 
     def test_the_operation_is_the_first_positional_slot_not_the_first_token(self):
-        """`-name alice dir.resolve`: `alice` is a value, not the operation."""
-        command = self.parse("-name", "alice", "dir.resolve")
+        """`-identity alice dir.resolve`: `alice` is a value, not the operation."""
+        command = self.parse("-identity", "alice", "dir.resolve")
         self.assertEqual(command.operation, "dir.resolve")
-        self.assertEqual(command.params, {"name": "alice"})
+        self.assertEqual(command.params, {"identity": "alice"})
 
     def test_a_second_positional_is_the_reserved_arg_parameter(self):
         command = self.parse("objects.search", "holiday")
@@ -512,8 +512,8 @@ class ParseTest(unittest.TestCase):
 
     def test_a_value_is_escaped_the_way_go_escapes_it(self):
         self.assertEqual(
-            self.parse("dir.resolve", "-name", "a b&c").query_string,
-            "dir.resolve?name=a+b%26c",
+            self.parse("dir.resolve", "-identity", "a b&c").query_string,
+            "dir.resolve?identity=a+b%26c",
         )
 
     def test_zone_and_filters_parse_to_their_types(self):
@@ -569,11 +569,11 @@ class QueryTest(CliCase):
     @bounded()
     async def test_the_query_string_is_what_the_parameters_build(self):
         mock = await self.node(
-            routes={"dir.resolve?name=alice": Accept(objects=[IDENTITY_FRAME])}
+            routes={"dir.resolve?identity=alice": Accept(objects=[IDENTITY_FRAME])}
         )
-        code = await self.run_cli(mock, "dir.resolve", "-name", "alice")
+        code = await self.run_cli(mock, "dir.resolve", "-identity", "alice")
         self.assertEqual(code, 0)
-        self.assertEqual(mock.queries[-1].query, "dir.resolve?name=alice")
+        self.assertEqual(mock.queries[-1].query, "dir.resolve?identity=alice")
 
     @bounded()
     async def test_zone_and_filters_reach_the_route_query(self):
@@ -595,7 +595,7 @@ class QueryTest(CliCase):
         """
         mock = await self.node(
             routes={
-                "dir.resolve?name=alice": Accept(objects=[IDENTITY_FRAME]),
+                "dir.resolve?identity=alice": Accept(objects=[IDENTITY_FRAME]),
                 "x.op": Accept(objects=[u8(1)], eos=True),
             }
         )
@@ -616,7 +616,7 @@ class QueryTest(CliCase):
     async def test_a_named_caller_is_resolved_too(self):
         mock = await self.node(
             routes={
-                "dir.resolve?name=alice": Accept(objects=[IDENTITY_FRAME]),
+                "dir.resolve?identity=alice": Accept(objects=[IDENTITY_FRAME]),
                 "x.op": Accept(objects=[u8(1)], eos=True),
             }
         )

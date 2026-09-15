@@ -325,7 +325,7 @@ class ResolveOpTest(DirCase):
             d = await self.dir(mock)
             got = await d.resolve(FURRY_BOLT_ALIAS)
         self.assertEqual(got, FURRY_BOLT)
-        self.assertEqual(self.sent(mock), f"{OP_RESOLVE}?name={FURRY_BOLT_ALIAS}")
+        self.assertEqual(self.sent(mock), f"{OP_RESOLVE}?identity={FURRY_BOLT_ALIAS}")
 
     @bounded()
     async def test_a_name_is_url_escaped(self):
@@ -335,15 +335,15 @@ class ResolveOpTest(DirCase):
             await d.resolve("a b&c")
         op, params = self.params(mock)
         self.assertEqual(op, OP_RESOLVE)
-        self.assertEqual(params, {"name": "a b&c"})
-        self.assertIn("name=a+b%26c", self.sent(mock))
+        self.assertEqual(params, {"identity": "a b&c"})
+        self.assertIn("identity=a+b%26c", self.sent(mock))
 
     @bounded()
     async def test_an_empty_name_never_reaches_the_node(self):
-        """`dir.resolve?name=` answers with the **zero identity** rather than an
-        error -- verified live -- because astrald maps `""` to
-        `astral.Identity{}`. A caller that meant a name would then hold
-        `anyone` and route somewhere else entirely."""
+        """`dir.resolve?identity=` answers with the **zero identity** rather than
+        an error -- verified live under the earlier key `name` -- because
+        astrald maps `""` to `astral.Identity{}`. A caller that meant a name
+        would then hold `anyone` and route somewhere else entirely."""
         mock = MockApphost(routes={OP_RESOLVE: Accept(objects=[IDENTITY_FRAME])})
         async with mock:
             d = await self.dir(mock)
@@ -381,7 +381,7 @@ class ResolveOpTest(DirCase):
             d = await self.dir(mock)
             got = await d.resolve_identity(FURRY_BOLT_ALIAS)
         self.assertEqual(got, FURRY_BOLT)
-        self.assertEqual(self.sent(mock), f"{OP_RESOLVE}?name={FURRY_BOLT_ALIAS}")
+        self.assertEqual(self.sent(mock), f"{OP_RESOLVE}?identity={FURRY_BOLT_ALIAS}")
 
 
 class GetAliasOpTest(DirCase):
@@ -396,7 +396,7 @@ class GetAliasOpTest(DirCase):
             d = await self.dir(mock)
             got = await d.get_alias(FURRY_BOLT)
         self.assertEqual(got, FURRY_BOLT_ALIAS)
-        self.assertEqual(self.sent(mock), f"{OP_GET_ALIAS}?id={FURRY_BOLT.hex()}")
+        self.assertEqual(self.sent(mock), f"{OP_GET_ALIAS}?identity={FURRY_BOLT.hex()}")
 
     @bounded()
     async def test_it_accepts_the_hex_text_of_an_identity(self):
@@ -406,14 +406,16 @@ class GetAliasOpTest(DirCase):
         async with mock:
             d = await self.dir(mock)
             await d.get_alias(FURRY_BOLT.hex())
-        self.assertEqual(self.sent(mock), f"{OP_GET_ALIAS}?id={FURRY_BOLT.hex()}")
+        self.assertEqual(self.sent(mock), f"{OP_GET_ALIAS}?identity={FURRY_BOLT.hex()}")
 
     @bounded()
     async def test_a_directory_name_is_refused_before_it_is_sent(self):
-        """The op parses this argument with `astral.ParseIdentity`, so a name
-        reaches it as a **rejected query** and not as an error message.
-        Verified live: 66 hex characters that are not a curve point are
-        rejected with code 1."""
+        """This client parses the argument locally and names the fix. astrald
+        `bd98bbe8` resolves a name here; a node that predates it parses the
+        argument with `astral.ParseIdentity`, so a name reaches that node as a
+        **rejected query** and not as an error message. Verified live on such
+        a node: 66 hex characters that are not a curve point are rejected with
+        code 1."""
         mock = MockApphost()
         async with mock:
             d = await self.dir(mock)
@@ -501,15 +503,17 @@ class ApplyFiltersOpTest(DirCase):
         # the caller's and is preserved.
         self.assertEqual(
             self.sent(mock),
-            f"{OP_APPLY_FILTERS}?filters=linked%2Call&id={FURRY_BOLT.hex()}",
+            f"{OP_APPLY_FILTERS}?filters=linked%2Call&identity={FURRY_BOLT.hex()}",
         )
         _, params = self.params(mock)
         self.assertEqual(params["filters"], "linked,all")
 
     @bounded()
     async def test_the_identity_argument_accepts_a_directory_name(self):
-        """Unlike `get_alias`, this op declares `ID string` and resolves it
-        server-side (`mod/dir/src/op_apply_filters.go:14`). Verified live:
+        """Unlike `get_alias`, this method sends a name for the node to resolve:
+        the op declares `ID string` at the pin
+        (`mod/dir/src/op_apply_filters.go:14`) and `Identity string` at astrald
+        `bd98bbe8`. Verified live on a node that predates `bd98bbe8`:
         `dir.apply_filters?filters=all&id=furry-bolt` answers `bool(true)`. No
         query is spent resolving the name here."""
         mock = MockApphost(routes={OP_APPLY_FILTERS: Accept(objects=[frame_bool(True)])})
@@ -518,7 +522,8 @@ class ApplyFiltersOpTest(DirCase):
             await d.apply_filters("all", identity=FURRY_BOLT_ALIAS)
         self.assertEqual(len(mock.queries), 1)
         self.assertEqual(
-            self.sent(mock), f"{OP_APPLY_FILTERS}?filters=all&id={FURRY_BOLT_ALIAS}"
+            self.sent(mock),
+            f"{OP_APPLY_FILTERS}?filters=all&identity={FURRY_BOLT_ALIAS}",
         )
 
     @bounded()
@@ -577,7 +582,8 @@ class SetAliasOpTest(DirCase):
             d = await self.dir(mock)
             self.assertIsNone(await d.set_alias(FURRY_BOLT, "new-name"))
         self.assertEqual(
-            self.sent(mock), f"{OP_SET_ALIAS}?alias=new-name&id={FURRY_BOLT.hex()}"
+            self.sent(mock),
+            f"{OP_SET_ALIAS}?alias=new-name&identity={FURRY_BOLT.hex()}",
         )
 
     @bounded()
@@ -591,7 +597,7 @@ class SetAliasOpTest(DirCase):
             d = await self.dir(mock)
             await d.remove_alias(FURRY_BOLT)
         sent = self.sent(mock)
-        self.assertEqual(sent, f"{OP_SET_ALIAS}?alias=&id={FURRY_BOLT.hex()}")
+        self.assertEqual(sent, f"{OP_SET_ALIAS}?alias=&identity={FURRY_BOLT.hex()}")
         op, params = parse(sent)
         self.assertEqual(op, OP_SET_ALIAS)
         self.assertIn("alias", params)
@@ -603,7 +609,9 @@ class SetAliasOpTest(DirCase):
         async with mock:
             d = await self.dir(mock)
             await d.set_alias(FURRY_BOLT, "")
-        self.assertEqual(self.sent(mock), f"{OP_SET_ALIAS}?alias=&id={FURRY_BOLT.hex()}")
+        self.assertEqual(
+            self.sent(mock), f"{OP_SET_ALIAS}?alias=&identity={FURRY_BOLT.hex()}"
+        )
 
     @bounded()
     async def test_a_directory_name_is_refused_before_it_is_sent(self):
@@ -791,7 +799,11 @@ class KeywordParityTest(DirCase):
         for method in ("resolve", "resolve_identity"):
             with self.subTest(method=method):
                 async with MockApphost(
-                    routes={f"{OP_RESOLVE}?name=furry-bolt": Accept(objects=[IDENTITY_FRAME])}
+                    routes={
+                        f"{OP_RESOLVE}?identity=furry-bolt": Accept(
+                            objects=[IDENTITY_FRAME]
+                        )
+                    }
                 ) as mock:
                     d = await self.dir(mock)
                     got = await getattr(d, method)(

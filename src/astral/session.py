@@ -84,7 +84,7 @@ the one that fails and the query it interrupted survives.
 
 **Cancellation.** On an **external** `CancelledError` between sending
 `route_query_msg` and receiving its reply, the session makes a shielded
-best-effort attempt to route `apphost.cancel?id=<nonce>` on a **fresh**
+best-effort attempt to route `apphost.cancel?query_id=<nonce>` on a **fresh**
 connection with its own 2 s timeout, then re-raises. astral-go's equivalent dials
 with the *already-cancelled* context, so `net.Dialer.DialContext` returns
 `ctx.Err()` immediately and its cancel query is never sent (astral-go bug G-7).
@@ -1163,7 +1163,7 @@ class Session:
         """Cancel an en-route query by nonce, on a fresh connection.
 
         The protocol has no in-band cancel: a query is cancelled by routing
-        `apphost.cancel?id=<nonce>` from a **separate** session, after which the
+        `apphost.cancel?query_id=<nonce>` from a **separate** session, after which the
         original session reports `error_msg{canceled}`. Returns whether the cancel
         query was accepted, and never raises.
         """
@@ -1928,14 +1928,14 @@ async def cancel_query(
     cause: str | None = None,
     timeout: float | None = CANCEL_TIMEOUT,
 ) -> bool:
-    """Route `apphost.cancel?id=<nonce>` on a fresh session. Never raises.
+    """Route `apphost.cancel?query_id=<nonce>` on a fresh session. Never raises.
 
     Returns whether the node accepted the cancel query. `zone=device`, matching
     astral-go: cancelling a query is a local operation and must never leave the
     machine. The accepted stream is closed without reading its `ack`, because the
     op has already cancelled the query by the time it answers.
     """
-    params: dict[str, Any] = {"id": Nonce(int(nonce))}
+    params: dict[str, Any] = {"query_id": Nonce(int(nonce))}
     if cause:
         params["cause"] = cause
     query = querystring.build(OP_CANCEL, params)

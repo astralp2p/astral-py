@@ -172,10 +172,10 @@ class LiveErrorObjectTest(LiveCase):
         running and failing, not the node failing to route."""
         async with await self.client() as client:
             with self.assertRaises(astral.RemoteError):
-                await client.call_one("dir.resolve?name=astral-py-no-such-alias")
+                await client.call_one("dir.resolve?identity=astral-py-no-such-alias")
             # And as data, for the CLI's view of the same answer.
             async with client.stream(
-                "dir.resolve?name=astral-py-no-such-alias"
+                "dir.resolve?identity=astral-py-no-such-alias"
             ) as s:
                 objects = [obj async for obj in s.raw_objects()]
             self.assertTrue(objects)

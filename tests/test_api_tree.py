@@ -775,14 +775,14 @@ class MountRemoteTest(TreeCase):
     """`tree.mount_remote`: two required arguments and one optional root."""
 
     @bounded()
-    async def test_it_sends_path_and_target_with_the_keys_sorted(self):
+    async def test_it_sends_path_and_identity_with_the_keys_sorted(self):
         mock = MockApphost(routes={OP_MOUNT_REMOTE: Accept(objects=[ACK_FRAME])})
         async with mock:
             t = await self.tree(mock)
             await t.mount_remote("/remote/peer", FURRY_BOLT_ALIAS)
         self.assertEqual(
             self.sent(mock),
-            f"{OP_MOUNT_REMOTE}?path=%2Fremote%2Fpeer&target={FURRY_BOLT_ALIAS}",
+            f"{OP_MOUNT_REMOTE}?identity={FURRY_BOLT_ALIAS}&path=%2Fremote%2Fpeer",
         )
 
     @bounded()
@@ -800,7 +800,7 @@ class MountRemoteTest(TreeCase):
             await t.mount_remote("/remote/peer", "somenode", target=OTHER)
         self.assertEqual(
             self.sent(mock),
-            f"{OP_MOUNT_REMOTE}?path=%2Fremote%2Fpeer&target=somenode",
+            f"{OP_MOUNT_REMOTE}?identity=somenode&path=%2Fremote%2Fpeer",
         )
         self.assertEqual(
             mock.queries[-1].target,
@@ -814,7 +814,7 @@ class MountRemoteTest(TreeCase):
         async with mock:
             t = await self.tree(mock)
             await t.mount_remote("/remote/peer", FURRY_BOLT)
-        self.assertIn(f"target={FURRY_BOLT.hex()}", self.sent(mock))
+        self.assertIn(f"identity={FURRY_BOLT.hex()}", self.sent(mock))
 
     @bounded()
     async def test_the_root_is_sent_only_when_given(self):
@@ -825,11 +825,11 @@ class MountRemoteTest(TreeCase):
         sent = self.sent(mock)
         _, params = parse(sent)
         self.assertEqual(
-            params, {"path": "/remote/peer", "root": "/mod", "target": "somenode"}
+            params, {"path": "/remote/peer", "root": "/mod", "identity": "somenode"}
         )
         self.assertEqual(
             sent,
-            f"{OP_MOUNT_REMOTE}?path=%2Fremote%2Fpeer&root=%2Fmod&target=somenode",
+            f"{OP_MOUNT_REMOTE}?identity=somenode&path=%2Fremote%2Fpeer&root=%2Fmod",
         )
 
     @bounded()
@@ -949,7 +949,9 @@ class TreePlumbingTest(TreeCase):
             await t.mount_remote("/x", "peer", root="/y")
             await t.unmount("/x")
         keys = {key for q in mock.queries for key in parse(q.query)[1]}
-        self.assertEqual(keys, {"path", "type", "value", "recursive", "root", "target"})
+        self.assertEqual(
+            keys, {"path", "type", "value", "recursive", "root", "identity"}
+        )
         self.assertTrue(all(key == key.lower() for key in keys), keys)
 
 

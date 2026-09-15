@@ -85,7 +85,7 @@ from mock_apphost import (
 )
 
 WHOAMI = "apphost.whoami"
-RESOLVE = "dir.resolve?name=furry-bolt"
+RESOLVE = "dir.resolve?identity=furry-bolt"
 IDENTITY_FRAME = ("identity", FURRY_BOLT.key)
 
 
@@ -737,7 +737,7 @@ class CancellationTest(ClientCase):
                 [q.op for q in mock.queries], ["slow.op", "apphost.cancel"]
             )
             cancel = mock.queries[1]
-            self.assertEqual(cancel.query, "apphost.cancel?id=000000000000aabb")
+            self.assertEqual(cancel.query, "apphost.cancel?query_id=000000000000aabb")
             # Device zone only: cancelling a query never leaves the machine.
             self.assertEqual(cancel.zone, int(Zone.DEVICE))
             self.assertEqual(counter.open, 0)
@@ -771,7 +771,7 @@ class CancellationTest(ClientCase):
                 self.assertFalse(s.closed)
             self.assertEqual(
                 [q.query for q in mock.queries][1:],
-                ["apphost.cancel?id=0000000000000007"],
+                ["apphost.cancel?query_id=0000000000000007"],
             )
 
     @bounded()

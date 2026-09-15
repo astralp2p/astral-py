@@ -780,7 +780,7 @@ class ResolveEndpointsOpTest(NodesCase):
         answer = EndpointWithTTL(endpoint=TCP_EP, ttl=604800)
         async with MockApphost(
             routes={
-                f"{OP_RESOLVE_ENDPOINTS}?id={FURRY_BOLT_ALIAS}": Accept(
+                f"{OP_RESOLVE_ENDPOINTS}?identity={FURRY_BOLT_ALIAS}": Accept(
                     objects=[frame(answer)], eos=True
                 )
             }
@@ -793,11 +793,15 @@ class ResolveEndpointsOpTest(NodesCase):
     @bounded()
     async def test_an_identity_travels_as_hex(self):
         async with MockApphost(
-            routes={f"{OP_RESOLVE_ENDPOINTS}?id={FURRY_BOLT.hex()}": Accept(eos=True)}
+            routes={
+                f"{OP_RESOLVE_ENDPOINTS}?identity={FURRY_BOLT.hex()}": Accept(eos=True)
+            }
         ) as mock:
             n = await self.nodes(mock)
             await n.resolve_endpoints(FURRY_BOLT)
-        self.assertEqual(self.sent(mock), f"{OP_RESOLVE_ENDPOINTS}?id={FURRY_BOLT.hex()}")
+        self.assertEqual(
+            self.sent(mock), f"{OP_RESOLVE_ENDPOINTS}?identity={FURRY_BOLT.hex()}"
+        )
 
     @bounded()
     async def test_an_empty_name_never_reaches_the_node(self):
@@ -818,7 +822,9 @@ class AddEndpointOpTest(NodesCase):
             await n.add_endpoint(FURRY_BOLT, "tcp:10.21.0.5:1791")
         op, params = parse(self.sent(mock))
         self.assertEqual(op, OP_ADD_ENDPOINT)
-        self.assertEqual(params, {"id": FURRY_BOLT.hex(), "endpoint": "tcp:10.21.0.5:1791"})
+        self.assertEqual(
+            params, {"identity": FURRY_BOLT.hex(), "endpoint": "tcp:10.21.0.5:1791"}
+        )
 
     @bounded()
     async def test_an_endpoint_with_no_network_is_refused_here(self):
@@ -830,8 +836,10 @@ class AddEndpointOpTest(NodesCase):
 
     @bounded()
     async def test_a_directory_name_is_refused_before_it_is_sent(self):
-        """The op parses this argument as an identity, so a name reaches it as a
-        rejected query rather than as an error message."""
+        """This client parses the argument as an identity and names the fix.
+        astrald `bd98bbe8` resolves a name here; a node that predates it parses
+        the argument as an identity, so a name reaches that node as a rejected
+        query rather than as an error message."""
         async with MockApphost() as mock:
             n = await self.nodes(mock)
             with self.assertRaises(ParseError):
@@ -852,11 +860,11 @@ class CloseLinkOpTest(NodesCase):
     """`nodes.close_link`: RR, one `ack`."""
 
     @bounded()
-    async def test_the_id_travels_as_padded_hex(self):
+    async def test_the_id_travels_as_padded_hex_under_link_id(self):
         async with MockApphost(default_route=Accept(objects=[ACK_FRAME])) as mock:
             n = await self.nodes(mock)
             await n.close_link(Nonce(0x0102030405060708))
-        self.assertEqual(self.sent(mock), f"{OP_CLOSE_LINK}?id=0102030405060708")
+        self.assertEqual(self.sent(mock), f"{OP_CLOSE_LINK}?link_id=0102030405060708")
 
     @bounded()
     async def test_an_int_and_a_hex_string_reach_the_same_query(self):
@@ -866,7 +874,8 @@ class CloseLinkOpTest(NodesCase):
                     n = await self.nodes(mock)
                     await n.close_link(value)
                     self.assertEqual(
-                        mock.queries[0].query, f"{OP_CLOSE_LINK}?id=0000000000000001"
+                        mock.queries[0].query,
+                        f"{OP_CLOSE_LINK}?link_id=0000000000000001",
                     )
 
     @bounded()
@@ -884,13 +893,13 @@ class NewLinkOpTest(NodesCase):
     """`nodes.new_link`: RR, long, and the op with a required parameter."""
 
     @bounded()
-    async def test_the_bare_form_sends_the_target_alone(self):
+    async def test_the_bare_form_sends_the_identity_alone(self):
         info = LinkInfo(id=Nonce(7), network="tcp")
         async with MockApphost(default_route=Accept(objects=[frame(info)])) as mock:
             n = await self.nodes(mock)
             got = await n.new_link("furry-bolt")
         self.assertEqual(got, info)
-        self.assertEqual(self.sent(mock), f"{OP_NEW_LINK}?target=furry-bolt")
+        self.assertEqual(self.sent(mock), f"{OP_NEW_LINK}?identity=furry-bolt")
 
     @bounded()
     async def test_an_endpoint_and_strategies_travel_with_it(self):
@@ -904,7 +913,11 @@ class NewLinkOpTest(NodesCase):
         self.assertEqual(op, OP_NEW_LINK)
         self.assertEqual(
             params,
-            {"target": "furry-bolt", "endpoint": "tcp:10.21.0.5:1791", "strategies": "basic,nat"},
+            {
+                "identity": "furry-bolt",
+                "endpoint": "tcp:10.21.0.5:1791",
+                "strategies": "basic,nat",
+            },
         )
 
     @bounded()
@@ -934,7 +947,7 @@ class NewLinkOpTest(NodesCase):
             n = await self.nodes(mock)
             await n.new_link("furry-bolt", target=OTHER)
         self.assertEqual(mock.queries[0].target, OTHER)
-        self.assertEqual(self.sent(mock), f"{OP_NEW_LINK}?target=furry-bolt")
+        self.assertEqual(self.sent(mock), f"{OP_NEW_LINK}?identity=furry-bolt")
 
 
 class MigrateSessionOpTest(NodesCase):

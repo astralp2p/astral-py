@@ -98,18 +98,23 @@ reads (`op_sync.go:31-34`). So the shape is BD, not RR -- the caller must send
 something to end it -- and `sync_follow()` is that method. `sync()` is the RR
 form and never sets `follow`.
 
-**`id` is required by this module and optional on the node.** astrald declares
+**The wire key is `identity`.** astrald `bd98bbe8` renames `opSyncArgs.ID` to
+`opSyncArgs.Identity` and ignores the old `id`. The Python parameter stays `id`.
+
+**The identity is required by this module.** At `3392926b` astrald declares
 `opSyncArgs.ID string` with no `query` tag, so `Op.invoke`'s required check does
-not fire and an absent `id` reaches the op as the empty string, which
+not fire and an absent argument reaches the op as the empty string, which
 `dir.ResolveIdentity` maps to the **zero identity**
 (`astrald/mod/dir/src/module.go:56`). A sync of `anyone` wipes the cache for the
 zero identity and then routes a query to it. `sync()` therefore refuses an empty
 id rather than sending one, the same rule `dir.resolve` applies for the same
-reason.
+reason. astrald `bd98bbe8` tags `opSyncArgs.Identity` `query:"required"`; an
+empty value still passes that check, which tests key presence (`astral.api.dir`
+on `dir.set_alias`), and still resolves to the zero identity.
 
-`id` is resolved by the node, not parsed as an identity: the field is a plain Go
-`string`, so an alias, `localnode`, a hex key or a directory name all reach it.
-This module never spends a query resolving one.
+The identity is resolved by the node, not parsed as an identity: the field is a
+plain Go `string`, so an alias, `localnode`, a hex key or a directory name all
+reach it. This module never spends a query resolving one.
 
 `Services(client)` constructs the module client, and `client.services` is the
 property design section 5.1 gives every module: a `functools.cached_property`
@@ -157,14 +162,14 @@ OP_SYNC: Final = "services.sync"
 #
 # `follow` is declared `bool` because that is the type `shell.spec` reports for
 # it, and the declaration is what refuses a wrong-typed value here rather than
-# letting it reach a node that rejects the whole query. `id` is `string8` and
-# not `identity`: the op resolves this argument server-side and a directory name
-# is a legitimate value for it.
+# letting it reach a node that rejects the whole query. `identity` is `string8`
+# and not the `identity` type: the op resolves this argument server-side and a
+# directory name is a legitimate value for it.
 _DISCOVER: Final[dict[str, Spec]] = {
     "follow": Primitive("bool"),
 }
 _SYNC: Final[dict[str, Spec]] = {
-    "id": Primitive("string8"),
+    "identity": Primitive("string8"),
     "follow": Primitive("bool"),
 }
 
@@ -288,10 +293,11 @@ class Services(ModuleClient):
         query runs over `ZoneNetwork` on the node's side and takes as long as
         reaching that node takes, so `timeout` is worth setting.
 
-        `id` is resolved by the node: an alias, `localnode`, a hex key or a
-        directory name all reach it. An empty value is refused here rather than
-        sent, because the node's resolver maps it to the zero identity and the
-        sync would wipe the cache for `anyone`.
+        `id` travels under the wire key `identity` and is resolved by the node:
+        an alias, `localnode`, a hex key or a directory name all reach it. An
+        empty value is refused here rather than sent, because the node's
+        resolver maps it to the zero identity and the sync would wipe the cache
+        for `anyone`.
 
         **The cache is cleared before the new list arrives** and astrald opens no
         transaction around the two, so a sync interrupted mid-stream leaves the
@@ -360,14 +366,14 @@ def _discover_query(*, follow: bool) -> str:
 
 
 def _sync_query(id: str | Identity, *, follow: bool | None) -> str:  # noqa: A002
-    """`services.sync?id=…`, with `follow` only when it is true.
+    """`services.sync?identity=…`, with `follow` only when it is true.
 
     Omitted rather than sent false, because `false` is the op's zero value and
     design section 5.1 rule 5 keeps a server default standing by leaving its key
     absent.
     """
     return querystring.build(
-        OP_SYNC, _encode(_SYNC, {"id": _name(id), "follow": follow or None})
+        OP_SYNC, _encode(_SYNC, {"identity": _name(id), "follow": follow or None})
     )
 
 

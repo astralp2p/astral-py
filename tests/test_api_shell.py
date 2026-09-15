@@ -53,7 +53,8 @@ APPHOST_BIND = bytes.fromhex(
     "00"  # bool Required
 )
 
-# Three parameters, and the one op whose `id` is a `nonce64`.
+# Three parameters, and the one op whose `id` is a `nonce64`. A recording from a
+# node that predates astrald `bd98bbe8`, which names the parameter `query_id`.
 APPHOST_CANCEL = bytes.fromhex(
     "0000000e" "617070686f73742e63616e63656c"
     "00000003"

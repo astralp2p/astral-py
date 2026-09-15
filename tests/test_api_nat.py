@@ -17,8 +17,8 @@ Three tiers, as `test_api_nodes.py` has them and for the same reason:
 `nat.list_holes -With`, `nat.punch -Target` and `nat.node_consume_hole -Pair
 -Target`; parameter matching is case-sensitive and unknown keys are dropped in
 silence, so every one of those examples asks a different question from the one
-it looks like. The query-string assertions below are on the lowercase names the
-live registry declares.
+it looks like. The query-string assertions below are on the lowercase names
+astrald `bd98bbe8` declares, `identity` among them.
 """
 
 from __future__ import annotations
@@ -507,16 +507,17 @@ class ListHolesOpTest(NatCase):
         self.assertEqual(self.sent(mock), OP_LIST_HOLES)
 
     @bounded()
-    async def test_a_peer_travels_as_lowercase_with(self):
-        """D-17: the docs write `-With`, which the node drops in silence."""
+    async def test_a_peer_travels_as_lowercase_identity(self):
+        """astrald `bd98bbe8` names the key `identity` and ignores the earlier
+        `with`. D-17: the docs write `-With`, which the node drops in silence."""
         async with MockApphost(
-            routes={f"{OP_LIST_HOLES}?with={FURRY_BOLT_ALIAS}": Accept(eos=True)}
+            routes={f"{OP_LIST_HOLES}?identity={FURRY_BOLT_ALIAS}": Accept(eos=True)}
         ) as mock:
             n = await self.nat(mock)
             self.assertEqual(await n.list_holes(FURRY_BOLT_ALIAS), [])
         op, params = parse(self.sent(mock))
         self.assertEqual(op, OP_LIST_HOLES)
-        self.assertEqual(params, {"with": FURRY_BOLT_ALIAS})
+        self.assertEqual(params, {"identity": FURRY_BOLT_ALIAS})
         self.assertNotIn("With=", self.sent(mock))
 
     @bounded()
@@ -524,7 +525,9 @@ class ListHolesOpTest(NatCase):
         async with MockApphost(default_route=Accept(eos=True)) as mock:
             n = await self.nat(mock)
             await n.list_holes(FURRY_BOLT)
-        self.assertEqual(self.sent(mock), f"{OP_LIST_HOLES}?with={FURRY_BOLT.hex()}")
+        self.assertEqual(
+            self.sent(mock), f"{OP_LIST_HOLES}?identity={FURRY_BOLT.hex()}"
+        )
 
     @bounded()
     async def test_an_empty_peer_never_reaches_the_node(self):
@@ -559,12 +562,12 @@ class PunchOpTest(NatCase):
     """`nat.punch`: RR, long, and the node does the punching."""
 
     @bounded()
-    async def test_it_sends_the_target_and_returns_the_hole(self):
+    async def test_it_sends_the_identity_and_returns_the_hole(self):
         async with MockApphost(default_route=Accept(objects=[frame(hole())])) as mock:
             n = await self.nat(mock)
             got = await n.punch("furry-bolt")
         self.assertEqual(got, hole())
-        self.assertEqual(self.sent(mock), f"{OP_PUNCH}?target=furry-bolt")
+        self.assertEqual(self.sent(mock), f"{OP_PUNCH}?identity=furry-bolt")
 
     @bounded()
     async def test_the_routing_target_stays_reachable(self):
@@ -574,7 +577,7 @@ class PunchOpTest(NatCase):
             n = await self.nat(mock)
             await n.punch("furry-bolt", target=OTHER)
         self.assertEqual(mock.queries[0].target, OTHER)
-        self.assertEqual(self.sent(mock), f"{OP_PUNCH}?target=furry-bolt")
+        self.assertEqual(self.sent(mock), f"{OP_PUNCH}?identity=furry-bolt")
 
     @bounded()
     async def test_a_failure_surfaces_as_a_remote_error(self):
@@ -675,7 +678,7 @@ class LiveNatTest(live_support.LiveCase):
 
     @bounded(30.0)
     async def test_filtering_by_the_nodes_own_identity_is_accepted(self):
-        """The `with=` parameter reaches the op: a node with no holes answers a
+        """The `identity=` parameter reaches the op: a node with no holes answers a
         bare `eos` either way, so what this asserts is that the query is
         accepted and not rejected for an unknown parameter."""
         async with await self.client() as client:
