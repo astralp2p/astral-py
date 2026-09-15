@@ -938,10 +938,12 @@ class Client:
         asymmetry rather than this SDK's.** `register_service_msg` is refused
         outright for a token-less guest, the zero identity included, because
         `onRegisterServiceMsg` tests `isAuthenticated()` first. The
-        `apphost.register_handler` **op** tests nothing but the query's origin
-        and then registers under `q.Caller()` -- which the core router rewrites
-        to the node's own identity for an anonymous guest -- so an anonymous
-        local process can register a handler, and it registers as the node.
+        `apphost.register_handler` **op** tests the query's origin and then
+        `mod.auth.serve_apps_action` for `q.Caller()` -- which the core router
+        rewrites to the node's own identity for an anonymous guest, and the node
+        holds that action -- so an anonymous local process can still register a
+        handler, and it registers as the node. `api/apphost.py` carries the
+        citations.
 
         **Returning means registered.** The first registration cycle runs
         before this returns, bounded by `ready_timeout`, and its failure is this

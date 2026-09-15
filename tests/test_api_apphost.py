@@ -1,7 +1,7 @@
 """The `apphost` module client, its two data types, and the eager-import rule.
 
 Three tiers in one file, because they assert three different things about the
-same thirteen ops:
+same ten ops:
 
 - **Tier A** pins the wire: `apphost.access_token` byte for byte, the missing
   `mod.` prefix that would make every token frame undecodable, and the registry
@@ -860,18 +860,25 @@ class NameResolutionTest(ApphostCase):
 
 
 class SecurityNoteTest(unittest.TestCase):
-    """The origin-guard census this module's docstring states, counted.
+    """Both censuses this module's docstring states, counted at their revisions.
 
-    The note used to say `list_tokens` was "alone among its neighbours" in
-    carrying no network-origin guard. Seven of the thirteen ops carry none, and
-    the note was therefore false in the direction of **understating** the
-    exposure: a reader takes "alone" to mean the other twelve are guarded. A
-    security note that is wrong that way is worse than no note.
+    The note began by saying `list_tokens` was "alone among its neighbours" in
+    carrying no network-origin guard, which understated the exposure. It was
+    then corrected to a census of thirteen ops, and **that** went stale the
+    other way: astrald guarded the token ops and the docstring kept telling a
+    caller they were open. A census is a claim with a shelf life, so each one
+    here names its revision and is read there.
+
+    `AT` is the revision the docstring's *Authorization* section names. It is
+    not the pin, and moving the pin is not this test's business: the pin governs
+    every astrald citation in the package at once.
     """
 
     SRC = "mod/apphost/src"
+    AT = "cc1cd3b7"
 
-    GUARDED = {
+    # At the pin. History, and the docstring says so.
+    PINNED_GUARDED = {
         "bind",
         "hold_object",
         "unhold_object",
@@ -879,7 +886,7 @@ class SecurityNoteTest(unittest.TestCase):
         "register_handler",
         "install_app",
     }
-    UNGUARDED = {
+    PINNED_UNGUARDED = {
         "whoami",
         "list_tokens",
         "create_token",
@@ -889,51 +896,181 @@ class SecurityNoteTest(unittest.TestCase):
         "cancel",
     }
 
-    def ops(self) -> dict[str, str]:
-        """Every `op_*.go` at the pin, name to source."""
+    # At `AT`. The ops that ask an action before they touch what they guard.
+    ADMIN_MANAGE_APPS = {
+        "create_token",
+        "delete_token",
+        "list_tokens",
+        "grant",
+        "list_grants",
+        "revoke",
+    }
+    SERVE_APPS = {"register_handler"}
+    CURRENT_UNGUARDED = {"whoami", "register"}
+
+    def ops(self, rev: str | None = None) -> dict[str, str]:
+        """Every `op_*.go` at `rev`, or at the pin, name to source.
+
+        `_test.go` is excluded, and that is not cosmetic: astrald grew
+        `op_grants_test.go` beside the ops, and counting it made the census
+        fifteen. At the pin there was no such file, so the filter this helper
+        used to carry was right by accident and would have miscounted the first
+        census read at a newer revision.
+        """
         try:
-            names = reference.listdir(reference.ASTRALD, self.SRC)
+            names = reference.listdir(reference.ASTRALD, self.SRC, rev)
             return {
                 name[len("op_") : -len(".go")]: reference.read(
-                    reference.ASTRALD, f"{self.SRC}/{name}"
+                    reference.ASTRALD, f"{self.SRC}/{name}", rev
                 )
                 for name in names
-                if name.startswith("op_") and name.endswith(".go")
+                if name.startswith("op_")
+                and name.endswith(".go")
+                and not name.endswith("_test.go")
             }
         except reference.Unavailable as exc:  # pragma: no cover -- may be absent
             self.skipTest(str(exc))
 
-    def test_the_census_in_the_docstring_matches_the_node(self):
+    def test_the_pin_era_census_is_still_true_of_the_pin(self):
         """Read at the pinned revision, not out of the working tree.
 
         Globbing the checkout is what made this test fail on a sibling
         repository's pull: astrald moved to `3392926b`, gained a guarded
         `op_delete_token.go`, and the census went to seven -- for an op the
-        running node does not serve and no SDK method drives. The census is a
-        statement about the revision this module was read against, so it is read
-        at that revision. Bumping the pin in `tests/reference.py` is what makes
-        it a statement about a newer one, deliberately.
+        running node did not serve and no SDK method drove. The census is a
+        statement about the revision it names, so it is read at that revision.
         """
         ops = self.ops()
         guarded = {name for name, src in ops.items() if "OriginNetwork" in src}
-        self.assertEqual(guarded, self.GUARDED)
-        self.assertEqual(set(ops) - guarded, self.UNGUARDED)
+        self.assertEqual(guarded, self.PINNED_GUARDED)
+        self.assertEqual(set(ops) - guarded, self.PINNED_UNGUARDED)
 
         doc = apphost_module.__doc__ or ""
-        self.assertIn("six of the", doc)
         self.assertNotIn("alone among its neighbours", doc)
-        for name in self.UNGUARDED:
+        self.assertIn(reference.PINS[reference.ASTRALD][1], doc)
+        self.assertIn("named as history", doc)
+        for name in self.PINNED_UNGUARDED:
             with self.subTest(op=name):
                 self.assertIn(name, doc)
 
-    def test_create_token_has_no_guard_and_no_authorization_check(self):
-        """The sharper end of the same astrald defect: it *mints* a bearer token
-        for any identity named in `id`, which is strictly worse than reading the
-        ones that already exist."""
-        source = self.ops()["create_token"]
-        self.assertNotIn("OriginNetwork", source)
-        self.assertIn("CreateAccessToken", source)
-        self.assertIn("create_token", apphost_module.__doc__ or "")
+    def test_the_current_census_matches_merged_astrald(self):
+        """The census the docstring states at `AT`, recounted from the source.
+
+        Recounted rather than compared against a number in the prose: the prose
+        is what goes stale, and a test that read its numbers out of the prose
+        would agree with it whatever it said.
+        """
+        ops = self.ops(self.AT)
+        guarded = {name for name, src in ops.items() if "OriginNetwork" in src}
+
+        self.assertEqual(len(ops), 14)
+        self.assertEqual(set(ops) - guarded, self.CURRENT_UNGUARDED)
+        self.assertEqual(len(guarded), 12)
+
+        # Unwrapped, because a line break inside a sentence is a formatting
+        # choice and the claim is the sentence.
+        doc = " ".join((apphost_module.__doc__ or "").split())
+        self.assertIn(self.AT, doc)
+        self.assertIn("Fourteen `op_*.go` files.", doc)
+        self.assertIn("Twelve refuse a network origin", doc)
+        self.assertIn("the two that do not are `whoami` and `register`", doc)
+
+    def test_the_token_ops_ask_admin_manage_apps_before_they_answer(self):
+        """The action guard astrald merged in `7c795f47`, per op.
+
+        The order matters as much as the presence: the refusal has to come out
+        before `AcceptRaw`, or a caller holding nothing has already been handed
+        a channel by the time it is told no.
+        """
+        ops = self.ops(self.AT)
+        asked = {
+            name
+            for name, src in ops.items()
+            if "authorizeAdminManageApps" in src
+        }
+        self.assertEqual(asked, self.ADMIN_MANAGE_APPS)
+        self.assertEqual(
+            {n for n, s in ops.items() if "authorizeServeApps" in s}, self.SERVE_APPS
+        )
+
+        for name in sorted(self.ADMIN_MANAGE_APPS):
+            with self.subTest(op=name):
+                src = ops[name]
+                self.assertLess(
+                    src.index("authorizeAdminManageApps"), src.index("Accept")
+                )
+                self.assertLess(src.index("OriginNetwork"), src.index("Accept"))
+
+        doc = apphost_module.__doc__ or ""
+        self.assertIn("mod.auth.admin_manage_apps_action", doc)
+        self.assertIn("mod.auth.serve_apps_action", doc)
+        for name in ("list_tokens", "create_token", "delete_token"):
+            with self.subTest(op=name):
+                self.assertIn(name, doc)
+
+    def test_the_action_is_held_by_the_node_a_tokenless_caller_wears(self):
+        """Why the guard does not close the plaintext read for a local process.
+
+        Three files, and the docstring's inference is exactly their
+        composition: the user module allows the node's own identity, the core
+        router hands that identity to a caller who sent none, and the flag
+        astrald sets for such a session cannot reach an op.
+        """
+        try:
+            user_auth = reference.read(
+                reference.ASTRALD, "mod/user/src/authorize_user_or_node.go", self.AT
+            )
+            router = reference.read(reference.ASTRALD, "core/router.go", self.AT)
+            guard = reference.read(
+                reference.ASTRALD, "mod/crypto/src/sign_guard.go", self.AT
+            )
+        except reference.Unavailable as exc:  # pragma: no cover -- may be absent
+            self.skipTest(str(exc))
+
+        self.assertIn("mod.node.Identity()", user_auth)
+        self.assertIn("q.Caller = r.node.identity", router)
+        self.assertIn("the flag cannot reach an op", guard)
+
+        doc = " ".join((apphost_module.__doc__ or "").split())
+        self.assertIn("wearing the node's identity", doc)
+        self.assertIn("with no live run behind it", doc)
+
+    def test_every_astrald_line_the_authorization_section_cites_lands(self):
+        """`path:line` at `AT`, each one read and matched against its claim.
+
+        A citation that names the wrong line is a reader sent to the wrong
+        place, which is the failure this whole file exists to make loud.
+        """
+        admin = "authorizeAdminManageApps"
+        cites = (
+            (f"{self.SRC}/op_list_tokens.go", 19, "OriginNetwork"),
+            (f"{self.SRC}/op_list_tokens.go", 23, admin),
+            (f"{self.SRC}/op_create_token.go", 20, "OriginNetwork"),
+            (f"{self.SRC}/op_create_token.go", 24, admin),
+            (f"{self.SRC}/op_delete_token.go", 19, "OriginNetwork"),
+            (f"{self.SRC}/op_delete_token.go", 23, admin),
+            (f"{self.SRC}/op_cancel.go", 23, "OriginNetwork"),
+            (f"{self.SRC}/op_cancel.go", 36, "answers as a missing one"),
+            (f"{self.SRC}/op_cancel.go", 58, "func (mod *Module) mayCancel"),
+            (f"{self.SRC}/op_register_handler.go", 26, "authorizeServeApps"),
+            (f"{self.SRC}/authorize_admin_manage_apps.go", 17, f"func (mod *Module) {admin}"),
+            (f"{self.SRC}/authorize_admin_manage_apps.go", 18, "AdminManageAppsAction"),
+            (f"{self.SRC}/guest.go", 258, "ExtraAnonymous"),
+            (f"{self.SRC}/guest.go", 321, "isAuthenticated()"),
+            ("mod/user/src/authorize_user_or_node.go", 16, "authorizeUserOrNode"),
+            ("mod/user/src/authorize_user_or_node.go", 20, "mod.node.Identity()"),
+            ("mod/user/src/authorize_serve_apps.go", 15, "AuthorizeServeApps"),
+            ("core/router.go", 45, "q.Caller == nil"),
+            ("core/router.go", 46, "q.Caller = r.node.identity"),
+            ("mod/crypto/src/sign_guard.go", 37, "cannot reach an op"),
+        )
+        for path, number, fragment in cites:
+            with self.subTest(citation=f"{path}:{number}"):
+                try:
+                    line = reference.cited_line(reference.ASTRALD, path, number, self.AT)
+                except reference.Unavailable as exc:  # pragma: no cover
+                    self.skipTest(str(exc))
+                self.assertIn(fragment, line)
 
 
 class ModulePatternTest(ApphostCase):

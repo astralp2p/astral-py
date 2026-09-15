@@ -3,21 +3,22 @@
 apphost is the node module the IPC protocol is named after: it owns the guest
 sessions, the access tokens that authenticate them, the inbound-handler
 registrations, and the object holds a local app uses to keep an object from
-being collected. Thirteen ops, all of them confirmed present on the live node's
-`shell.spec` registry:
+being collected. Ten ops have a client below, all of them confirmed present on
+the live node's `shell.spec` registry. astrald's apphost registry holds more
+than this SDK drives; *Authorization* counts it at a named revision.
 
 | Op | Mode | Answer | Notes |
 |---|---|---|---|
 | `apphost.whoami` | RR | `identity` | anonymous-safe, read-only |
-| `apphost.list_tokens` | ST | `apphost.access_token`* + `eos` | reads every token, see below |
+| `apphost.list_tokens` | ST | `apphost.access_token`* + `eos` | local-only, admin action, see below |
 | `apphost.list_held_objects` | ST | `object_id.sha256`* + `eos` | local-only, per caller |
-| `apphost.create_token` | RR | `apphost.access_token` | |
+| `apphost.create_token` | RR | `apphost.access_token` | local-only, admin action, see below |
 | `apphost.register` | RR | `apphost.access_token` | policy-gated |
 | `apphost.hold_object` | RR | `ack` | local-only, needs a caller |
 | `apphost.unhold_object` | RR | `ack` | local-only, needs a caller |
-| `apphost.register_handler` | RR | `ack` | local-only |
+| `apphost.register_handler` | RR | `ack` | local-only, `serve_apps` |
 | `apphost.bind` | BD | `ack`, then held open | local-only |
-| `apphost.cancel` | RR | `ack` \\| `error_message` | |
+| `apphost.cancel` | RR | `ack` \\| `error_message` | local-only, owner or admin |
 
 Op mode is a per-op contract and is **not discoverable from the wire** (design
 section 4.7), so every method below declares its own and none of them infers
@@ -48,34 +49,69 @@ a property of astrald rather than an omission here:
   G-17). It is declared in `astral.session` for decode completeness and is never
   sent. **There is no keepalive on this protocol.**
 
-**`apphost.list_tokens` returns every access token on the node, in plaintext, to
-any caller.** Verified live against furry-bolt from an anonymous guest. The op
-filters by `id` only when one is given and has no authorization check. It carries
-no network-origin guard either, and it is **not alone in that**: six of the
-thirteen ops guard on origin -- `bind`, `hold_object`, `unhold_object`,
-`list_held_objects`, `register_handler` and `install_app`, the six files in which
-`grep OriginNetwork mod/apphost/src/op_*.go` matches at astrald `154ba3ae`. The
-seven that do not are `whoami`, `list_tokens`, `create_token`, `register`,
-`new_app_contract`, `sign_app_contract` and `cancel`.
+## Authorization
 
-That census counts thirteen because it is read at the pin, and astrald has since
-retired three of them: `install_app` (`b51743cd`) along with the
-`apphost__local_apps` table it was the only writer of, and `new_app_contract`
-and `sign_app_contract`, whose contract `apphost.register` mints in one call.
-This SDK no longer drives any of the three; the census keeps naming them until
-`tests/reference.py` moves, which is a deliberate act that re-reads every
-`path:line` this module cites.
+**Every `path:line` in this section is read at astrald `cc1cd3b7`.** Every other
+astrald citation in this module resolves at the pin `tests/reference.py` holds,
+and the two revisions disagree about this module: the action guard merged in
+`7c795f47` and the origin guard in `12f2ff54`, both after the pin.
 
-**`apphost.create_token` is the sharper end of the same defect.** It has neither
-an origin guard nor an authorization check, and it *mints* a bearer token for any
-identity named in `id` -- `op_create_token.go` is an `args.ID.IsZero()` test and
-then `mod.CreateAccessToken(args.ID, args.Duration)`. Minting a credential
-unguarded is strictly worse than reading the ones that already exist.
+**`apphost.list_tokens` and `apphost.create_token` are administration, not
+introspection.** Each refuses a query whose origin is the network and then asks
+`mod.auth.admin_manage_apps_action`, in that order, before it accepts the
+connection or reads a token -- `op_list_tokens.go:19,23` and
+`op_create_token.go:20,24`, over the one question at
+`authorize_admin_manage_apps.go:17-21`. The action's name is astral-go's
+`AdminManageAppsAction.ObjectType()`, `api/auth/admin_manage_apps_action.go:19`
+at astral-go `cd234be`; the astral-go pin predates the file.
+
+`apphost.delete_token` carries the same pair (`op_delete_token.go:19,23`) and so
+does the grant surface beside it -- `apphost.grant`, `apphost.list_grants`,
+`apphost.revoke`. None of the four has a client here. `apphost.cancel` refuses
+the network origin too (`op_cancel.go:23`) and authorizes on ownership instead:
+a session cancels what it launched, and the action is the way past that
+(`op_cancel.go:58-68`).
+
+**The census, re-derived at `cc1cd3b7`.** Fourteen `op_*.go` files. Twelve
+refuse a network origin; the two that do not are `whoami` and `register`. Six
+ask `mod.auth.admin_manage_apps_action` -- `create_token`, `delete_token`,
+`list_tokens`, `grant`, `list_grants`, `revoke`. One asks
+`mod.auth.serve_apps_action`: `register_handler` (`op_register_handler.go:26`).
+The other seven ask no action.
+
+**A local caller holding no token passes the action check, because it arrives
+wearing the node's identity.** `mod/user/src/authorize_user_or_node.go:16-21`
+allows the user identity and the node's own identity and nobody else; any other
+identity reaches the action through a node-local grant or a signed contract
+permit (`authorize_user_or_node.go:11-12`). A token-less guest session sends a
+nil `Caller` and `core/router.go:45-47` rewrites it to the node's identity.
+astrald marks such a session anonymous (`mod/apphost/src/guest.go:253-259`) and
+the mark cannot reach an op: `routing.Op` builds its `IncomingQuery` from the
+query and its origin alone and drops `Extra`
+(`mod/crypto/src/sign_guard.go:33-37`). Inferred from those four, with no live
+run behind it: **an unauthenticated local process still reads every access token
+on the node in plaintext, and still mints one for any identity it names.** What
+the two guards removed is the caller off a link, and the authenticated app that
+holds neither a grant nor a contract permit for the action.
 
 An access token is a bearer credential: whoever reads one authenticates as the
-identity it was issued for. Both are filed as astrald defects; they are
-documented here because an SDK caller needs to know that the value it gets back
-is a secret and that asking for it is not a privileged operation.
+identity it was issued for. That is what makes reading the list administration,
+and it is why an SDK caller is told here that the value coming back is a secret.
+
+**The pin-era census stays, named as history.** At astrald `074a852b` -- the
+revision `tests/reference.py` pins, and the one every other astrald `path:line`
+in this module resolves at -- the module held thirteen ops, no op asked an
+action at all, and six guarded on origin: `bind`, `hold_object`,
+`unhold_object`, `list_held_objects`, `register_handler` and `install_app`. The
+seven that did not were `whoami`, `list_tokens`, `create_token`, `register`,
+`new_app_contract`, `sign_app_contract` and `cancel`. Three of the thirteen are
+since retired: `install_app` (`b51743cd`) along with the `apphost__local_apps`
+table it was the only writer of, and `new_app_contract` and `sign_app_contract`,
+whose contract `apphost.register` mints in one call. Moving the pin is what
+retires this paragraph, and it is a re-read of every astrald `path:line` in the
+package: bumping it to `cc1cd3b7` and running the suite turns 21 tests red, 19
+of them in the `crypto`, `dir`, `nat`, `tree` and `user` citation checks. That
+is a different change from this one.
 """
 
 from __future__ import annotations
@@ -210,8 +246,9 @@ class AccessToken:
 
     `Token` is a secret in the same sense a password is. astrald mints it as
     `randomString(32)` over `math/rand` rather than `crypto/rand`, and hands the
-    whole table to any caller that asks (see the module docstring), so treat one
-    that arrives here as compromised the moment it is logged.
+    whole table to a caller holding `mod.auth.admin_manage_apps_action`, which an
+    unauthenticated local process does hold (see the module docstring), so treat
+    one that arrives here as compromised the moment it is logged.
 
     `ExpiresAt` is advisory as far as the node is concerned:
     `Module.AuthenticateToken` looks the token up and returns its identity
@@ -322,9 +359,11 @@ class Apphost(ModuleClient):
     ) -> list[AccessToken]:
         """Access tokens on the node, optionally for one identity. ST.
 
-        **This is not a privileged read and the result is secret.** With no `id`
-        the node returns every token it holds, to any caller including an
-        anonymous one, with the token strings in plaintext (see the module
+        **This is a privileged read and the result is secret.** Local-only, and
+        gated on `mod.auth.admin_manage_apps_action`; a caller off a link and a
+        caller without the action both get `QueryRejected`. With no `id` the node
+        returns every token it holds, with the token strings in plaintext, and an
+        unauthenticated local process passes the gate as the node (see the module
         docstring). Passing `id` filters server-side; it does not authorize
         anything.
 
@@ -364,6 +403,11 @@ class Apphost(ModuleClient):
         **kw: Any,
     ) -> AccessToken:
         """Mint an access token for an identity. RR.
+
+        Local-only, and gated on `mod.auth.admin_manage_apps_action`; a caller off
+        a link and a caller without the action both get `QueryRejected`. The token
+        authenticates as `id` whoever asked for it, so this is the node handing
+        out a credential for an identity the caller need not control.
 
         `duration` omitted leaves the node's default of one year. astral-go's
         client sends `id` alone and has no way to ask for anything else.
@@ -445,14 +489,17 @@ class Apphost(ModuleClient):
         endpoint. So this call alone leaves a registration behind that outlives
         the process (astral-docs bug D-13 is the claim that closing unregisters).
 
-        Local-only, and that is the **whole** of the check. Unlike
-        `register_service_msg`, which astrald refuses outright from an
-        unauthenticated guest, this op tests nothing but the query's origin and
-        then registers under `q.Caller()` -- which for an anonymous guest is the
-        node's own identity, because the core router substitutes it for a nil
-        caller. Registering as the node is therefore something an unauthenticated
+        Local-only, then `mod.auth.serve_apps_action` for the identity the
+        handler answers for (`op_register_handler.go:26` at astrald `cc1cd3b7`).
+        That second check does not make the op an authenticated one. It registers
+        under `q.Caller()`, which for an anonymous guest is the node's own
+        identity because the core router substitutes it for a nil caller, and
+        `mod/user/src/authorize_serve_apps.go:8,15` allows the node's identity.
+        Registering as the node is therefore still something an unauthenticated
         local process can attempt; whether it then receives the node's queries is
-        astrald's business and is not asserted here.
+        astrald's business and is not asserted here. `register_service_msg` is
+        the authenticated counterpart -- astrald refuses it outright from a
+        token-less guest (`mod/apphost/src/guest.go:321-323`).
         """
         qs = querystring.build(
             OP_REGISTER_HANDLER,
@@ -531,7 +578,14 @@ class Apphost(ModuleClient):
 
         Returns whether the node had that query en route. `False` is the ordinary
         outcome for a query that has already been answered, and it is the only
-        `error_message` this op sends, so the message is not inspected.
+        `error_message` this op sends, so the message is not inspected. It is
+        also what a caller that may not cancel the query is told, deliberately:
+        a session cancels what it launched, `mod.auth.admin_manage_apps_action`
+        is the way past that, and a refusal reads as "not found" so a caller
+        learns nothing about the nonces other apps hold (`op_cancel.go:36-40`).
+
+        Local-only. A query off a link is rejected before any of that
+        (`op_cancel.go:23`).
 
         `zone=device` by default, matching astral-go: cancelling is a local act
         and a cancel that left the machine would be routed as a query of its own.

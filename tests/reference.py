@@ -15,6 +15,14 @@ working state is irrelevant, and a reference that moves is no longer an event
 this suite has an opinion about. Upstream drift becomes a deliberate act -- bump
 the pin here, re-read the module, update the prose -- instead of a surprise.
 
+`PINS` holds the revision a module reads by default, and a reader passes `rev`
+to read one claim somewhere else. The two are not the same act: the pin governs
+every `path:line` in `astral/api/*.py` at once, so moving it is a re-read of the
+whole package, while a module that documents one merged upstream change names
+that change's revision in its own prose and reads it there. Without `rev` such a
+claim is prose no test can check, which is how `api/apphost.py` carried a
+security note that had stopped being true.
+
 **Absent is a skip, wrong is a failure.** No clone, no git, or a revision that
 was never fetched: skip, because the reference is not part of this repository
 and a machine without it must still be able to run the suite. A revision that
@@ -74,22 +82,36 @@ def _resolve(repo: str) -> tuple[pathlib.Path, str]:
 
 
 @functools.lru_cache(maxsize=None)
-def read(repo: str, path: str) -> str:
-    """One file, as it stood at the pin. `Unavailable` when it cannot be read."""
-    root, rev = _resolve(repo)
-    return _git(root, "show", f"{rev}:{path}")
+def _commit(repo: str, rev: str | None) -> tuple[pathlib.Path, str]:
+    """The reference's root and the commit `rev` names, or the pin for `None`.
+
+    Resolved here for the same reason the pin is: an unfetched revision reports
+    itself as a revision problem rather than as a missing file.
+    """
+    root, pinned = _resolve(repo)
+    if rev is None:
+        return root, pinned
+    return root, _git(root, "rev-parse", f"{rev}^{{commit}}").strip()
 
 
 @functools.lru_cache(maxsize=None)
-def listdir(repo: str, directory: str) -> tuple[str, ...]:
-    """The file names directly under `directory` at the pin, sorted.
+def read(repo: str, path: str, rev: str | None = None) -> str:
+    """One file, as it stood at `rev`, or at the pin. `Unavailable` when absent."""
+    root, at = _commit(repo, rev)
+    return _git(root, "show", f"{at}:{path}")
+
+
+@functools.lru_cache(maxsize=None)
+def listdir(repo: str, directory: str, rev: str | None = None) -> tuple[str, ...]:
+    """The file names directly under `directory` at `rev`, or at the pin, sorted.
 
     Names only, one level, no trees: the census callers want is "which `op_*.go`
     files existed", and a recursive walk would answer a different question.
     """
+    root, at = _commit(repo, rev)
     prefix = directory.rstrip("/") + "/"
     names = []
-    for line in _git(repo_root(repo), "ls-tree", "--name-only", pin(repo), prefix).splitlines():
+    for line in _git(root, "ls-tree", "--name-only", at, prefix).splitlines():
         name = line.strip()
         if not name or name.endswith("/"):
             continue
@@ -106,6 +128,6 @@ def pin(repo: str) -> str:
     return _resolve(repo)[1]
 
 
-def cited_line(repo: str, path: str, number: int) -> str:
-    """The 1-indexed line a `path:line` citation names, at the pin."""
-    return read(repo, path).splitlines()[number - 1]
+def cited_line(repo: str, path: str, number: int, rev: str | None = None) -> str:
+    """The 1-indexed line a `path:line` citation names, at `rev` or at the pin."""
+    return read(repo, path, rev).splitlines()[number - 1]
