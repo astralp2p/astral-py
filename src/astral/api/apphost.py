@@ -152,7 +152,6 @@ from .base import ModuleClient
 
 __all__ = [
     "AccessToken",
-    "App",
     "APPHOST_TYPES",
     "Apphost",
     "apphost_types",
@@ -263,20 +262,6 @@ class AccessToken:
     def expired(self) -> bool:
         """Whether `ExpiresAt` has passed. **The node does not check this.**"""
         return int(self.expires_at) <= Time.now()
-
-
-@record("mod.apphost.app")
-class App:
-    """An app installed on a node: its identity, the node's, and when.
-
-    Codec-only, and now unproduced: astrald retired `apphost.install_app` and
-    `Module.LocalApps` in b51743cd, so no node creates or serves one. Kept so
-    that a peer handing an older one over in band still decodes.
-    """
-
-    app_id: Identity | None = wire("AppID", Ptr("identity"))
-    host_id: Identity | None = wire("HostID", Ptr("identity"))
-    installed_at: Time = wire("InstalledAt", Primitive("time"))
 
 
 # --- argument coercion ---------------------------------------------------
@@ -612,7 +597,6 @@ class Apphost(ModuleClient):
 
 APPHOST_TYPES: Final[Sequence[type]] = (
     AccessToken,
-    App,
     AttachQueryMsg,
     AuthSuccessMsg,
     AuthTokenMsg,
