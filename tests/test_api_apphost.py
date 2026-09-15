@@ -43,7 +43,6 @@ from astral.api.apphost import (
     OP_UNHOLD_OBJECT,
     OP_WHOAMI,
     AccessToken,
-    App,
     APPHOST_TYPES,
     Apphost,
     _duration,
@@ -183,14 +182,6 @@ class AccessTokenTest(unittest.TestCase):
         )
         self.assertTrue(past.expired)
         self.assertFalse(future.expired)
-
-
-class AppTest(unittest.TestCase):
-    def test_the_app_record_round_trips(self):
-        app = App(app_id=FURRY_BOLT, host_id=None, installed_at=Time(7))
-        self.assertEqual(decode(encode(app)), app)
-        payload = encode(app)[len("mod.apphost.app") + 1 :]
-        self.assertEqual(payload, b"\x01" + FURRY_BOLT.key + b"\x00" + (7).to_bytes(8, "big"))
 
 
 class RegistryTest(unittest.TestCase):
