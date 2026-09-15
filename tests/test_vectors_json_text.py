@@ -712,7 +712,7 @@ class AsciiIntTests(unittest.TestCase):
                 self.assertIsNone(ascii_int(bad, 16))
 
     def test_a_nonce_reads_hex_and_only_hex(self) -> None:
-        """A nonce is a correlator a peer supplies: `apphost.cancel?id=` carries
+        """A nonce is a correlator a peer supplies: `apphost.cancel?query_id=` carries
         one back, so its parser is on the peer-facing surface."""
         self.assertEqual(int(Nonce.parse("1122334455667788")), 0x1122334455667788)
         self.assertEqual(int(Nonce.parse("ff")), 255)

@@ -278,7 +278,7 @@ class Stream:
 
     @property
     def nonce(self) -> Nonce:
-        """The query's correlator. What `apphost.cancel?id=` names."""
+        """The query's correlator. What `apphost.cancel?query_id=` names."""
         return self._conn.nonce
 
     @property
@@ -668,7 +668,7 @@ class Stream:
         """Ask the node to cancel this query, on a **fresh** connection.
 
         The protocol has no in-band cancel: a query is cancelled by routing
-        `apphost.cancel?id=<nonce>` from a separate session, after which this
+        `apphost.cancel?query_id=<nonce>` from a separate session, after which this
         stream sees `error_msg{canceled}` or EOF. Returns whether the cancel
         query was accepted, and never raises.
 

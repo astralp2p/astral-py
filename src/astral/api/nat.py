@@ -37,8 +37,10 @@ astral-docs writes `nat.list_holes -With`, `nat.punch -Target` and
 `nat.node_consume_hole -Pair -Target`. Parameter matching is case-sensitive and
 unknown keys are silently dropped (`lib/query`'s `Editor.SetMany`), so every one
 of those shellsession examples is a no-op that lists every hole instead of the
-filtered set. This module sends `with`, `target` and `pair`, which is what the
-live registry declares -- read off `shell.spec` this session, not off the docs.
+filtered set. The live registry of a node that predates astrald `bd98bbe8`
+declares `with`, `target` and `pair` -- read off `shell.spec`, not off the docs.
+astrald `bd98bbe8` renames `with` and `target` to `identity` on all three ops
+and ignores the old names, so this module sends `identity`.
 
 **`nat.endpoint` is an exonet endpoint that no exonet name reaches.** It is a
 `{IP, Port}` pair whose `Network()` is `kcp`, structurally identical to
@@ -333,15 +335,15 @@ class Nat(ModuleClient):
         cannot resolve is an `error_message` **inside** the stream, so it
         surfaces as `RemoteError` and not as a rejection.
 
-        **`peer`, not `with`.** The wire key is `with=`, which is a Python
-        keyword and cannot be a parameter name. astral-docs writes it `-With`,
-        which the node drops silently (D-17); this sends the lowercase name the
-        registry declares.
+        **`peer` travels as `identity=`.** astrald `bd98bbe8` renames the wire
+        key from `with=`, a Python keyword that could not be a parameter name,
+        and ignores the old name. astral-docs writes it `-With`, which the node
+        drops silently (D-17).
         """
         self._gate(OP_LIST_HOLES, experimental)
         params: dict[str, Any] = {}
         if peer is not None:
-            params["with"] = _param(_STRING8, _name(peer, OP_LIST_HOLES))
+            params["identity"] = _param(_STRING8, _name(peer, OP_LIST_HOLES))
         qs = querystring.build(OP_LIST_HOLES, params)
         return [
             self._expect(obj, Hole, OP_LIST_HOLES)
@@ -364,15 +366,16 @@ class Nat(ModuleClient):
         own `timeout=` is what bounds it. A failure is an `error_message`, which
         surfaces as `RemoteError`.
 
-        **`peer`, not `target`.** The wire argument is `target=`, and `target`
-        is also the routing keyword `Client.query` takes: here they are two
-        different nodes, since the query goes to one node and asks it to punch
-        towards another. astral-docs writes this argument `-Target`, which the
-        node drops in silence (D-17).
+        **`peer`, never `target`.** The wire argument is `identity=`; astrald
+        `bd98bbe8` renames it from `target=` and ignores the old name. `target`
+        is the routing keyword `Client.query` takes: here they are two different
+        nodes, since the query goes to one node and asks it to punch towards
+        another. astral-docs writes the old argument `-Target`, which the node
+        drops in silence (D-17).
         """
         self._gate(OP_PUNCH, experimental)
         qs = querystring.build(
-            OP_PUNCH, {"target": _param(_STRING8, _name(peer, OP_PUNCH))}
+            OP_PUNCH, {"identity": _param(_STRING8, _name(peer, OP_PUNCH))}
         )
         return self._expect(await self._c.call_one(qs, **kw), Hole, OP_PUNCH)
 

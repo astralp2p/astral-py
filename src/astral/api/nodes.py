@@ -37,10 +37,15 @@ a per-op contract and is not discoverable from the wire):
 | `nodes.new_link` | RR (long) | `link_info` \\| `error_message` \\| reject 2-5 | **mutates** |
 | `nodes.migrate_session` | RR | `ack` \\| `error_message` | **mutates** |
 
-Parameter names and which of them the node enforces are read off the live
-`shell.spec` registry rather than off the docs: `nodes.migrate_session` marks
-`session_id` and `link_id` required and `nodes.new_link` marks `target`
-required; every other parameter of every other op is optional, `out` included.
+Parameter names follow astrald `bd98bbe8`: `nodes.resolve_endpoints`,
+`nodes.add_endpoint` and `nodes.new_link` name their identity argument
+`identity`, and `nodes.close_link` names its nonce `link_id`, as
+`nodes.migrate_session` does. The node ignores the earlier names, `id` and
+`target`. Which parameters the node enforces is read off the live `shell.spec`
+registry rather than off the docs, on a node that predates `bd98bbe8`:
+`nodes.migrate_session` marks `session_id` and `link_id` required and
+`nodes.new_link` marks its identity argument, `target` there, required; every
+other parameter of every other op is optional there, `out` included.
 
 **`nodes.migrate_session` ships only in its `start=true` form.** Design section
 4.5 drops the negotiated mode -- the `ready`/`switched`/`resume`/`done` signal
@@ -180,7 +185,6 @@ STRATEGY_SEPARATOR: Final = ","
 # The parameter specs, so every value travels as the bare payload half of its
 # type's text encoding and nothing re-derives one (design section 5.1, rule 2).
 _BOOL: Final[Spec] = Primitive("bool")
-_IDENTITY: Final[Spec] = Primitive("identity")
 _NONCE: Final[Spec] = Primitive("nonce64")
 _STRING8: Final[Spec] = Primitive("string8")
 
@@ -658,8 +662,9 @@ class Nodes(ModuleClient):
     ) -> list[EndpointWithTTL]:
         """Every endpoint the node can find for an identity. ST, ends at `eos`.
 
-        `name` is resolved by the node -- an alias, `localnode`, or a hex key --
-        because the op declares `ID string` and hands it to the directory. An
+        `name` travels under the wire key `identity` and is resolved by the
+        node -- an alias, `localnode`, or a hex key -- because the op declares
+        `Identity string` (astrald `bd98bbe8`) and hands it to the directory. An
         identity the node cannot resolve is **rejected with code 2**, which
         surfaces as `QueryRejected`, not as an `error_message`.
 
@@ -671,7 +676,7 @@ class Nodes(ModuleClient):
         self._gate(OP_RESOLVE_ENDPOINTS, experimental)
         qs = querystring.build(
             OP_RESOLVE_ENDPOINTS,
-            {"id": _param(_STRING8, _name(name, OP_RESOLVE_ENDPOINTS))},
+            {"identity": _param(_STRING8, _name(name, OP_RESOLVE_ENDPOINTS))},
         )
         return [
             self._expect(obj, EndpointWithTTL, OP_RESOLVE_ENDPOINTS)
@@ -695,8 +700,10 @@ class Nodes(ModuleClient):
         only, so an IPv6 address needs its brackets. The TTL is astrald's, fixed
         at three 30-day months, and is not a parameter.
 
-        `identity` is parsed as an identity by the op, so a directory name never
-        reaches it; resolve one first.
+        `identity` travels under the wire key `identity`. astrald `bd98bbe8`
+        resolves it through the node's directory and refuses the zero identity
+        with `missing identity`; this client parses it locally and refuses a
+        directory name, so resolve one first.
         """
         self._gate(OP_ADD_ENDPOINT, experimental)
         if ":" not in endpoint:
@@ -708,7 +715,9 @@ class Nodes(ModuleClient):
         qs = querystring.build(
             OP_ADD_ENDPOINT,
             {
-                "id": _param(_IDENTITY, _identity(identity, OP_ADD_ENDPOINT)),
+                "identity": _param(
+                    _STRING8, _identity(identity, OP_ADD_ENDPOINT).text()
+                ),
                 "endpoint": _param(_STRING8, endpoint),
             },
         )
@@ -720,12 +729,14 @@ class Nodes(ModuleClient):
         """Drop a link by id. RR. **Mutates.**
 
         Every session multiplexed over that link dies with it. The id is a
-        `nonce64`, which `links()` reports as `LinkInfo.id`; an id the node does
-        not hold answers with an `error_message`.
+        `nonce64`, which `links()` reports as `LinkInfo.id`, and travels under
+        the wire key `link_id`; an id the node does not hold answers with an
+        `error_message`.
         """
         self._gate(OP_CLOSE_LINK, experimental)
         qs = querystring.build(
-            OP_CLOSE_LINK, {"id": _param(_NONCE, _nonce(link_id, OP_CLOSE_LINK))}
+            OP_CLOSE_LINK,
+            {"link_id": _param(_NONCE, _nonce(link_id, OP_CLOSE_LINK))},
         )
         self._expect(await self._c.call_one(qs, **kw), Ack, OP_CLOSE_LINK)
 
@@ -754,18 +765,21 @@ class Nodes(ModuleClient):
         design risk R-17 declines to map them to meanings, because the table is
         source-only.
 
-        **`peer`, not `target`.** The wire argument is `target=` and travels as
-        one, but `target` is also the routing keyword every module-client method
-        forwards to `Client.query` -- which node answers the query -- and here
-        the two are different nodes: the query goes to one node and asks it to
-        link to another. `Tree.mount_remote` renamed the same collision for the
-        same reason.
+        **`peer`, never `target`.** The wire argument is `identity=`; astrald
+        `bd98bbe8` renames it from `target=`, which the node ignores. `target`
+        is the routing keyword every module-client method forwards to
+        `Client.query` -- which node answers the query -- and here the two are
+        different nodes: the query goes to one node and asks it to link to
+        another. `Tree.mount_remote` names the same distinction the same way.
 
-        `target=` is the one required parameter in this module besides
-        `migrate_session`'s two, per the live registry.
+        The identity argument is the one required parameter in this module
+        besides `migrate_session`'s two, per the live registry of a node that
+        predates `bd98bbe8`.
         """
         self._gate(OP_NEW_LINK, experimental)
-        params: dict[str, Any] = {"target": _param(_STRING8, _name(peer, OP_NEW_LINK))}
+        params: dict[str, Any] = {
+            "identity": _param(_STRING8, _name(peer, OP_NEW_LINK))
+        }
         if endpoint is not None:
             if ":" not in endpoint:
                 raise BadArgument(
@@ -831,15 +845,19 @@ _param = ModuleClient._param
 
 
 def _identity(value: Identity | str, op: str) -> Identity:
-    """An identity argument: 66 hex characters or `anyone`, never a name."""
+    """An identity argument: 66 hex characters or `anyone`, never a name.
+
+    The node resolves a name here too (astrald `bd98bbe8`); this client parses
+    the argument locally and refuses one.
+    """
     if isinstance(value, Identity):
         return value
     try:
         return Identity.parse(value)
     except ParseError as exc:
         raise ParseError(
-            f"{op}: {value!r} is not an identity; this argument is parsed as one "
-            f"and a directory name never reaches it -- resolve it first"
+            f"{op}: {value!r} is not an identity; this client parses this "
+            f"argument as one and refuses a directory name -- resolve it first"
         ) from exc
 
 

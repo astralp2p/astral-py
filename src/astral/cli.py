@@ -342,7 +342,7 @@ def _split_operation(tokens: Sequence[str]) -> tuple[str | None, list[str]]:
     """Pull the operation out of the free-form remainder.
 
     The operation is the first token in a **positional** slot: a `-key` consumes
-    the token after it, so `-name alice dir.resolve` names the op `dir.resolve`
+    the token after it, so `-identity alice dir.resolve` names the op `dir.resolve`
     and not `alice`. That pairing rule is `querystring.args_to_params`, which
     encodes what is left; this walk knows only enough of it to find the
     positional slots, and the two must not diverge.

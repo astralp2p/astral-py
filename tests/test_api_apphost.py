@@ -356,9 +356,9 @@ class WhoamiTest(ApphostCase):
 class ListTokensTest(ApphostCase):
     @bounded()
     async def test_no_identity_sends_no_parameter_at_all(self):
-        """An empty `id=` and an absent `id` are different things: the node reads
-        the first as the zero identity and filters nothing either way, but a
-        parameter the caller did not set must never be invented."""
+        """An empty `identity=` and an absent `identity` are different query
+        strings, though the node filters nothing for either, and a parameter the
+        caller did not set must never be invented."""
         async with MockApphost(routes={OP_LIST_TOKENS: Accept(eos=True)}) as mock:
             api = await self.apphost(mock)
             self.assertEqual(await api.list_tokens(), [])
@@ -372,7 +372,7 @@ class ListTokensTest(ApphostCase):
         async with MockApphost(routes={OP_LIST_TOKENS: Accept(eos=True)}) as mock:
             api = await self.apphost(mock)
             await api.list_tokens(ID_HEX)
-        self.assertEqual(mock.queries[-1].query, f"{OP_LIST_TOKENS}?id={ID_HEX}")
+        self.assertEqual(mock.queries[-1].query, f"{OP_LIST_TOKENS}?identity={ID_HEX}")
 
     @bounded()
     async def test_the_tokens_decode_and_the_stream_ends_at_an_eos(self):
@@ -428,7 +428,7 @@ class TokenAndContractTest(ApphostCase):
         self.assertEqual(token.token, TOKEN)
         self.assertEqual(
             mock.queries[-1].query,
-            f"{OP_CREATE_TOKEN}?duration=8760h0m0s&id={ID_HEX}",
+            f"{OP_CREATE_TOKEN}?duration=8760h0m0s&identity={ID_HEX}",
         )
 
     @bounded()
@@ -441,7 +441,7 @@ class TokenAndContractTest(ApphostCase):
         ) as mock:
             api = await self.apphost(mock)
             await api.create_token(ID_HEX)
-        self.assertEqual(mock.queries[-1].query, f"{OP_CREATE_TOKEN}?id={ID_HEX}")
+        self.assertEqual(mock.queries[-1].query, f"{OP_CREATE_TOKEN}?identity={ID_HEX}")
 
     @bounded()
     async def test_a_rejected_query_reaches_the_caller_as_a_rejection(self):
@@ -643,7 +643,7 @@ class CancelTest(ApphostCase):
             api = await self.apphost(mock)
             self.assertTrue(await api.cancel(Nonce(0x1122334455667788)))
         self.assertEqual(
-            mock.queries[-1].query, f"{OP_CANCEL}?id=1122334455667788"
+            mock.queries[-1].query, f"{OP_CANCEL}?query_id=1122334455667788"
         )
         self.assertEqual(mock.queries[-1].zone, int(Zone.DEVICE))
 
@@ -665,7 +665,8 @@ class CancelTest(ApphostCase):
             api = await self.apphost(mock)
             await api.cancel(1, cause="user quit")
         self.assertEqual(
-            mock.queries[-1].query, f"{OP_CANCEL}?cause=user+quit&id=0000000000000001"
+            mock.queries[-1].query,
+            f"{OP_CANCEL}?cause=user+quit&query_id=0000000000000001",
         )
 
 
@@ -737,7 +738,7 @@ class LiveApphostTest(live_support.LiveCase):
 
     @bounded(30.0)
     async def test_list_tokens_filtered_by_an_identity_is_a_subset(self):
-        """The `id` parameter reaches the node and filters server-side.
+        """The `identity` parameter reaches the node and filters server-side.
 
         `GENERATOR` is the secp256k1 base point: a valid identity by
         construction, and one no node has ever issued a token to.
@@ -762,13 +763,17 @@ class LiveApphostTest(live_support.LiveCase):
         that they are a point on the curve: doing so would make the single most
         common decode in the protocol depend on a curve library. astral-go's
         `Identity.UnmarshalText` does check. So off-curve bytes are accepted
-        locally, travel, and are refused by the node's argument binding *before*
-        the op runs -- which surfaces as `query_rejected_msg{1}`, not as an
-        empty result and not as an `error_message`.
+        locally and travel. astrald `bd98bbe8` declares the argument `string8`
+        and resolves it (`opListTokensArgs.Identity`): an off-curve key fails
+        `astral.ParseIdentity`, names no alias, and answers `unknown identity`
+        as an `error_message` in the accepted stream -- `RemoteError`, not an
+        empty result. A node that bound the argument as an `*astral.Identity`
+        refused it before the op ran, as `query_rejected_msg{1}`, verified live
+        before that revision.
         """
         off_curve = Identity.parse("02" + "11" * 32)  # accepted here, refused there
         async with await self.client() as client:
-            with self.assertRaises(QueryRejected):
+            with self.assertRaises(RemoteError):
                 await Apphost(client).list_tokens(off_curve)
         await self.assert_no_open_sockets()
 
@@ -823,7 +828,9 @@ class NameResolutionTest(ApphostCase):
             with self.subTest(op=op):
                 async with MockApphost(
                     routes={
-                        "dir.resolve?name=furry-bolt": Accept(objects=(IDENTITY_FRAME,)),
+                        "dir.resolve?identity=furry-bolt": Accept(
+                            objects=(IDENTITY_FRAME,)
+                        ),
                         op: answer[op],
                     }
                 ) as mock:
@@ -831,7 +838,7 @@ class NameResolutionTest(ApphostCase):
                     await run(api)
                 self.assertEqual(
                     [q.query for q in mock.queries],
-                    ["dir.resolve?name=furry-bolt", f"{op}?id={ID_HEX}"],
+                    ["dir.resolve?identity=furry-bolt", f"{op}?identity={ID_HEX}"],
                 )
 
     @bounded()
@@ -840,7 +847,7 @@ class NameResolutionTest(ApphostCase):
         query, so the leg the caller cannot see was bounded by the client's own
         60 s default."""
         async with MockApphost(
-            routes={"dir.resolve?name=furry-bolt": Accept(hold=True)}
+            routes={"dir.resolve?identity=furry-bolt": Accept(hold=True)}
         ) as mock:
             api = await self.apphost(mock, query_timeout=30.0)
             loop = asyncio.get_running_loop()
@@ -1134,20 +1141,23 @@ class ModulePatternTest(ApphostCase):
         from astral.api import apphost as mod
         from astral.querystring import param_text
 
-        self.assertEqual(mod._IDENTITY_ID["id"], Primitive("identity"))
+        self.assertEqual(mod._IDENTITY["identity"], Primitive("string8"))
         self.assertEqual(mod._OBJECT_ID["id"], Primitive("object_id.sha256"))
-        self.assertEqual(mod._CANCEL["id"], Primitive("nonce64"))
+        self.assertEqual(mod._CANCEL["query_id"], Primitive("nonce64"))
 
         # The declaration is what refuses a wrong-typed value. Without it the
-        # encoder dispatches on the value and sends base64 for an identity.
+        # encoder dispatches on the value and sends base64 for bytes.
         with self.assertRaises(astral.AstralError):
-            mod._encode(mod._IDENTITY_ID, {"id": b"not an identity"})
+            mod._encode(mod._IDENTITY, {"identity": b"not an identity"})
         self.assertEqual(param_text(b"not an identity"), "bm90IGFuIGlkZW50aXR5")
 
-        # And what the ops actually send is unchanged, byte for byte.
+        # And what the ops actually send is an identity's hex, byte for byte.
         self.assertEqual(
-            mod._encode(mod._IDENTITY_ID, {"id": FURRY_BOLT, "duration": Duration(5)}),
-            {"id": ID_HEX, "duration": param_text(Duration(5))},
+            mod._encode(
+                mod._IDENTITY,
+                {"identity": FURRY_BOLT.text(), "duration": Duration(5)},
+            ),
+            {"identity": ID_HEX, "duration": param_text(Duration(5))},
         )
 
     @bounded()

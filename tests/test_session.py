@@ -1232,7 +1232,9 @@ class CancelTest(SessionCase):
                         [q.op for q in mock.queries][:2], ["slow.op", "apphost.cancel"]
                     )
                     cancel = mock.queries[1]
-                    self.assertEqual(cancel.query, "apphost.cancel?id=000000000000aabb")
+                    self.assertEqual(
+                        cancel.query, "apphost.cancel?query_id=000000000000aabb"
+                    )
                     # Device zone only: cancelling a query never leaves the machine.
                     self.assertEqual(cancel.zone, int(Zone.DEVICE))
                     self.assertEqual(mock.conn_count, 2)
@@ -1257,7 +1259,9 @@ class CancelTest(SessionCase):
                 await task
             self.assertTrue(session.transport.closed)
             await flush_cancels(5.0)
-            self.assertEqual(mock.queries[1].query, "apphost.cancel?id=0000000000000077")
+            self.assertEqual(
+                mock.queries[1].query, "apphost.cancel?query_id=0000000000000077"
+            )
             await self.assert_no_leaks(mock)
 
     @bounded()
@@ -1319,7 +1323,7 @@ class CancelTest(SessionCase):
             cancel = mock.queries[0]
             self.assertEqual(cancel.op, "apphost.cancel")
             self.assertIn("cause=user+quit", cancel.query)
-            self.assertIn("id=0000000000000055", cancel.query)
+            self.assertIn("query_id=0000000000000055", cancel.query)
             await session.aclose()
             await self.assert_no_leaks(mock)
 

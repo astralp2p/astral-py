@@ -777,7 +777,7 @@ loop's job and become plain `dict`/`set`/attributes. `streams.ContextReader` and
 
 **Cancel semantics for an in-flight query.** On `CancelledError` between sending
 `route_query_msg` and receiving the response, the SDK makes a shielded best-effort attempt to
-route `apphost.cancel?id=<nonce>` **on a fresh connection with its own 2 s timeout**, then
+route `apphost.cancel?query_id=<nonce>` **on a fresh connection with its own 2 s timeout**, then
 re-raises. astral-go's equivalent dials with the *already-cancelled* context, so its cancel
 query is never sent; that defect is not inherited.
 
@@ -1133,7 +1133,7 @@ class Dir:
         return await self._c.call_one("dir.alias_map", **kw)
 
     async def resolve(self, name: str, **kw) -> Identity:           # RR
-        return await self._c.call_one(qs("dir.resolve", name=name), **kw)
+        return await self._c.call_one(qs("dir.resolve", identity=name), **kw)
 
     async def filters(self, **kw) -> list[str]:                     # ST
         return [str(o) for o in await self._c.call("dir.filters", **kw)]

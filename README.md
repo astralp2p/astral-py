@@ -195,7 +195,7 @@ and state faults carry their stdlib base as well, so both reflexes work:
 
 ```python
 try:
-    await client.call_one("dir.resolve?name=nope")
+    await client.call_one("dir.resolve?identity=nope")
 except astral.RemoteError as exc:
     print(exc.query, exc.message)        # the op, and the responder's own text
 except astral.AstralError:
@@ -216,7 +216,7 @@ astral-query [global options] [target:]<operation> [-param value ...] [-- raw ar
 
 ```bash
 astral-query apphost.whoami                       # identity  03b27049…
-astral-query dir.resolve -name furry-bolt         # one line per object
+astral-query dir.resolve -identity furry-bolt     # one line per object
 astral-query --json dir.alias_map                 # {"Type": …, "Object": …}
 astral-query alice:objects.search -q holiday      # target resolved via dir.resolve
 astral-query --follow objects.scan -repo main     # snapshot, then live updates

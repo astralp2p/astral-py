@@ -308,15 +308,15 @@ class QueryStringTest(unittest.TestCase):
         absent."""
         self.assertEqual(
             services_module._sync_query("furry-bolt", follow=None),
-            "services.sync?id=furry-bolt",
+            "services.sync?identity=furry-bolt",
         )
         self.assertEqual(
             services_module._sync_query("furry-bolt", follow=False),
-            "services.sync?id=furry-bolt",
+            "services.sync?identity=furry-bolt",
         )
         self.assertEqual(
             services_module._sync_query("furry-bolt", follow=True),
-            "services.sync?follow=true&id=furry-bolt",
+            "services.sync?follow=true&identity=furry-bolt",
         )
 
     def test_sync_takes_a_name_or_an_identity(self):
@@ -325,25 +325,26 @@ class QueryStringTest(unittest.TestCase):
         `Identity` travels as its text form and costs no resolving query."""
         self.assertEqual(
             services_module._sync_query("localnode", follow=None),
-            "services.sync?id=localnode",
+            "services.sync?identity=localnode",
         )
         self.assertEqual(
             services_module._sync_query(FURRY_BOLT, follow=None),
-            f"services.sync?id={FURRY_BOLT.text()}",
+            f"services.sync?identity={FURRY_BOLT.text()}",
         )
 
     def test_the_parameters_go_through_their_declared_specs(self):
         """Design section 5.1 rule 2. Without the declaration the encoder
-        dispatches on the value, and `id` is `string8` rather than `identity`
-        because the op resolves this argument and a name is legitimate."""
+        dispatches on the value, and `identity` is `string8` rather than the
+        `identity` type because the op resolves this argument and a name is
+        legitimate."""
         self.assertEqual(services_module._DISCOVER["follow"], Primitive("bool"))
-        self.assertEqual(services_module._SYNC["id"], Primitive("string8"))
+        self.assertEqual(services_module._SYNC["identity"], Primitive("string8"))
         self.assertEqual(services_module._SYNC["follow"], Primitive("bool"))
 
     def test_a_name_is_url_escaped(self):
         op, params = parse(services_module._sync_query("a b&c", follow=None))
         self.assertEqual(op, OP_SYNC)
-        self.assertEqual(params, {"id": "a b&c"})
+        self.assertEqual(params, {"identity": "a b&c"})
 
 
 class ArgumentRefusalTest(unittest.TestCase):
@@ -370,7 +371,7 @@ class ArgumentRefusalTest(unittest.TestCase):
         """Refusing the empty name must not make `anyone` unnameable."""
         self.assertEqual(
             services_module._sync_query(Identity.ANYONE, follow=None),
-            f"services.sync?id={Identity.ANYONE.text()}",
+            f"services.sync?identity={Identity.ANYONE.text()}",
         )
 
 
@@ -706,7 +707,7 @@ class SyncOpTest(ServicesCase):
         async with mock:
             s = await self.services(mock)
             self.assertIsNone(await s.sync(FURRY_BOLT_ALIAS))
-        self.assertEqual(self.sent(mock), f"services.sync?id={FURRY_BOLT_ALIAS}")
+        self.assertEqual(self.sent(mock), f"services.sync?identity={FURRY_BOLT_ALIAS}")
         self.assert_no_faults(mock)
 
     @bounded()
@@ -726,7 +727,7 @@ class SyncOpTest(ServicesCase):
         async with mock:
             s = await self.services(mock)
             await s.sync(FURRY_BOLT)
-        self.assertEqual(self.sent(mock), f"services.sync?id={FURRY_BOLT.text()}")
+        self.assertEqual(self.sent(mock), f"services.sync?identity={FURRY_BOLT.text()}")
 
     @bounded()
     async def test_an_error_message_surfaces_as_a_remote_error(self):
@@ -823,7 +824,7 @@ class SyncFollowOpTest(ServicesCase):
         # `Ack` is exported from neither `astral` nor this module.
         self.assertIs(answer, True)
         self.assertEqual(
-            self.sent(mock), f"services.sync?follow=true&id={FURRY_BOLT_ALIAS}"
+            self.sent(mock), f"services.sync?follow=true&identity={FURRY_BOLT_ALIAS}"
         )
 
     @bounded()
@@ -938,10 +939,11 @@ class LiveServicesTest(live_support.LiveCase):
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
-    async def test_neither_op_enforces_a_required_argument(self):
-        """`Required` is set only by a `query:"required"` struct tag, and
-        `opSyncArgs.ID` carries none -- so an absent `id` reaches the op as the
-        empty string and resolves to the zero identity. That is why `sync()`
+    async def test_only_sync_enforces_a_required_argument(self):
+        """`Required` is set only by a `query:"required"` struct tag. astrald
+        `bd98bbe8` tags `opSyncArgs.Identity` and nothing in
+        `opDiscoverArgs`. The tag refuses an absent `identity` and passes an
+        empty one, which resolves to the zero identity. That is why `sync()`
         refuses an empty id client-side rather than relying on the node."""
         async with await self.client() as client:
             params = {}
@@ -964,7 +966,7 @@ class LiveServicesTest(live_support.LiveCase):
         self.assertEqual(
             params[OP_SYNC],
             [
-                ("id", "string8", False),
+                ("identity", "string8", True),
                 ("follow", "bool", False),
                 ("in", "string8", False),
                 ("out", "string8", False),

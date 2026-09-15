@@ -54,7 +54,10 @@ a property of astrald rather than an omission here:
 **Every `path:line` in this section is read at astrald `cc1cd3b7`.** Every other
 astrald citation in this module resolves at the pin `tests/reference.py` holds,
 and the two revisions disagree about this module: the action guard merged in
-`7c795f47` and the origin guard in `12f2ff54`, both after the pin.
+`7c795f47` and the origin guard in `12f2ff54`, both after the pin. The op
+argument names are a third revision's: astrald `bd98bbe8` names an identity
+argument `identity` and `apphost.cancel`'s nonce `query_id`, and ignores the old
+names.
 
 **`apphost.list_tokens` and `apphost.create_token` are administration, not
 introspection.** Each refuses a query whose origin is the network and then asks
@@ -208,12 +211,16 @@ OP_UNHOLD_OBJECT: Final = "apphost.unhold_object"
 # today, which is what makes the gap latent rather than loud, and latent is how
 # it survives into eleven more modules.
 #
-# `id` is declared twice because the two are different types on the node:
-# `apphost.hold_object`/`unhold_object` take an `object_id.sha256`, the four
-# identity ops take an `identity`, and `apphost.cancel` takes a `nonce64`.
+# Three specs name three different things on the node:
+# `apphost.hold_object`/`unhold_object` take an `object_id.sha256` under `id`,
+# the identity ops take a `string8` under `identity`, and `apphost.cancel` takes
+# a `nonce64` under `query_id` (astrald `bd98bbe8`, `opCreateTokenArgs.Identity`
+# and `opCancelArgs.QueryID`). The node resolves `identity` through its
+# directory; `list_tokens` and `create_token` send the hex of an identity this
+# client has already resolved.
 
-_IDENTITY_ID: Final[dict[str, Spec]] = {
-    "id": Primitive("identity"),
+_IDENTITY: Final[dict[str, Spec]] = {
+    "identity": Primitive("string8"),
     "duration": Primitive("duration"),
 }
 _OBJECT_ID: Final[dict[str, Spec]] = {
@@ -225,7 +232,7 @@ _HANDLER: Final[dict[str, Spec]] = {
     "token": Primitive("nonce64"),
 }
 _CANCEL: Final[dict[str, Spec]] = {
-    "id": Primitive("nonce64"),
+    "query_id": Primitive("nonce64"),
     "cause": Primitive("string8"),
 }
 
@@ -349,17 +356,19 @@ class Apphost(ModuleClient):
         caller without the action both get `QueryRejected`. With no `id` the node
         returns every token it holds, with the token strings in plaintext, and an
         unauthenticated local process passes the gate as the node (see the module
-        docstring). Passing `id` filters server-side; it does not authorize
-        anything.
+        docstring). Passing `id` filters server-side, under the wire key
+        `identity`; it does not authorize anything. A node that predates astrald
+        `bd98bbe8` ignores that key and answers every token.
 
         `id` accepts an `Identity`, 66 hex characters, `anyone`, or a directory
-        name, which costs one `dir.resolve` before this query is sent because the
-        parameter is an identity and a name does not travel.
+        name, which costs one `dir.resolve` before this query is sent; the query
+        carries the resolved identity's hex. `anyone` names the zero identity,
+        which the node refuses with `missing identity`.
         """
         params: dict[str, Any] = {}
         if id is not None:
-            params["id"] = await self._c.resolve_identity(id, **kw)
-        qs = querystring.build(OP_LIST_TOKENS, _encode(_IDENTITY_ID, params))
+            params["identity"] = (await self._c.resolve_identity(id, **kw)).text()
+        qs = querystring.build(OP_LIST_TOKENS, _encode(_IDENTITY, params))
         return [
             self._expect(obj, AccessToken, OP_LIST_TOKENS)
             for obj in await self._c.call(qs, **kw)
@@ -394,14 +403,19 @@ class Apphost(ModuleClient):
         authenticates as `id` whoever asked for it, so this is the node handing
         out a credential for an identity the caller need not control.
 
+        `id` travels under the wire key `identity`, as the hex of the identity
+        this client resolves; a directory name costs one `dir.resolve` first. The
+        node refuses the zero identity, `anyone`, with `missing identity`.
+
         `duration` omitted leaves the node's default of one year. astral-go's
-        client sends `id` alone and has no way to ask for anything else.
+        client sends the identity alone and has no way to ask for anything else.
         """
-        params: dict[str, Any] = {"id": await self._c.resolve_identity(id, **kw)}
+        resolved = await self._c.resolve_identity(id, **kw)
+        params: dict[str, Any] = {"identity": resolved.text()}
         span = _duration(duration)
         if span is not None:
             params["duration"] = span
-        qs = querystring.build(OP_CREATE_TOKEN, _encode(_IDENTITY_ID, params))
+        qs = querystring.build(OP_CREATE_TOKEN, _encode(_IDENTITY, params))
         return self._expect(await self._c.call_one(qs, **kw), AccessToken, OP_CREATE_TOKEN)
 
     async def register(self, **kw: Any) -> AccessToken:
@@ -559,7 +573,7 @@ class Apphost(ModuleClient):
         carried, after which that query's caller sees `error_msg{canceled}` or
         EOF. `Stream.cancel()` is the same op reached from the stream that owns
         the nonce, and the SDK issues it itself when an in-flight query is
-        cancelled.
+        cancelled. The nonce travels under the wire key `query_id`.
 
         Returns whether the node had that query en route. `False` is the ordinary
         outcome for a query that has already been answered, and it is the only
@@ -576,7 +590,7 @@ class Apphost(ModuleClient):
         and a cancel that left the machine would be routed as a query of its own.
         """
         kw.setdefault("zone", Zone.DEVICE)
-        params: dict[str, Any] = {"id": Nonce(int(id))}
+        params: dict[str, Any] = {"query_id": Nonce(int(id))}
         if cause:
             params["cause"] = cause
         qs = querystring.build(OP_CANCEL, _encode(_CANCEL, params))

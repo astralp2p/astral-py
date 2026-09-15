@@ -80,14 +80,15 @@ is the same refusal `mod.objects.*_action` gets and says nothing about their wir
 form.
 
 **The op's own target argument is `node`, never `target`.** `user.adopt` and
-`user.expel` declare `Target string`, resolved by the node's directory; `target`
-is also the routing keyword every module-client method forwards to
+`user.expel` declare `Identity string` at astrald `bd98bbe8`, resolved by the
+node's directory and sent as `identity=`; the node ignores the earlier name,
+`target`. `target` is the routing keyword every module-client method forwards to
 `Client.query`, and on these two ops the routing target (the node running the op)
 and the op's target (the node being adopted or expelled) are different nodes.
 `Tree.mount_remote` met this collision first and renamed for it.
 
-**An empty target adopts or expels `anyone`.** astrald declares `Target string`
-with no `query:"required"` tag, so an absent argument reaches
+**An empty target adopts or expels `anyone`.** At `074a852b` astrald declares
+`Target string` with no `query:"required"` tag, so an absent argument reaches
 `Dir.ResolveIdentity("")`, which maps the empty string to the zero identity
 (`astrald/mod/dir/src/module.go:56`) rather than failing. The op then signs a
 membership contract, or an irreversible ban, for `anyone`. The same hole is on
@@ -95,7 +96,9 @@ membership contract, or an irreversible ban, for `anyone`. The same hole is on
 no nil guard between the op and the row it writes
 (`astrald/mod/user/src/db.go:60`) -- and on `user.sync_with`, whose `Node` is an
 identity the op never checks. Every one of those arguments is mandatory here and
-an empty name is refused client-side. Defect filed against astrald.
+an empty name is refused client-side. Defect filed against astrald. At `bd98bbe8`
+the three node arguments are `Identity string` and tagged required, and
+`user.sync_with` resolves its argument and rejects the zero identity with code 3.
 
 **Two declared arguments are inert on astrald `074a852b`.**
 `user.list_siblings`'s `zone` builds a context the op then never uses --
@@ -296,7 +299,6 @@ is effective only once the ban has propagated to the node being invited.
 
 # The parameter specs, so every value travels as the bare payload half of its
 # type's text encoding and nothing re-derives one (design section 5.1, rule 2).
-_IDENTITY: Final[Spec] = Primitive("identity")
 _OBJECT_ID: Final[Spec] = Primitive("object_id.sha256")
 _STRING8: Final[Spec] = Primitive("string8")
 _UINT64: Final[Spec] = Primitive("uint64")
@@ -820,11 +822,14 @@ class User(ModuleClient):
         `ERR_NO_ACTIVE_CONTRACT` included -- is an `error_message` rather than
         a rejection.
 
-        `node` is parsed as an **identity** by the op, so 66 hex characters or
-        `anyone` reach it and a directory name never does -- unlike `adopt`,
-        `expel` and `new_node_contract`, whose targets the node resolves.
-        Refused here rather than sent, because the op's argument is not marked
-        required and an absent one syncs with the zero identity.
+        `node` travels under the wire key `identity`. astrald `bd98bbe8`
+        resolves it through the node's directory and rejects a name that does
+        not resolve, or the zero identity, with code 3 before it authorizes.
+        This client parses `node` locally as an identity and refuses a directory
+        name -- unlike `adopt`, `expel` and `new_node_contract`, whose names it
+        sends for the node to resolve. `node` is mandatory here because at
+        `074a852b` the op's argument is not marked required and an absent one
+        syncs with the zero identity.
 
         **`start` is inert on astrald `074a852b`.** The op declares it and
         `OpSyncWith` never reads it: `syncAssets` takes the node and reads the
@@ -835,12 +840,14 @@ class User(ModuleClient):
         moment astrald wires the argument up, which is not what a caller who
         named no height asked for.
         """
-        params: dict[str, Any] = {"node": _identity(node, OP_SYNC_WITH)}
+        params: dict[str, Any] = {
+            "identity": _identity(node, OP_SYNC_WITH).text()
+        }
         if start is not None:
             params["start"] = _height(start, OP_SYNC_WITH)
         qs = querystring.build(
             OP_SYNC_WITH,
-            self._encode({"node": _IDENTITY, "start": _UINT64}, params),
+            self._encode({"identity": _STRING8, "start": _UINT64}, params),
         )
         self._expect(await self._c.call_one(qs, **kw), Ack, OP_SYNC_WITH)
 
@@ -862,9 +869,9 @@ class User(ModuleClient):
         node's resolver reads it as the zero identity and the op would sign a
         membership contract for `anyone`.
 
-        **`node`, not `target`.** The op's wire argument is `target=` and
-        travels as one; `target` in `**kw` keeps meaning the node this query is
-        routed to, which on this op is a different node.
+        **`node`, not `target`.** The op's wire argument is `identity=`, renamed
+        from `target=` at astrald `bd98bbe8`; `target` in `**kw` keeps meaning
+        the node this query is routed to, which on this op is a different node.
         """
         return self._expect(
             await self._c.call_one(_targeted(OP_ADOPT, node), **kw),
@@ -1066,9 +1073,10 @@ def _object_id(value: ObjectID | str, op: str) -> ObjectID:
 def _identity(value: Identity | str, op: str) -> Identity:
     """An identity argument. 66 hex characters or `anyone`, never a name.
 
-    The op parses this argument with `astral.ParseIdentity`, so a name reaches
-    it as a rejected query rather than as an error message. Refusing it here
-    names the fix instead.
+    At `074a852b` the op parses this argument with `astral.ParseIdentity`, so a
+    name reaches it as a rejected query rather than as an error message. astrald
+    `bd98bbe8` resolves a name there instead; this client still parses the
+    argument locally and refuses one, which names the fix.
     """
     if isinstance(value, Identity):
         return value
@@ -1076,8 +1084,8 @@ def _identity(value: Identity | str, op: str) -> Identity:
         return Identity.parse(value)
     except ParseError as exc:
         raise ParseError(
-            f"{op}: {value!r} is not an identity; this argument is parsed as "
-            "one and a directory name never reaches it -- resolve it first"
+            f"{op}: {value!r} is not an identity; this client parses this "
+            "argument as one and refuses a directory name -- resolve it first"
         ) from exc
 
 
@@ -1100,9 +1108,9 @@ def _name(value: Identity | str, op: str, key: str) -> str:
 
 
 def _targeted(op: str, node: Identity | str) -> str:
-    """`<op>?target=<name>`, the query string `adopt` and `expel` share."""
+    """`<op>?identity=<name>`, the query string `adopt` and `expel` share."""
     return querystring.build(
-        op, {"target": _param(_STRING8, _name(node, op, "target"))}
+        op, {"identity": _param(_STRING8, _name(node, op, "identity"))}
     )
 
 

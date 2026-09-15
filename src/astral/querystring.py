@@ -1,6 +1,6 @@
 """Query strings: the operation name, its parameters, and the encoding between.
 
-    dir.resolve?name=furry-bolt
+    dir.resolve?identity=furry-bolt
     objects.read?id=data19kyg…&zone=dvn
 
 Rules that are not negotiable, every one of them observed on the live node:

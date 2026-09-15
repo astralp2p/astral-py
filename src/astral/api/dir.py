@@ -61,20 +61,26 @@ check tests key **presence** in the parsed parameters
 value, which is a different query string from an absent `alias`. Design bug
 D-18. `remove_alias()` is the named form of it.
 
-**Three arguments named `id`, two different types.** `dir.get_alias` and
-`dir.set_alias` declare `ID *astral.Identity`, parsed by
-`astral.ParseIdentity`, so only 66 hex characters or `anyone` reach the op and a
-directory name never does. `dir.apply_filters` declares `ID string` and resolves
-it through the node's own resolver, so an alias, `localnode`, a hex key or the
-empty string all reach it. This module keeps the distinction rather than
-flattening it: `get_alias` and `set_alias` take an identity, `apply_filters`
-takes a name **or** an identity and never spends a query resolving one. Verified
-live: `dir.apply_filters?filters=all&id=furry-bolt` answers `bool(true)`, and
+**Four arguments named `identity`, one type, resolved by the node.** astrald
+`bd98bbe8` declares `Identity string` on `dir.resolve`, `dir.get_alias`,
+`dir.set_alias` and `dir.apply_filters` and hands each to `ResolveIdentity`, so
+an alias, `localnode` or a hex key reaches every one of them. `dir.get_alias`
+and `dir.set_alias` refuse the zero identity, which the empty string and
+`anyone` resolve to, with `missing identity` (`opGetAliasArgs`,
+`opSetAliasArgs`). The old names -- `name` on `dir.resolve`, `id` on the other
+three -- are ignored. This module keeps the distinction it drew when
+`get_alias` and `set_alias` parsed their argument as an `*astral.Identity`:
+those two take an identity and refuse a directory name client-side,
+`apply_filters` takes a name **or** an identity and never spends a query
+resolving one. Verified live on a node that predates `bd98bbe8`:
+`dir.apply_filters?filters=all&id=furry-bolt` answers `bool(true)`, and
 `dir.get_alias?id=` with 66 hex characters that are not a curve point is
 **rejected** rather than answered, because astral-go validates the point.
 
-**An empty name is refused client-side.** `dir.resolve?name=` answers with the
-**zero identity** rather than an error -- verified live -- because astrald maps
+**An empty name is refused client-side.** `dir.resolve` with an empty
+`identity` answers with the **zero identity** rather than an error -- verified
+live under the argument's earlier name, `name`; `bd98bbe8` renames the field
+and changes nothing else in `OpResolve` -- because astrald maps
 `""` and `"anyone"` to `astral.Identity{}` (`mod/dir/src/module.go:56`). A
 caller that meant a name and sent an empty one gets `anyone`, which routes
 somewhere else entirely, so `resolve("")` raises instead. `Identity.ANYONE` is
@@ -148,7 +154,6 @@ FILTER_SEPARATOR: Final = ","
 
 # The parameter specs, so every value travels as the bare payload half of its
 # type's text encoding and nothing re-derives one (design section 5.1, rule 2).
-_IDENTITY: Final[Spec] = Primitive("identity")
 _STRING8: Final[Spec] = Primitive("string8")
 
 
@@ -271,7 +276,7 @@ class Dir(ModuleClient):
                 "the node; pass Identity.ANYONE to mean that identity"
             )
         obj = await self._c.call_one(
-            querystring.build(OP_RESOLVE, {"name": _param(_STRING8, name)}), **kw
+            querystring.build(OP_RESOLVE, {"identity": _param(_STRING8, name)}), **kw
         )
         return self._expect(obj, Identity, OP_RESOLVE)
 
@@ -296,14 +301,14 @@ class Dir(ModuleClient):
         astrald's `record not found`, which surfaces as `RemoteError`; there is
         no empty-string answer to distinguish. Verified live.
 
-        `identity` is an `Identity`, 66 hex characters, or `anyone`. A directory
-        name is refused: the op parses this argument as an identity and never
-        resolves it.
+        `identity` is an `Identity` or 66 hex characters, and travels under the
+        wire key `identity`. A directory name is refused here, although the node
+        resolves one. `anyone` is the zero identity, which the node answers with
+        `missing identity`.
         """
+        hex_key = _identity(identity, OP_GET_ALIAS).text()
         obj = await self._c.call_one(
-            querystring.build(
-                OP_GET_ALIAS, {"id": _param(_IDENTITY, _identity(identity, OP_GET_ALIAS))}
-            ),
+            querystring.build(OP_GET_ALIAS, {"identity": _param(_STRING8, hex_key)}),
             **kw,
         )
         return str(self._expect(obj, String8, OP_GET_ALIAS))
@@ -354,7 +359,7 @@ class Dir(ModuleClient):
             "filters": _param(_STRING8, _filter_list(names)),
         }
         if identity is not None:
-            params["id"] = _param(_STRING8, _name(identity, OP_APPLY_FILTERS))
+            params["identity"] = _param(_STRING8, _name(identity, OP_APPLY_FILTERS))
         obj = await self._c.call_one(
             querystring.build(OP_APPLY_FILTERS, params), **kw
         )
@@ -369,14 +374,18 @@ class Dir(ModuleClient):
         of that. The `alias` parameter is always sent, empty or not: the op
         requires the key to be present and reads removal from an empty value.
 
-        `identity` is an `Identity`, 66 hex characters, or `anyone`. A directory
-        name is refused; resolve it first.
+        `identity` is an `Identity` or 66 hex characters, and travels under the
+        wire key `identity`. A directory name is refused here; resolve it first.
+        `anyone` is the zero identity, which the node answers with
+        `missing identity`.
         """
         obj = await self._c.call_one(
             querystring.build(
                 OP_SET_ALIAS,
                 {
-                    "id": _param(_IDENTITY, _identity(identity, OP_SET_ALIAS)),
+                    "identity": _param(
+                        _STRING8, _identity(identity, OP_SET_ALIAS).text()
+                    ),
                     # Never omitted. An absent key is a rejected query, an empty
                     # value is a removal, and the two are different bytes.
                     "alias": _param(_STRING8, alias),
@@ -405,9 +414,10 @@ _param = ModuleClient._param
 def _identity(value: Identity | str, op: str) -> Identity:
     """An identity argument. 66 hex characters or `anyone`, never a name.
 
-    The op parses this argument with `astral.ParseIdentity`, so a name reaches
-    it as a rejected query rather than as an error message. Refusing it here
-    names the fix instead.
+    astrald `bd98bbe8` resolves this argument through the node's directory, so
+    the node accepts a name here too. This client parses it locally and refuses
+    a name, the rule it kept from the revisions that parsed the argument with
+    `astral.ParseIdentity` and rejected a name.
     """
     if isinstance(value, Identity):
         return value
@@ -415,8 +425,8 @@ def _identity(value: Identity | str, op: str) -> Identity:
         return Identity.parse(value)
     except ParseError as exc:
         raise ParseError(
-            f"{op}: {value!r} is not an identity; this argument is parsed as one "
-            f"and a directory name never reaches it -- resolve it first"
+            f"{op}: {value!r} is not an identity; this client parses this "
+            f"argument as one and refuses a directory name -- resolve it first"
         ) from exc
 
 

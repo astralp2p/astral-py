@@ -638,7 +638,7 @@ class Client:
         silently in favour of the argument the node never sees.
 
         `nonce` fixes the query's correlator instead of drawing a random one;
-        `apphost.cancel?id=` names it. `allow_unparsed=True` decodes an
+        `apphost.cancel?query_id=` names it. `allow_unparsed=True` decodes an
         unregistered type as `UnparsedObject` rather than raising, which only the
         binary framing can offer, because only its length prefix locates the next
         frame.
@@ -890,7 +890,9 @@ class Client:
             return name
         if _looks_like_identity(name):
             return Identity.parse(name)
-        obj = await self.call_one(querystring.build(OP_RESOLVE, {"name": name}), **kw)
+        obj = await self.call_one(
+            querystring.build(OP_RESOLVE, {"identity": name}), **kw
+        )
         if not isinstance(obj, Identity):
             raise ProtocolError(
                 f"{OP_RESOLVE}: expected an identity, got "

@@ -437,7 +437,9 @@ class R14OpSpecStringWidth(unittest.TestCase):
     makes this the highest-impact silent-corruption trap in the corpus: reading
     a `string32` as a `string8` takes the first length byte for the whole length
     and desynchronises everything after it. Two captured `routing.op_spec`
-    frames from `shell.spec`, the first of the 118 the node sends.
+    frames from `shell.spec`, the first of the 118 the node sends. The node
+    predates astrald `bd98bbe8`, which renames `apphost.cancel`'s `id` to
+    `query_id`; the frames are recordings and stay as captured.
     """
 
     APPHOST_BIND = bytes.fromhex(
