@@ -69,6 +69,8 @@ from astral.api.objects import (
     Probe,
     QueryTag,
     RegistrationLease,
+    REPOSITORY_KIND_GROUP,
+    REPOSITORY_KIND_REPOSITORY,
     REPO_GROUPS,
     REPO_MAIN,
     RepositoryInfo,
@@ -89,6 +91,7 @@ from astral.errors import (
     ParseError,
     ProtocolError,
     RemoteError,
+    ShortRead,
     StreamClosed,
 )
 from astral.object import Ack, Blob, EOS, ErrorMessage, Nil
@@ -96,7 +99,7 @@ from astral.primitives import Bool, String8
 from astral.querystring import parse
 from astral.registry import Blueprints, default_blueprints
 from astral.session import Session, flush_cancels
-from astral.spec import PRIMITIVE_TYPES, AnySpec, Primitive, Ptr
+from astral.spec import PRIMITIVE_TYPES, AnySpec, Primitive, Ptr, Slice
 from astral.types import Duration, Identity, ObjectID, Size, Time, Zone
 
 import live_support
@@ -115,8 +118,14 @@ from mock_apphost import (
 
 # --- bytes the node sent, captured this session over unix:~/.apphost.sock ---
 
-LIVE_REPOSITORY_INFO = {
-    # name, label, free -- three of the ten `objects.repositories` answered.
+PRE_CHANGE_REPOSITORY_INFO = {
+    # name, label, free -- three of the ten `objects.repositories` answered, by
+    # a node older than astrald `c520482e`. The record gained `Kind`,
+    # `Children` and `Concurrent` after `Free`, so these payloads now stop one
+    # byte into `Kind` and no longer decode. They are kept, not deleted:
+    # refusing a short record rather than inventing defaults for the missing
+    # three fields is the behaviour `PreChangeRepositoryInfoTest` pins, and
+    # these are the only bytes in the tree a pre-change node actually produced.
     "local": bytes.fromhex(
         "05" "6c6f63616c"
         "0d" "4c6f63616c2073746f72616765"
@@ -131,6 +140,66 @@ LIVE_REPOSITORY_INFO = {
         "07" "7669727475616c"
         "14" "5669727475616c207265706f7369746f72696573"
         "0000000000000000"
+    ),
+}
+
+# --- `mod.objects.repository_info`, as astral-go `21acd1b` encodes it --------
+
+# Not a capture. No node on this machine speaks the six-field record -- the one
+# that does is newer than `reference.py`'s astrald pin -- so these payloads come
+# from the authority below the live node: astral-go's own encoder, run over the
+# four values named below and read out as hex. That is what Tier A asks for, a
+# corpus the SDK under test had no hand in producing.
+#
+# The last two cases carry the weight. `local` and `memory` differ in `Kind` and
+# in the trailing `Concurrent` byte only; both answer an empty `Children`, so
+# `Children` cannot tell an empty group from a leaf and `Kind` is the only field
+# that can.
+REPOSITORY_INFO_VECTORS = {
+    # RepositoryInfo{Name: "mem0", Label: "Default memory", Free: 67108864,
+    #                Kind: "repository", Children: []}
+    "leaf": bytes.fromhex(
+        "04" "6d656d30"
+        "0e" "44656661756c74206d656d6f7279"
+        "0000000004000000"
+        "0a" "7265706f7369746f7279"
+        "00000000"
+        "00"
+    ),
+    # RepositoryInfo{Name: "main", Label: "World", Kind: "group",
+    #                Children: ["device", "virtual", "network"]}
+    "sequential group": bytes.fromhex(
+        "04" "6d61696e"
+        "05" "576f726c64"
+        "0000000000000000"
+        "05" "67726f7570"
+        "00000003"
+        "01" "06" "646576696365"
+        "01" "07" "7669727475616c"
+        "01" "07" "6e6574776f726b"
+        "00"
+    ),
+    # RepositoryInfo{Name: "local", Label: "Local storage", Kind: "group",
+    #                Children: ["fs1", "fs0"], Concurrent: true}
+    "concurrent group": bytes.fromhex(
+        "05" "6c6f63616c"
+        "0d" "4c6f63616c2073746f72616765"
+        "0000000000000000"
+        "05" "67726f7570"
+        "00000002"
+        "01" "03" "667331"
+        "01" "03" "667330"
+        "01"
+    ),
+    # RepositoryInfo{Name: "memory", Label: "In-memory repos", Kind: "group",
+    #                Children: []}
+    "empty sequential group": bytes.fromhex(
+        "06" "6d656d6f7279"
+        "0f" "496e2d6d656d6f7279207265706f73"
+        "0000000000000000"
+        "05" "67726f7570"
+        "00000000"
+        "00"
     ),
 }
 
@@ -183,20 +252,77 @@ LEASE_FRAME = framed(
 class RepositoryInfoWireTest(unittest.TestCase):
     """`mod.objects.repository_info`, and R-8's unsigned `Free`."""
 
-    def test_the_live_payloads_decode_and_re_encode_byte_for_byte(self):
+    def test_the_go_vectors_decode_and_re_encode_byte_for_byte(self):
         expected = {
-            "local": ("Local storage", 9251950592),
-            "memory": ("In-memory repos", 134217657),
-            "virtual": ("Virtual repositories", 0),
+            "leaf": ("mem0", "Default memory", 67108864, "repository", [], False),
+            "sequential group": (
+                "main",
+                "World",
+                0,
+                "group",
+                ["device", "virtual", "network"],
+                False,
+            ),
+            "concurrent group": (
+                "local",
+                "Local storage",
+                0,
+                "group",
+                ["fs1", "fs0"],
+                True,
+            ),
+            "empty sequential group": (
+                "memory",
+                "In-memory repos",
+                0,
+                "group",
+                [],
+                False,
+            ),
         }
-        for name, raw in LIVE_REPOSITORY_INFO.items():
-            with self.subTest(repo=name):
+        for case, raw in REPOSITORY_INFO_VECTORS.items():
+            with self.subTest(case=case):
                 info = RepositoryInfo.read_payload(object_reader(raw))
-                label, free = expected[name]
+                name, label, free, kind, children, concurrent = expected[case]
                 self.assertEqual(info.name, name)
                 self.assertEqual(info.label, label)
                 self.assertEqual(int(info.free), free)
+                self.assertEqual(info.kind, kind)
+                self.assertEqual(info.children, children)
+                self.assertEqual(info.concurrent, concurrent)
                 self.assertEqual(payload_bytes(info), raw)
+
+    def test_kind_and_not_children_tells_an_empty_group_from_a_leaf(self):
+        """The trap the flat `Children` list sets.
+
+        A leaf and a childless group are both `Children: []`, so the obvious
+        `len(info.children) > 0` reads every empty group as a repository. Only
+        `Kind` separates them, and `is_group` is the test for it."""
+        leaf = RepositoryInfo.read_payload(
+            object_reader(REPOSITORY_INFO_VECTORS["leaf"])
+        )
+        empty = RepositoryInfo.read_payload(
+            object_reader(REPOSITORY_INFO_VECTORS["empty sequential group"])
+        )
+        self.assertEqual(leaf.children, empty.children)
+        self.assertFalse(leaf.is_group)
+        self.assertTrue(empty.is_group)
+        self.assertEqual(leaf.kind, REPOSITORY_KIND_REPOSITORY)
+        self.assertEqual(empty.kind, REPOSITORY_KIND_GROUP)
+
+    def test_child_order_is_the_lookup_order_and_survives_the_round_trip(self):
+        """`Children` carries priority, so a reordering is a behaviour change."""
+        info = RepositoryInfo.read_payload(
+            object_reader(REPOSITORY_INFO_VECTORS["sequential group"])
+        )
+        self.assertEqual(info.children, ["device", "virtual", "network"])
+        back = RepositoryInfo.read_payload(object_reader(payload_bytes(info)))
+        self.assertEqual(back.children, ["device", "virtual", "network"])
+
+    def test_an_empty_children_list_is_a_bare_zero_count(self):
+        """No presence byte, no element: four zero bytes and nothing else."""
+        raw = payload_bytes(RepositoryInfo(name="x", label="y", kind="repository"))
+        self.assertEqual(raw[-5:], bytes.fromhex("00000000") + b"\x00")
 
     def test_free_is_unsigned_and_the_sentinel_is_max_uint64(self):
         """R-8 and astral-docs bug D-22. The docs example `Free: -1`; the field
@@ -205,7 +331,9 @@ class RepositoryInfoWireTest(unittest.TestCase):
         nothing."""
         self.assertEqual(FREE_UNKNOWN, (1 << 64) - 1)
         raw = payload_bytes(RepositoryInfo(name="x", label="y", free=FREE_UNKNOWN))
-        self.assertEqual(raw[-8:], b"\xff" * 8)
+        # `Free` is no longer the tail of the record: `Kind`, `Children` and
+        # `Concurrent` follow it. Slice past the two one-byte strings instead.
+        self.assertEqual(raw[4:12], b"\xff" * 8)
         info = RepositoryInfo.read_payload(object_reader(raw))
         self.assertEqual(int(info.free), FREE_UNKNOWN)
         self.assertTrue(info.free_unknown)
@@ -216,15 +344,49 @@ class RepositoryInfoWireTest(unittest.TestCase):
         self.assertFalse(info.free_unknown)
         self.assertEqual(info.free_bytes, 1024)
 
-    def test_the_field_specs_are_two_string8s_and_a_uint64(self):
+    def test_the_field_specs_are_the_six_the_node_sends(self):
         self.assertEqual(
             [(f.wire_name, f.spec) for f in RepositoryInfo.FIELDS],
             [
                 ("Name", Primitive("string8")),
                 ("Label", Primitive("string8")),
                 ("Free", Primitive("uint64")),
+                ("Kind", Primitive("string8")),
+                ("Children", Slice("string8")),
+                ("Concurrent", Primitive("bool")),
             ],
         )
+
+
+class PreChangeRepositoryInfoTest(unittest.TestCase):
+    """A node older than astrald `c520482e` sends three fields, and is refused.
+
+    The alternative -- stopping at EOF and defaulting `Kind`, `Children` and
+    `Concurrent` -- would report every repository on an old node as a leaf with
+    no members, which is indistinguishable from the truth and therefore worse
+    than an error. astral-go takes the same break.
+    """
+
+    def test_a_three_field_payload_no_longer_decodes(self):
+        """`ShortRead`, and specifically at the `Kind` length byte: the old
+        record ends exactly where the new one expects the fourth field."""
+        for name, raw in PRE_CHANGE_REPOSITORY_INFO.items():
+            with self.subTest(repo=name):
+                with self.assertRaises(ShortRead) as caught:
+                    RepositoryInfo.read_payload(object_reader(raw))
+                self.assertIn(f"offset {len(raw)}", str(caught.exception))
+
+    def test_the_prefix_the_old_node_sent_is_still_the_prefix_sent_now(self):
+        """The break is additive: the first three fields did not move."""
+        for name, raw in PRE_CHANGE_REPOSITORY_INFO.items():
+            with self.subTest(repo=name):
+                free = int.from_bytes(raw[-8:], "big")
+                info = RepositoryInfo(
+                    name=name,
+                    label=raw[len(name) + 2 : -8].decode(),
+                    free=free,
+                )
+                self.assertEqual(payload_bytes(info)[: len(raw)], raw)
 
 
 class ProbeWireTest(unittest.TestCase):
@@ -827,14 +989,21 @@ class RepositoriesOpTest(ObjectsCase):
     async def test_it_returns_typed_repository_info(self):
         frames = [
             ("mod.objects.repository_info", raw)
-            for raw in LIVE_REPOSITORY_INFO.values()
+            for raw in REPOSITORY_INFO_VECTORS.values()
         ]
         mock = MockApphost(routes={OP_REPOSITORIES: Accept(objects=frames, eos=True)})
         async with mock:
             o = await self.objects(mock)
             repos = await o.repositories()
-        self.assertEqual([r.name for r in repos], ["local", "memory", "virtual"])
-        self.assertEqual(int(repos[0].free), 9251950592)
+        self.assertEqual(
+            [r.name for r in repos], ["mem0", "main", "local", "memory"]
+        )
+        self.assertEqual(int(repos[0].free), 67108864)
+        # The group fields survive the op, not merely the codec: a flat stream
+        # of records is where a dropped `Children` would go unnoticed.
+        self.assertEqual([r.is_group for r in repos], [False, True, True, True])
+        self.assertEqual(repos[1].children, ["device", "virtual", "network"])
+        self.assertEqual([r.concurrent for r in repos], [False, False, True, False])
         self.assertEqual(self.sent(mock), OP_REPOSITORIES)
         self.assert_no_faults(mock)
 

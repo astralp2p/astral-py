@@ -234,6 +234,8 @@ __all__ = [
     "Objects",
     "Probe",
     "QueryTag",
+    "REPOSITORY_KIND_GROUP",
+    "REPOSITORY_KIND_REPOSITORY",
     "REPO_DEVICE",
     "REPO_GROUPS",
     "REPO_LOCAL",
@@ -321,6 +323,18 @@ FREE_UNKNOWN: Final = 0xFFFF_FFFF_FFFF_FFFF
 
 R-8: the field is `astral.Uint64` in astral-go and the docs example it as a
 signed `-1`, which is these bytes. `RepositoryInfo.free_unknown` is the test.
+"""
+
+REPOSITORY_KIND_REPOSITORY: Final = "repository"
+"""`repository_info.Kind` for a repository that stores objects itself."""
+
+REPOSITORY_KIND_GROUP: Final = "group"
+"""`repository_info.Kind` for a group that delegates to its members.
+
+A group is told from a leaf by this field alone: an empty group and a leaf both
+answer an empty `Children`. `RepositoryInfo.is_group` is the test. The two
+spellings are astral-go `21acd1b`'s `RepositoryKindRepository` and
+`RepositoryKindGroup`.
 """
 
 MAX_PUSH_SIZE: Final = 32 * 1024
@@ -427,7 +441,8 @@ class RegistrationLease:
 
 @record("mod.objects.repository_info")
 class RepositoryInfo:
-    """One repository: its name, its human label, and its free space in bytes.
+    """One repository: its name, its label, its free space, and -- for a group --
+    the members it delegates to.
 
     `free` is a **`uint64`**, and `FREE_UNKNOWN` is the value that means unknown
     or unbounded (R-8). The docs example it as a signed `-1`, which is the same
@@ -436,11 +451,38 @@ class RepositoryInfo:
 
     `name` is what a `repo=` argument takes. `label` is prose and is not an
     identifier: `furry-bolt` labels its `main` repository `World`.
+
+    **`kind` is the only field that tells a group from a leaf.** `children` is
+    empty for a leaf *and* for a group with no members, so `len(children)` reads
+    an empty group as a repository; `is_group` is the test. `concurrent`
+    governs reads alone: a group that sets it races its members and takes the
+    first answer, one that does not tries them in `children` order.
+
+    `kind`, `children` and `concurrent` arrived together in astrald `c520482e`,
+    and adding them is a wire break in both directions: a node older than that
+    sends the three-field record, whose payload stops one byte into `kind`, and
+    this record's own output is unreadable to a node that has not taken the
+    change. astral-go took the identical break.
+
+    That revision is **newer than `tests/reference.py`'s pins** -- astrald
+    `d5bb0bbd`, astral-go `5b1d282`, both cut hours earlier -- so no `path:line`
+    citation to the new field can resolve, and none is written. The evidence is
+    `RepositoryInfoWireTest`, whose vectors are bytes astral-go `21acd1b`
+    encodes. Moving the pins is a re-read of every citation in the package and
+    is tracked on its own.
     """
 
     name: str = wire("Name", Primitive("string8"))
     label: str = wire("Label", Primitive("string8"))
     free: int = wire("Free", Primitive("uint64"))
+    kind: str = wire("Kind", Primitive("string8"))
+    children: list[str] = wire("Children", Slice("string8"))
+    concurrent: bool = wire("Concurrent", Primitive("bool"))
+
+    @property
+    def is_group(self) -> bool:
+        """Whether this is a group of repositories rather than a leaf."""
+        return self.kind == REPOSITORY_KIND_GROUP
 
     @property
     def free_unknown(self) -> bool:
@@ -1078,6 +1120,13 @@ class Objects(ModuleClient):
         Answers ten entries on `furry-bolt`, including the eight group names and
         the two concrete repositories behind them. `free` is a `uint64` and
         `FREE_UNKNOWN` is the unknown sentinel.
+
+        **The stream is flat.** One record per registered repository, in no
+        order the caller may rely on; the hierarchy is each group's `children`,
+        naming members that arrive as their own records. A member may be named
+        by more than one group -- astrald enforces neither a single parent nor
+        the absence of cycles -- so a reader that walks `children` recursively
+        keeps its own visited set.
 
         The op excludes the network zone server-side, so this is always the local
         inventory whatever zone the query carries.
