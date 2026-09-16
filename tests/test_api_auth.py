@@ -915,10 +915,11 @@ class SignContractOpTest(AuthCase):
 
     @bounded()
     async def test_the_terminator_is_sent_because_this_op_breaks_on_it(self):
-        """`auth.sign_contract`'s reader is `ch.Switch(handler, BreakOnEOS)`,
-        so the terminator ends the exchange cleanly. A body-input op whose reader
-        omits `BreakOnEOS` answers the same frame with an `error_message`, which
-        is why the terminator is a per-op contract rather than a protocol rule."""
+        """`auth.sign_contract`'s reader is `channel.Batch`, which breaks on the
+        terminator and mirrors it. A body-input op whose reader omits an `eos`
+        branch answers the same frame with an `error_message`, which is why the
+        terminator is a per-op contract rather than a protocol rule.
+        `ReaderSourceTest` pins the reader against astrald's own source."""
         api, route, _ = await self.node(self.signed_frame())
         await api.sign_contract(a_contract())
         self.assertEqual(route.types[-1], "eos")
@@ -1188,6 +1189,43 @@ class DocstringTest(unittest.TestCase):
         doc = auth_module.__doc__ or ""
         found = set(re.findall(r"`(auth\.[a-z_]+)`", doc))
         self.assertEqual(found, {OP_INDEX, OP_SIGN_CONTRACT})
+
+
+class ReaderSourceTest(unittest.TestCase):
+    """Both ops read with `channel.Batch`, read out of astrald and astral-go.
+
+    The module carried `ch.Switch(handler, channel.BreakOnEOS)` for
+    `auth.sign_contract` while the op had been `channel.Batch` at every revision
+    this SDK has pinned, and nothing here read the source, so the claim drifted
+    silently and took its `expect=1` rationale with it.
+    """
+
+    def source(self, repo: str, path: str) -> str:
+        try:
+            return reference.read(repo, path)
+        except reference.Unavailable as exc:  # pragma: no cover -- may be absent
+            self.skipTest(str(exc))
+
+    def test_sign_contract_reads_with_batch_and_not_a_bare_switch(self):
+        src = self.source(reference.ASTRALD, "mod/auth/src/op_sign_contract.go")
+        self.assertIn("return channel.Batch(ch, func(c *auth.Contract)", src)
+        self.assertNotIn("ch.Switch", src)
+        self.assertNotIn("BreakOnEOS", src)
+
+    def test_index_reads_with_batch_too(self):
+        """The two ops share a reader, which is why they share a terminator
+        contract and an `expect=n` reader on this side."""
+        src = self.source(reference.ASTRALD, "mod/auth/src/op_index.go")
+        self.assertIn("channel.Batch", src)
+
+    def test_batch_mirrors_an_explicit_terminator_and_not_an_eof(self):
+        """The half the module's `eos` claim rests on: a stream the caller ends
+        with `eos` is answered with a final `eos`, and one ended by EOF is not.
+        """
+        src = self.source(reference.ASTRAL_GO, "astral/channel/batch.go")
+        self.assertIn("if !sawEOS {\n\t\treturn nil\n\t}", src)
+        self.assertIn("return ch.Send(&astral.EOS{})", src)
+        self.assertIn("MarkEOS(&sawEOS)", src)
 
 
 class CitationTest(unittest.TestCase):

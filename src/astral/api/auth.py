@@ -13,7 +13,7 @@ a per-op contract and is not discoverable from the wire):
 | Op | Mode | Answer | Effect |
 |---|---|---|---|
 | `auth.index` | RR, BD with no `id` | `ack` \\| `error_message`, one per input | **mutates** the local contract index |
-| `auth.sign_contract` | WA | `mod.auth.signed_contract` \\| `error_message` | privileged, no state written |
+| `auth.sign_contract` | WA | `mod.auth.signed_contract` \\| `error_message`, one per input | privileged, no state written |
 
 Both are the whole of the module. `shell.spec` on `furry-bolt` lists exactly
 `auth.index` and `auth.sign_contract`, verified this session, and astral-go's
@@ -52,12 +52,21 @@ that is already set (`auth.ErrAlreadySigned`), which this op can never reach.
 A contract between two identities whose keys live on different nodes is signed
 one half at a time through `user.accept_membership`, not here.
 
-**`auth.sign_contract` takes an `eos`, and that is not inferable from the wire.**
-Its reader is `ch.Switch(handler, channel.BreakOnEOS)`, so a terminator ends the
-exchange cleanly and this module sends one. A body-input op whose reader omits
-`BreakOnEOS` answers the same terminator with an `error_message`
+**`auth.sign_contract` is a batch op, and takes an `eos` that is not inferable
+from the wire.** Its reader is `channel.Batch`
+(`astrald/mod/auth/src/op_sign_contract.go`), the same reader `auth.index`'s
+batch form uses: it reads contracts until `eos` or EOF, answers one
+`mod.auth.signed_contract` or `error_message` per input in input order, and
+**mirrors the input stream's terminator** -- an explicit `eos` is answered with a
+final `eos`, a stream ended by EOF is not (`astral/channel/batch.go` at astral-go
+`5b1d282`). A body-input op whose reader omits an `eos` branch answers the same
+terminator with an `error_message`
 (`astral-go/astral/channel/switch.go:101`), so the terminator is a per-op
 contract rather than a protocol rule.
+
+`sign_contract()` sends one contract and reads one answer. The node's batch form
+is reachable, and no `sign_contract_many` is declared here: signing is
+privileged and every caller in this SDK signs one contract at a time.
 
 **An embedded struct nests in JSON when it is a pointer and flattens when it is a
 value.** Both halves are verified live against `furry-bolt`:
@@ -466,15 +475,18 @@ class Auth(ModuleClient):
         nothing: the answer is durable only after `objects.store`, and it
         authorizes nothing until `index()`.
 
-        An `eos` terminates the input, because this op's reader breaks on one
-        (`channel.BreakOnEOS`). A body-input op whose reader omits `BreakOnEOS`
-        answers the same terminator with an `error_message`, so the terminator is
-        a per-op contract.
+        An `eos` terminates the input, because this op's reader is
+        `channel.Batch` and breaks on one. A body-input op whose reader omits an
+        `eos` branch answers the same terminator with an `error_message`, so the
+        terminator is a per-op contract.
 
-        `expect=1` rather than reading to the stream's end: the answer is one
-        object and the op then loops on its own reader until the stream closes,
-        so a reader waiting for a terminator would wait for the close it is
-        itself supposed to perform.
+        `expect=1` rather than `expect=None`, for the reason `Client.call_with`
+        states: `expect=n` interleaves, one send then one read, and this op
+        answers as it goes. The op mirrors the terminator, so the stream does
+        end in a final `eos`; reading to it would be `expect=None`, and the
+        exchange is one contract and one answer, so there is nothing to wait
+        for after it. The mirrored `eos` is left unread, as `index_many` leaves
+        its own.
         """
         if not isinstance(contract, Contract):
             raise BadArgumentType(
