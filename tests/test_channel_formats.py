@@ -194,14 +194,20 @@ class EmitterReadsBackTest(unittest.IsolatedAsyncioTestCase):
             "spelling has no third state and neither does this one, so the "
             "divergence is named here rather than repaired"
         ),
-        "mod.tor.endpoint": (
-            "the zero value's json form is the literal `unknown`, which "
-            "astral-go's UnmarshalText reads back as the zero endpoint, while "
-            "its binary form is two bytes where ReadFrom wants 37. Both halves "
-            "are astral-go's (api/tor/endpoint.go, digest.go at 6ea26c7) and "
-            "neither can be repaired without leaving the node behind"
+        "mod.tor.digest": (
+            "the zero value's binary form is 35 null bytes, which ReadFrom maps "
+            "back to the zero digest since astral-go eeb31e3, while its text "
+            "and json form is the bare `.onion` that UnmarshalText refuses on "
+            "length. astral-go 54f55b0 repaired mod.tor.endpoint's text form "
+            "and left the digest's, so the divergence is named here rather than "
+            "repaired: the binary form is the one a node sends"
         ),
     }
+    """`mod.tor.endpoint` was the second entry here until astral-go `eeb31e3`
+    and `54f55b0` (in `main` at `5b1d282`) made its zero value 37 readable bytes
+    and its text form `unknown`. All four framings agree on it now, so it is
+    swept with everything else and an entry would fail on its own
+    `assertNotEqual`."""
 
     async def roundtrip(self, fmt: str, obj: object) -> object | str:
         """What one framing makes of one object, or `refused` if it will not.
@@ -228,11 +234,13 @@ class EmitterReadsBackTest(unittest.IsolatedAsyncioTestCase):
     async def test_every_registered_zero_value_reads_the_same_in_every_framing(self):
         """115 types, four framings, one assertion: they agree.
 
-        Agreeing on a refusal counts. `bip137sig.entropy` and `mod.tor.digest`
-        have zero values astral-go itself cannot re-read, and reproducing that
+        Agreeing on a refusal counts. `bip137sig.entropy` has a zero value
+        astral-go itself cannot re-read in any framing, and reproducing that
         faithfully is the contract; what the four framings must never do is
         disagree, because then a value crosses one channel and is lost on
-        another with nothing raised on either.
+        another with nothing raised on either. `mod.tor.digest` is the case
+        where astral-go re-reads one framing and not the others, so it is a
+        named divergence above rather than an agreed refusal.
         """
         for name in default_blueprints().ordered():
             obj = default_blueprints().new(name)

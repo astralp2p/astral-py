@@ -3,10 +3,12 @@
 No ops ship in `endpoints.py`, so there is no Tier B here. What there is:
 
 - **Tier A** pins each type's layout, zero value, text form, JSON form and
-  parser. Every byte vector is a byte `furry-bolt` produced -- `objects.new`
-  builds each zero value server-side -- and every field declaration is checked
-  against the blueprint `objects.get_blueprint` derived, which is the node
-  describing its own type rather than this suite restating a Go struct.
+  parser. Every byte vector is a byte a node produced -- `objects.new` builds
+  each zero value server-side -- and every field declaration is checked against
+  the blueprint `objects.get_blueprint` derived, which is the node describing
+  its own type rather than this suite restating a Go struct. The two tor zero
+  values were re-read after astral-go `eeb31e3` changed their width; the
+  comment above `LIVE_ZERO_PAYLOADS` says which node answered which.
 - **Tier C** asks the node for both again, so a node that changed a layout
   fails here rather than corrupting a `mod.nodes.link_info` decode much later.
 
@@ -52,23 +54,51 @@ from astral.codec.binary import object_reader, payload_bytes, read_object
 from astral.codec.jsoncodec import marshal, unmarshal
 from astral.codec.text import decode as text_decode
 from astral.codec.text import encode as text_encode
-from astral.errors import BadArgumentType, ParseError, ShortRead, StreamCorrupted
+from astral.errors import (
+    BadArgumentType,
+    ParseError,
+    RangeError,
+    ShortRead,
+    StreamCorrupted,
+)
 from astral.registry import default_blueprints
 from astral.spec import Primitive, Ptr, Ref
 from astral.types import Identity
 
 import live_support
+import reference
 from mock_apphost import bounded, frame
 
-# --- vectors, all of them bytes the node sent ----------------------------
+# --- vectors, all of them bytes a node sent ------------------------------
 
-# `objects.new?type=<name>` on `furry-bolt`. Each is the zero value the node
-# built and encoded with its own codec.
+# `objects.new?type=<name>`. Each is the zero value a node built and encoded
+# with its own codec; none is a reading of a Go struct.
+#
+# The three that no upstream change has touched are `furry-bolt`'s answers.
+#
+# The two tor payloads changed width when astral-go `eeb31e3` (PR #90) landed,
+# so `furry-bolt`'s old answers -- `0000` for the endpoint and an empty payload
+# for the digest -- are bytes the fixed reader cannot consume, and pinning them
+# would pin the defect. Their provenance is therefore two sources rather than
+# one:
+#
+# - read from a node built at astrald `31ab2b6d` against astral-go `5b1d282`,
+#   raw, with no SDK decoder in the path and confirmed through a second encoder
+#   (`&out=base64`): 37 null bytes and 35 null bytes. That node was wired with a
+#   `replace` directive, so it is a measurement and not the deployment.
+# - reproduced from astral-go `5b1d282` itself, the revision astrald `114a40de`
+#   requires, by encoding both zero values with its own `WriteTo`. Same bytes.
+#
+# `TorUpstreamFixTest` reads that revision and checks the widths against it, so
+# the pin is falsifiable without a node. **Tier C fails on these two against any
+# node whose build predates astrald `114a40de`**, which is the intended signal:
+# the node is the authority, and a red test names the side that is behind.
+# Re-read both from `furry-bolt` once it carries that astrald or later.
 LIVE_ZERO_PAYLOADS = {
     "mod.tcp.endpoint": bytes.fromhex("000000"),
     "mod.kcp.endpoint": bytes.fromhex("000000"),
-    "mod.tor.endpoint": bytes.fromhex("0000"),
-    "mod.tor.digest": b"",
+    "mod.tor.endpoint": bytes(37),
+    "mod.tor.digest": bytes(35),
     "mod.gateway.endpoint": bytes.fromhex("0000"),
 }
 
@@ -328,13 +358,51 @@ class TorDigestTest(unittest.TestCase):
         with self.assertRaises(ShortRead):
             read_object(object_reader(DIGEST_BYTES[:34]), "mod.tor.digest")
 
-    def test_the_zero_digest_encodes_and_cannot_be_decoded(self):
-        """astral-go's own asymmetry: `WriteTo` has no length check and
-        `ReadFrom` demands 35. The node proves it -- `objects.new?type=
-        mod.tor.digest` answers a zero-byte frame."""
-        self.assertEqual(payload_bytes(TorDigest()), b"")
-        with self.assertRaises(ShortRead):
-            read_object(object_reader(b""), "mod.tor.digest")
+    def test_the_zero_digest_is_thirty_five_nulls_and_round_trips(self):
+        """The asymmetry this test used to pin: `WriteTo` had no length check
+        and `ReadFrom` demanded 35, so the zero value wrote nothing and nothing
+        could read it back. astral-go `eeb31e3` writes `DigestSize` bytes for
+        every digest and reads all-null back as the zero value; this does both,
+        so `is_zero` survives the wire."""
+        payload = payload_bytes(TorDigest())
+        self.assertEqual(payload, bytes(35))
+        back = read_object(object_reader(payload), "mod.tor.digest")
+        self.assertEqual(back, TorDigest())
+        self.assertTrue(back.is_zero())
+
+    def test_thirty_five_nulls_decode_to_the_zero_digest_not_a_null_onion(self):
+        """A v3 address checksums its own key, so no real digest is all null.
+        Reading the null form back as a digest would make an endpoint the node
+        reports as unknown claim to name `aaaa...aaaa.onion`."""
+        built = TorDigest(bytes(35))
+        self.assertFalse(built.is_zero())
+        self.assertEqual(payload_bytes(built), bytes(35))
+        self.assertEqual(
+            read_object(object_reader(bytes(35)), "mod.tor.digest"), TorDigest()
+        )
+
+    def test_a_digest_of_the_wrong_length_never_reaches_the_wire(self):
+        """astral-go `eeb31e3` refuses it with `ErrInvalidDigestLength` rather
+        than writing a short frame: padding or truncating would put a different
+        address on the wire, and a short frame shifts every field after it."""
+        for length in (1, 34, 36):
+            with self.subTest(length=length):
+                with self.assertRaises(RangeError) as caught:
+                    payload_bytes(TorDigest(bytes(length)))
+                self.assertIn("35 bytes", str(caught.exception))
+
+    def test_a_real_digest_survives_the_all_null_rule(self):
+        """Mapping all-null back to the zero value must not swallow a digest
+        that is null everywhere but one byte -- the boundary the rule sits on.
+        `DIGEST` itself starts with a null byte, which covers the prefix half."""
+        almost_null = TorDigest(bytes(34) + b"\x01")
+        for digest in (DIGEST, almost_null):
+            with self.subTest(digest=repr(digest)):
+                payload = payload_bytes(digest)
+                self.assertEqual(len(payload), 35)
+                self.assertEqual(
+                    read_object(object_reader(payload), "mod.tor.digest"), digest
+                )
 
     def test_the_text_form_is_lowercase_base32_and_onion(self):
         self.assertEqual(DIGEST.text(), DIGEST_TEXT)
@@ -390,34 +458,49 @@ class TorEndpointTest(unittest.TestCase):
             read_object(object_reader(payload), "mod.tor.endpoint"), TOR
         )
 
-    def test_the_zero_endpoint_encodes_to_two_bytes_and_cannot_be_decoded(self):
-        """`objects.new?type=mod.tor.endpoint` answers `0000`, which its own
-        reader wants 37 bytes for. astral-go cannot read its own zero value and
-        neither can this -- the encoder matches the node, the decoder matches
-        the node's failure."""
-        self.assertEqual(payload_bytes(TorEndpoint()), bytes.fromhex("0000"))
+    def test_the_zero_endpoint_is_thirty_seven_bytes_and_decodes_to_itself(self):
+        """What this test used to pin: the encoder wrote two bytes where its own
+        reader wanted 37, so astral-go could not read its own zero value and
+        neither could this. astral-go `eeb31e3` made the digest fixed-width, so
+        the zero endpoint is 37 nulls and reads back as the zero endpoint --
+        which is how a link with no onion to report says "not known"."""
+        payload = payload_bytes(TorEndpoint())
+        self.assertEqual(payload, bytes(37))
+        back = read_object(object_reader(payload), "mod.tor.endpoint")
+        self.assertEqual(back, TorEndpoint())
+        self.assertTrue(back.is_zero())
+        self.assertEqual(back.address(), "unknown")
+
+    def test_a_short_zero_endpoint_is_still_a_short_read(self):
+        """The two bytes an unfixed node sends. The reader commits to 37 before
+        it reads, so the frame an old node puts on the wire is unreadable here
+        -- deliberately, because a lenient reader would resynchronise on
+        nothing and decode the rest of a `link_info` as something else."""
         with self.assertRaises(ShortRead):
             read_object(object_reader(bytes.fromhex("0000")), "mod.tor.endpoint")
 
-    def test_the_address_and_the_text_form_differ_for_the_zero_value(self):
-        """astral-go's `Address()` is `unknown` and its `MarshalText` is
-        `.onion:0`. Both reproduced; neither invented."""
+    def test_the_address_and_the_text_form_agree_for_the_zero_value(self):
+        """They used to differ: `Address()` was `unknown` and `MarshalText` was
+        `.onion:0`, which astral-go's own `UnmarshalText` refused on digest
+        length. astral-go `54f55b0` made `MarshalText` delegate to `Address()`,
+        as `MarshalJSON` already did."""
         zero = TorEndpoint()
         self.assertTrue(zero.is_zero())
         self.assertEqual(zero.address(), "unknown")
-        self.assertEqual(zero.text(), ".onion:0")
+        self.assertEqual(zero.text(), "unknown")
         self.assertEqual(marshal(zero), "unknown")
 
-    def test_the_zero_value_round_trips_through_json_and_not_through_text(self):
-        """The one round-trippable spelling is `unknown`, which is what
-        `MarshalJSON` emits. `MarshalText`'s `.onion:0` is refused by
-        astral-go's own `UnmarshalText`, and this SDK does not invent a third
-        spelling to close the hole."""
+    def test_the_zero_value_round_trips_through_json_and_through_text(self):
+        """`unknown` is the one spelling of the zero endpoint and all three
+        encoders emit it, so the text channel now carries it too. The
+        `.onion:0` form its parser refused is no longer produced anywhere."""
         zero = TorEndpoint()
         self.assertEqual(unmarshal("mod.tor.endpoint", "unknown"), zero)
         self.assertEqual(TorEndpoint.parse("unknown"), zero)
+        self.assertEqual(TorEndpoint.parse(zero.text()), zero)
+        self.assertEqual(text_decode(text_encode(zero)), zero)
         with self.assertRaises(ParseError):
-            TorEndpoint.parse(zero.text())
+            TorEndpoint.parse(".onion:0")
 
     def test_a_populated_endpoint_renders_the_same_string_three_ways(self):
         expected = f"{DIGEST_TEXT}:1791"
@@ -448,6 +531,53 @@ class TorEndpointTest(unittest.TestCase):
 
     def test_the_text_codec_round_trips_a_populated_endpoint(self):
         self.assertEqual(text_decode(text_encode(TOR)), TOR)
+
+
+class TorUpstreamFixTest(unittest.TestCase):
+    """The two tor behaviours above are ported, so upstream is read, not recalled.
+
+    They document changes merged after this suite's astral-go pin, so each names
+    its own revision and is read there -- the mechanism `tests/reference.py`
+    exists for. Absent reference, skip; present and disagreeing, fail, because
+    then this module is making a false statement about the protocol.
+    """
+
+    GO = reference.ASTRAL_GO
+    REV = "5b1d282"
+    """astral-go `main` with both fixes: `eeb31e3` (PR #90, the fixed-width
+    digest) and `54f55b0` (PR #91, the text form). astrald `114a40de` requires
+    exactly this revision, so it is the first astrald a node can carry it in."""
+
+    def source(self, path: str) -> str:
+        try:
+            return reference.read(self.GO, path, self.REV)
+        except reference.Unavailable as exc:  # pragma: no cover -- may be absent
+            self.skipTest(str(exc))
+
+    def test_the_digest_writer_is_fixed_width_upstream(self):
+        digest = self.source("api/tor/digest.go")
+        self.assertIn("ErrInvalidDigestLength", digest)
+        self.assertIn("const DigestSize = 35", digest)
+        self.assertEqual(TorDigest.SIZE, 35)
+        # the zero value's wire form, and the read that maps it back
+        self.assertIn("zeroDigest", digest)
+        self.assertIn("bytes.Equal(v, zeroDigest[:])", digest)
+
+    def test_the_endpoint_text_form_delegates_to_address_upstream(self):
+        endpoint = self.source("api/tor/endpoint.go")
+        marshal_text = endpoint.partition("func (e Endpoint) MarshalText()")[2]
+        self.assertTrue(marshal_text, "MarshalText is not declared upstream")
+        body = marshal_text.partition("\n}")[0]
+        self.assertIn("e.Address()", body)
+        self.assertNotIn("Sprintf", body)
+
+    def test_the_widths_this_module_pins_are_the_ones_upstream_declares(self):
+        """`DigestSize` bytes for the digest and `DigestSize` + a `uint16` for
+        the endpoint, which is what the vectors above carry."""
+        self.assertEqual(LIVE_ZERO_PAYLOADS["mod.tor.digest"], bytes(TorDigest.SIZE))
+        self.assertEqual(
+            LIVE_ZERO_PAYLOADS["mod.tor.endpoint"], bytes(TorDigest.SIZE + 2)
+        )
 
 
 class GatewayEndpointTest(unittest.TestCase):

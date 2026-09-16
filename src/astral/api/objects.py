@@ -195,7 +195,7 @@ from ..stream import Stream
 # the exact py.typed failure `api/base.py` exists to prevent, and one that
 # `get_type_hints(cls)` does not show, because that walks `__mro__` and uses each
 # base's own globals.
-from ..types import Duration, Identity, Nonce, ObjectID, Size, Zone
+from ..types import Duration, Identity, Nonce, ObjectID, Size, Time, Zone
 from .auth import Action
 from .base import ModuleClient
 
@@ -245,6 +245,7 @@ __all__ = [
     "REPO_REMOVABLE",
     "REPO_SYSTEM",
     "REPO_VIRTUAL",
+    "RegistrationLease",
     "RepositoryInfo",
     "SearchQuery",
     "SearchResult",
@@ -358,6 +359,7 @@ concatenates the blobs in order, so chunking is invisible to the stored object.
 
 _SPECS: Final[dict[str, Spec]] = {
     "alloc": Primitive("uint64"),
+    "duration": Primitive("duration"),
     "except": Primitive("string8"),
     "follow": Primitive("bool"),
     "id": Primitive("object_id.sha256"),
@@ -400,6 +402,30 @@ class Probe:
     repo: str = wire("Repo", Primitive("string8"))
     mime: str = wire("Mime", Primitive("string8"))
     time: Duration = wire("Time", Primitive("duration"))
+
+
+@record("mod.objects.registration_lease")
+class RegistrationLease:
+    """The lease a node grants an external searcher, describer or finder.
+
+    A registration lasts only for its lease; the registrant renews it by
+    repeating the registration op before the lease ends. Letting it end removes
+    the registration, and the node sends no notice when that happens -- expiry
+    is silent, because a registrant that has stopped answering is the case the
+    lease exists for and is not there to be told.
+
+    The node grants the lease rather than taking the one asked for: it clamps the
+    requested `duration` to its own maximum, so `duration` here is what was
+    granted and is never longer than what was requested.
+
+    `duration` and `expires_at` are the same lease from two vantage points.
+    `duration` is relative and needs no agreement about the current time, so a
+    registrant schedules renewal from it; `expires_at` is the node's own record
+    of when the lease ends.
+    """
+
+    duration: Duration = wire("Duration", Primitive("duration"))
+    expires_at: Time = wire("ExpiresAt", Primitive("time"))
 
 
 @record("mod.objects.repository_info")
@@ -867,6 +893,18 @@ class WriterContext:
 
 
 # --- argument discipline -------------------------------------------------
+
+
+def _register(op: str, duration: "Duration | int | None") -> str:
+    """Build a registration query, carrying `duration` only when one was asked for.
+
+    An omitted `duration` leaves the lease to the node's default, so the argument
+    is dropped rather than sent as a zero: astrald reads a zero as "no request"
+    too, but sending nothing is what the op documents and keeps the two readings
+    from having to agree.
+    """
+    params: dict[str, Any] = {} if duration is None else {"duration": duration}
+    return querystring.build(op, _encode(params))
 
 
 def _encode(values: dict[str, Any]) -> dict[str, str]:
@@ -1784,48 +1822,65 @@ class Objects(ModuleClient):
 
     # --- external providers ---
 
-    async def register_searcher(self, **kw: Any) -> None:
+    async def register_searcher(
+        self, duration: Duration | int | None = None, **kw: Any
+    ) -> RegistrationLease:
         """Register this identity as an external searcher. RR. **Mutates.**
 
         Design section 4.6: the registration is **not** channel-scoped. The op
-        answers one `ack` and this closes the channel; the node keeps the
-        registration and sends an ordinary `objects.search` query to this
-        identity whenever it searches. The app serves that query on its own
-        inbound handler, which is `astral.serve`'s business, and re-registers
-        after every reconnect, which is `astral.registrar`'s.
+        answers one `mod.objects.registration_lease` and this closes the channel;
+        the node keeps the registration for that lease and sends an ordinary
+        `objects.search` query to this identity whenever it searches. The app
+        serves that query on its own inbound handler, which is `astral.serve`'s
+        business, and re-registers after every reconnect, which is
+        `astral.registrar`'s.
+
+        The registration lasts only for the lease returned. Calling this again
+        before it ends renews the registration in place rather than adding a
+        second; letting it end removes the registration silently. `duration` is a
+        request the node clamps to its own maximum, and `None` leaves the lease to
+        the node's default.
 
         Local-only: a network-origin query is rejected outright. The caller must
         have a **non-zero identity that is not the node's own**, so an anonymous
         guest -- for whom the router substitutes the node's identity -- answers
         `error_message` rather than registering.
         """
-        self._expect(
-            await self._c.call_one(OP_REGISTER_SEARCHER, **kw),
-            Ack,
+        return self._expect(
+            await self._c.call_one(_register(OP_REGISTER_SEARCHER, duration), **kw),
+            RegistrationLease,
             OP_REGISTER_SEARCHER,
         )
 
-    async def register_describer(self, **kw: Any) -> None:
+    async def register_describer(
+        self, duration: Duration | int | None = None, **kw: Any
+    ) -> RegistrationLease:
         """Register this identity as an external describer. RR. **Mutates.**
 
         The mirror of `register_searcher`; the node sends `objects.describe`
         queries with an `id` argument, and the app answers with
-        `mod.objects.describe_result` objects and an `eos`.
+        `mod.objects.describe_result` objects and an `eos`. The same lease and
+        renewal rules apply.
         """
-        self._expect(
-            await self._c.call_one(OP_REGISTER_DESCRIBER, **kw),
-            Ack,
+        return self._expect(
+            await self._c.call_one(_register(OP_REGISTER_DESCRIBER, duration), **kw),
+            RegistrationLease,
             OP_REGISTER_DESCRIBER,
         )
 
-    async def register_finder(self, **kw: Any) -> None:
+    async def register_finder(
+        self, duration: Duration | int | None = None, **kw: Any
+    ) -> RegistrationLease:
         """Register this identity as an external finder. RR. **Mutates.**
 
         The node sends `objects.find` queries with an `id` argument, and the app
-        answers with `identity` objects and an `eos`.
+        answers with `identity` objects and an `eos`. The same lease and renewal
+        rules apply.
         """
-        self._expect(
-            await self._c.call_one(OP_REGISTER_FINDER, **kw), Ack, OP_REGISTER_FINDER
+        return self._expect(
+            await self._c.call_one(_register(OP_REGISTER_FINDER, duration), **kw),
+            RegistrationLease,
+            OP_REGISTER_FINDER,
         )
 
     # --- debugging ---
@@ -1946,6 +2001,7 @@ OBJECTS_TYPES: Final[Sequence[type]] = (
     Descriptor,
     Probe,
     QueryTag,
+    RegistrationLease,
     RepositoryInfo,
     SearchQuery,
     SearchResult,

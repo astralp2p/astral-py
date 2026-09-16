@@ -35,8 +35,12 @@ import astral
 from astral.api import objects as objects_module
 from astral.api.objects import (
     CHUNK_SIZE,
+    CommitMsg,
+    CreateObjectAction,
+    Descriptor,
     FREE_UNKNOWN,
     MAX_PUSH_SIZE,
+    Objects,
     OBJECTS_TYPES,
     OP_BLUEPRINTS,
     OP_CONTAINS,
@@ -63,21 +67,18 @@ from astral.api.objects import (
     OP_SCAN,
     OP_SEARCH,
     OP_STORE,
+    Probe,
+    QueryTag,
+    RegistrationLease,
     REPO_GROUPS,
     REPO_MAIN,
+    RepositoryInfo,
+    SearchQuery,
+    SearchResult,
     TAG_EXCLUDE,
     TAG_OPTIONAL,
     TAG_OPTIONAL_EXCLUDE,
     TAG_REQUIRE,
-    CommitMsg,
-    CreateObjectAction,
-    Descriptor,
-    Objects,
-    Probe,
-    QueryTag,
-    RepositoryInfo,
-    SearchQuery,
-    SearchResult,
 )
 from astral.blueprint import Blueprint, Field, PrimitiveSpec, SliceSpec
 from astral.client import connect
@@ -97,7 +98,7 @@ from astral.querystring import parse
 from astral.registry import Blueprints, default_blueprints
 from astral.session import Session, flush_cancels
 from astral.spec import PRIMITIVE_TYPES, AnySpec, Primitive, Ptr
-from astral.types import Duration, Identity, ObjectID, Size, Zone
+from astral.types import Duration, Identity, ObjectID, Size, Time, Zone
 
 import live_support
 import reference
@@ -170,6 +171,11 @@ def error_frame(message: str) -> tuple[str, bytes]:
 
 ACK_FRAME = framed(Ack())
 EOS_FRAME = framed(EOS())
+
+LEASE_DURATION = Duration(60 * 60 * 1_000_000_000)
+LEASE_FRAME = framed(
+    RegistrationLease(duration=LEASE_DURATION, expires_at=Time(0))
+)
 
 
 # --- Tier A: the wire, on the bytes the node sent ------------------------
@@ -609,7 +615,7 @@ class ArgumentDisciplineTest(unittest.TestCase):
         """`apphost` needed three dicts: its `id` is an identity, an object id or
         a nonce depending on the op. Every `objects` op that declares `id`
         declares an `object_id.sha256` -- verified against the live registry."""
-        self.assertEqual(len(objects_module._SPECS), 16)
+        self.assertEqual(len(objects_module._SPECS), 17)
 
     def test_an_empty_repository_name_is_refused_with_the_reason(self):
         for op in (OP_SCAN, OP_CONTAINS, OP_DELETE, OP_PURGE):
@@ -1725,24 +1731,50 @@ class PurgeOpTest(ObjectsCase):
 
 
 class RegisterProviderOpTest(ObjectsCase):
-    """The three `objects.register_*` ops: RR, one `ack`, then close."""
+    """The three `objects.register_*` ops: RR, one lease, then close."""
 
     @bounded()
-    async def test_each_one_reads_an_ack_and_closes(self):
+    async def test_each_one_reads_a_lease_and_closes(self):
         """Design section 4.6: the registration is **not** channel-scoped.
-        astral-go's own client opens the channel, expects an `ack` and closes
-        it, contradicting the legacy SDK's "keep the stream open"."""
+        astral-go's own client opens the channel, reads the answer and closes
+        it, contradicting the legacy SDK's "keep the stream open".
+
+        The answer is a `mod.objects.registration_lease` and no longer an `ack`:
+        the registration lasts only for the lease, so an app that could not read
+        it would not know when to renew."""
         for op, call in (
             (OP_REGISTER_SEARCHER, "register_searcher"),
             (OP_REGISTER_DESCRIBER, "register_describer"),
             (OP_REGISTER_FINDER, "register_finder"),
         ):
             with self.subTest(op=op):
-                mock = MockApphost(routes={op: Accept(objects=[ACK_FRAME])})
+                mock = MockApphost(routes={op: Accept(objects=[LEASE_FRAME])})
                 async with mock:
                     o = await self.objects(mock)
-                    await getattr(o, call)()
+                    lease = await getattr(o, call)()
                 self.assertEqual(self.sent(mock), op)
+                self.assertEqual(lease.duration, LEASE_DURATION)
+
+    @bounded()
+    async def test_a_requested_duration_reaches_the_node(self):
+        """The node clamps what it is asked for, so the request has to arrive to
+        be clamped; an argument dropped on this side reads on the node as no
+        request at all and silently takes the default."""
+        mock = MockApphost(routes={OP_REGISTER_SEARCHER: Accept(objects=[LEASE_FRAME])})
+        async with mock:
+            o = await self.objects(mock)
+            await o.register_searcher(Duration(30 * 60 * 1_000_000_000))
+        self.assertEqual(self.sent(mock), OP_REGISTER_SEARCHER + "?duration=30m0s")
+
+    @bounded()
+    async def test_no_duration_sends_no_argument(self):
+        """An omitted duration leaves the lease to the node's default, and says
+        so by naming nothing rather than by sending a zero."""
+        mock = MockApphost(routes={OP_REGISTER_SEARCHER: Accept(objects=[LEASE_FRAME])})
+        async with mock:
+            o = await self.objects(mock)
+            await o.register_searcher()
+        self.assertEqual(self.sent(mock), OP_REGISTER_SEARCHER)
 
     @bounded()
     async def test_an_anonymous_caller_is_refused_by_the_node(self):

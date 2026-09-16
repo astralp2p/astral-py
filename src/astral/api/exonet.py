@@ -105,9 +105,11 @@ class Endpoint(abc.ABC):
     def address(self) -> str:
         """The address in its own text form, with no network prefix.
 
-        astral-go's `Address()`. It is not always the type's `MarshalText`
-        output: `mod.tor.endpoint` renders a zero value as `unknown` here and as
-        `.onion:0` there.
+        astral-go's `Address()`. It is a different method from `MarshalText`
+        and the two need not agree, though today they do for all four concrete
+        endpoints: `mod.tor.endpoint` rendered a zero value as `unknown` here
+        and as `.onion:0` there until astral-go `54f55b0` made its
+        `MarshalText` delegate to `Address()`.
         """
 
     def pack(self) -> bytes:
