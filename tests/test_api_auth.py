@@ -14,15 +14,16 @@ while disagreeing with `furry-bolt`:
   JSON and flattens it in binary, while every action type flattens its embedded
   **value** in both.
 - **Tier B** pins the two ops against `MockApphost`: the query string `index`
-  builds, the required-argument discipline, and the fact that `sign_contract`
-  puts the contract on the channel **body** with an `eos` after it.
+  builds, the batch form's IDs on the body with an `eos` after them, and the
+  fact that `sign_contract` puts the contract on the channel **body** with an
+  `eos` after it.
 - **Tier C** runs the read-only half against a real node: the op inventory from
   `shell.spec`, the three zero values from `objects.new`, the three blueprints
   from `objects.get_blueprint`, and the two ops' refusal shapes. Nothing in the
-  live tier signs, stores or indexes anything: `auth.index` is sent **without**
-  its required `id`, so the routing layer refuses it before the op body runs,
-  and `auth.sign_contract` is opened and closed with no contract on the body, so
-  there is nothing for the node to sign.
+  live tier signs, stores or indexes anything: `auth.index` gets an empty batch
+  and IDs no repository holds, and the op loads before it indexes, so each ends
+  at `object not found`. `auth.sign_contract` is opened and closed with no
+  contract on the body, so there is nothing for the node to sign.
 
 The two ops are the module's whole surface and neither is a read: `auth.index`
 mutates the local contract index and `auth.sign_contract` needs the node to hold
@@ -35,6 +36,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import json
+import os
 import pathlib
 import re
 import unittest
@@ -729,8 +731,41 @@ class AuthCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mock.errors, [])
 
 
+class IndexingNode:
+    """A route that answers one frame per input and mirrors the terminator, as
+    astral-go's `channel.Batch` does.
+
+    Reads and answers strictly in step. `received` is every body frame the
+    client sent, terminator included.
+    """
+
+    def __init__(self, *answers: tuple[str, bytes]) -> None:
+        self.answers = list(answers)
+        self.received: list[tuple[str, bytes]] = []
+
+    async def __call__(self, conn: MockConn, query: RouteQuery) -> None:
+        conn.send_frame(QUERY_ACCEPTED)
+        await conn.flush()
+        answers = iter(self.answers)
+        while True:
+            got = await conn.recv_frame_or_none()
+            if got is None:
+                return
+            self.received.append(got)
+            if got[0] == "eos":
+                conn.send_frame("eos", b"")
+                await conn.flush()
+                return
+            conn.send_frame(*next(answers, ACK_FRAME))
+            await conn.flush()
+
+    @property
+    def types(self) -> list[str]:
+        return [name for name, _ in self.received]
+
+
 class IndexOpTest(AuthCase):
-    """`auth.index`: RR, one required argument, `ack` or `error_message`."""
+    """`auth.index`: RR with an `id`, BD without one, `ack` or `error_message`."""
 
     @bounded()
     async def test_it_sends_the_object_id_and_reads_the_ack(self):
@@ -759,10 +794,10 @@ class IndexOpTest(AuthCase):
         self.assertEqual(mock.queries, [])
 
     @bounded()
-    async def test_the_id_is_always_sent_because_the_op_requires_it(self):
-        """`id` carries `query:"required"` and the live spec flags it, so an
-        absent one is refused by the routing layer before the op body runs. The
-        argument is therefore positional here and has no default."""
+    async def test_the_single_form_always_sends_its_id(self):
+        """An absent `id` selects the batch, so `index()` has no default for it:
+        a caller who forgot the argument would otherwise open a batch and wait
+        on an op reading IDs it never sends."""
         with self.assertRaises(TypeError):
             await Auth(object()).index()  # type: ignore[call-arg]
 
@@ -792,14 +827,64 @@ class IndexOpTest(AuthCase):
 
     @bounded()
     async def test_a_rejected_query_surfaces_as_query_rejected(self):
-        """The shape an absent `id` produces on a real node, reproduced here so
-        the distinction from an `error_message` is pinned: a rejection carries a
-        code and no message."""
+        """The shape an absent `id` produces on a node that predates astrald
+        `fdbddccb`, reproduced here so the distinction from an `error_message`
+        is pinned: a rejection carries a code and no message."""
         mock = MockApphost(routes={f"{OP_INDEX}?id={OID}": Reject(1)})
         async with mock:
             api = await self.auth(mock)
             with self.assertRaises(QueryRejected):
                 await api.index(OID)
+
+
+class IndexManyOpTest(AuthCase):
+    """`auth.index` with no `id`: the IDs on the body, one answer each."""
+
+    async def node(self, *answers: tuple[str, bytes]) -> tuple[
+        Auth, IndexingNode, MockApphost
+    ]:
+        route = IndexingNode(*answers)
+        mock = MockApphost(routes={OP_INDEX: route})
+        await self.enterAsyncContext(mock)
+        return await self.auth(mock), route, mock
+
+    @bounded()
+    async def test_the_ids_travel_on_the_body_with_an_eos_after_them(self):
+        api, route, mock = await self.node()
+        other = ObjectID(size=7, hash=bytes(range(1, 33)))
+        self.assertIsNone(await api.index_many([OID, str(other)]))
+        self.assertEqual(self.sent(mock), OP_INDEX)
+        self.assertEqual(route.types, ["object_id.sha256", "object_id.sha256", "eos"])
+        self.assertEqual(route.received[0][1], payload_bytes(OID))
+        self.assertEqual(route.received[1][1], payload_bytes(other))
+        self.assertEqual(api.client.live_streams, 0)
+
+    @bounded()
+    async def test_the_first_error_message_raises_and_nothing_after_it_is_sent(self):
+        api, route, _ = await self.node(ACK_FRAME, frame_error("object not found"))
+        with self.assertRaises(RemoteError) as caught:
+            await api.index_many([OID, OID, OID])
+        self.assertIn("object not found", str(caught.exception))
+        self.assertEqual(route.types, ["object_id.sha256", "object_id.sha256"])
+
+    @bounded()
+    async def test_an_answer_that_is_not_an_ack_is_a_protocol_error(self):
+        api, _, _ = await self.node(("eos", b""))
+        with self.assertRaises(ProtocolError):
+            await api.index_many([OID])
+
+    @bounded()
+    async def test_an_empty_batch_sends_no_query(self):
+        api, _, mock = await self.node()
+        self.assertIsNone(await api.index_many([]))
+        self.assertEqual(mock.queries, [])
+
+    @bounded()
+    async def test_a_value_that_is_not_an_object_id_is_refused_before_the_query(self):
+        api, _, mock = await self.node()
+        with self.assertRaises(ParseError):
+            await api.index_many([OID, "not-an-object-id"])
+        self.assertEqual(mock.queries, [])
 
 
 class SignContractOpTest(AuthCase):
@@ -926,8 +1011,10 @@ class AuthPlumbingTest(AuthCase):
 class LiveAuthTest(live_support.LiveCase):
     """The read-only half against a real node.
 
-    Nothing here signs, stores or indexes. `auth.index` is sent without its
-    required `id`, which the routing layer refuses before the op body runs, and
+    Nothing here signs, stores or indexes. `auth.index` gets an empty batch and
+    IDs of objects no repository holds: the op loads before it indexes and
+    answers `object not found` without reaching the index
+    (`mod/auth/src/op_index.go` at astrald `26bb51d5`, `indexOne`).
     `auth.sign_contract` is opened and closed with nothing on the body, so the
     node has nothing to sign. Both are the ops' refusal shapes and both are
     verified rather than assumed.
@@ -951,11 +1038,10 @@ class LiveAuthTest(live_support.LiveCase):
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
-    async def test_the_index_op_requires_its_object_id(self):
-        """The node's own flag, and the pin on the batch-mode drift: astrald
-        `fdbddccb` makes `id` optional and adds a batch form this module does
-        not implement. A node upgraded past that commit fails here, which is
-        where the decision to add `index_many()` belongs."""
+    async def test_the_index_op_s_object_id_is_optional(self):
+        """The node's own flag, and the pin on the batch mode: astrald
+        `fdbddccb` makes `id` optional, and its absence selects the batch
+        `index_many()` drives. A node that predates that commit fails here."""
         async with await self.client() as client:
             spec = json.loads(
                 (await client.call_raw(f"shell.spec?op={OP_INDEX}&out=json", timeout=20.0))
@@ -963,8 +1049,9 @@ class LiveAuthTest(live_support.LiveCase):
                 .splitlines()[0]
             )["Object"]
         required = {p["Name"]: p["Required"] for p in spec["Parameters"]}
-        self.assertEqual(required["id"], True)
+        self.assertEqual(required["id"], False)
         self.assertEqual(spec["Parameters"][0]["Type"], "object_id.sha256")
+        await self.assert_no_open_sockets()
 
     @bounded(30.0)
     async def test_the_three_zero_values_decode_and_re_encode(self):
@@ -1037,13 +1124,30 @@ class LiveAuthTest(live_support.LiveCase):
         )
 
     @bounded(30.0)
-    async def test_index_without_its_required_id_is_rejected_before_the_op_runs(self):
-        """A rejection, not an `error_message`: the routing layer refuses the
-        query and the op body never executes, so nothing is loaded and nothing
-        is indexed."""
+    async def test_an_empty_batch_is_answered_by_the_mirrored_eos_alone(self):
+        """No `id` and a bare `eos` on the body: nothing to load and nothing to
+        index, and `channel.Batch` answers the terminator with its own."""
         async with await self.client() as client:
-            with self.assertRaises(QueryRejected):
-                await client.call_one(OP_INDEX, timeout=20.0)
+            async with client.stream(OP_INDEX, timeout=20.0) as stream:
+                await stream.send_eos()
+                answers = [obj async for obj in stream.raw_objects()]
+            self.assertEqual(answers, [])
+            self.assertEqual(stream.terminated_by, "eos")
+        await self.assert_no_open_sockets()
+
+    @bounded(30.0)
+    async def test_an_id_no_repository_holds_is_refused_in_both_forms(self):
+        """A random 32-byte hash names no stored object, so both forms stop at
+        the load and index nothing. `index_many` raises on the first answer and
+        `index` on its only one, with the node's text in both."""
+        absent = ObjectID(size=32, hash=os.urandom(32))
+        async with await self.client() as client:
+            with self.assertRaises(RemoteError) as caught:
+                await client.auth.index_many([absent, absent], timeout=20.0)
+            self.assertEqual(caught.exception.message, "object not found")
+            with self.assertRaises(RemoteError) as caught:
+                await client.auth.index(absent, timeout=20.0)
+            self.assertEqual(caught.exception.message, "object not found")
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
