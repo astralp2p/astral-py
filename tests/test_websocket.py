@@ -1028,9 +1028,7 @@ class LiveWebSocketTest(unittest.IsolatedAsyncioTestCase):
     an unreachable WebSocket is a skip and never a failure."""
 
     async def asyncSetUp(self) -> None:
-        reason = await live_support.verdict()
-        if reason:
-            self.skipTest(reason)
+        await live_support.gate(self)
         self.ws_endpoint = os.environ.get(WS_ENDPOINT_VAR) or DEFAULT_WS_ENDPOINT
         try:
             client = await connect_websocket(self.ws_endpoint, timeout=3)

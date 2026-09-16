@@ -28,9 +28,12 @@ so no live assertion depends on it.
 from __future__ import annotations
 
 import asyncio
+import os
 import pathlib
 import re
+import tempfile
 import unittest
+from unittest import mock
 
 import astral
 from astral.api.dir import (
@@ -700,7 +703,7 @@ class LiveDirTest(live_support.LiveCase):
     `live_support.LiveCase`, and that is not tidiness: the precheck **dials the
     node**, so a copy per file is a dial per file and every dial occupies one of
     the 32 workers for as long as it takes. The copies had also drifted --
-    `live_support.verdict()` turns a `TimeoutError` around the probe into a skip
+    `live_support.verdict()` turns a `TimeoutError` around the probe into a
     reason, and a bare `asyncio.run(asyncio.wait_for(...))` in `setUpModule`
     errored the whole module instead, which is precisely the failure a precheck
     exists to avoid. `max_concurrency=4` there rather than 2 here; this is
@@ -1129,7 +1132,7 @@ class SharedPrecheckTest(unittest.TestCase):
         """`live_support` exists because the precheck **dials the node**, and a
         copy per file is a dial per file on a pool of 32 shared with every app on
         the machine. The copies had also drifted: `live_support.verdict()` turns
-        a `TimeoutError` around the probe into a skip reason, while a bare
+        a `TimeoutError` around the probe into a reason, while a bare
         `asyncio.run(asyncio.wait_for(...))` in a copied `setUpModule` errored the
         whole module -- the precise failure a precheck exists to avoid.
         """
@@ -1151,6 +1154,62 @@ class SharedPrecheckTest(unittest.TestCase):
         self.assertTrue(
             issubclass(test_api_apphost.LiveApphostTest, live_support.LiveCase)
         )
+
+    def test_every_live_set_up_decides_through_the_gate(self):
+        """A module that reads `verdict()` and calls `skipTest` itself restores
+        the silent skip `gate()` exists to remove: an opted-in run whose node
+        never answered would end `OK`."""
+        tests = pathlib.Path(__file__).resolve().parent
+        for path in sorted(tests.glob("test_*.py")):
+            source = path.read_text(encoding="utf-8")
+            with self.subTest(module=path.name):
+                self.assertIsNone(
+                    re.search(r"^\s+reason = await (live_support\.)?verdict\(\)", source, re.M),
+                    f"{path.name} decides the live verdict itself; call "
+                    "live_support.gate(self) instead",
+                )
+
+
+class LiveGateTest(unittest.IsolatedAsyncioTestCase):
+    """The rule `gate()` enforces, with no node: skip when not opted in, fail
+    when opted in and the node does not greet.
+
+    The cached verdict is patched to `None` for each test so the precheck runs
+    against the environment the test sets, and restored afterwards so the rest
+    of the process keeps the verdict it already had.
+    """
+
+    async def verdict_for(self, env: dict[str, str]) -> BaseException:
+        import live_support
+
+        case = unittest.TestCase()
+        with mock.patch.dict(os.environ, env, clear=False), mock.patch.object(
+            live_support, "_VERDICT", None
+        ):
+            if not env.get(live_support.ENDPOINT_VAR):
+                os.environ.pop(live_support.ENDPOINT_VAR, None)
+            try:
+                await live_support.gate(case)
+            except BaseException as exc:  # noqa: BLE001 -- the outcome is the point
+                return exc
+        self.fail("gate() returned: the tier was allowed to run with no node")
+
+    @bounded(10.0)
+    async def test_the_tier_skips_when_it_is_not_opted_into(self):
+        import live_support
+
+        outcome = await self.verdict_for({live_support.ENDPOINT_VAR: ""})
+        self.assertIsInstance(outcome, unittest.SkipTest)
+
+    @bounded(30.0)
+    async def test_an_opted_in_tier_whose_node_does_not_greet_fails(self):
+        import live_support
+
+        with tempfile.TemporaryDirectory() as root:
+            dead = f"unix:{root}/no-node.sock"
+            outcome = await self.verdict_for({live_support.ENDPOINT_VAR: dead})
+        self.assertIsInstance(outcome, AssertionError)
+        self.assertIn(dead, str(outcome))
 
 
 if __name__ == "__main__":

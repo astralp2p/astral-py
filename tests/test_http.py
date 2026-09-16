@@ -815,9 +815,7 @@ class LiveHTTPTest(unittest.IsolatedAsyncioTestCase):
     """
 
     async def asyncSetUp(self) -> None:
-        reason = await live_support.verdict()
-        if reason:
-            self.skipTest(reason)
+        await live_support.gate(self)
         self.http_endpoint = os.environ.get(HTTP_ENDPOINT_VAR) or DEFAULT_HTTP_ENDPOINT
         try:
             probe = await open_response(self.http_endpoint, "/", method="OPTIONS", timeout=3)

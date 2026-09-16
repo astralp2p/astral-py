@@ -16,6 +16,16 @@ it may run.
 The cache is a plain string across event loops, not an object bound to one.
 `IsolatedAsyncioTestCase` builds a fresh loop per test, so anything holding a
 future or a transport would be reused across loops and fail on the second test.
+
+**Opting in buys a verdict, not a chance of one.** With `ASTRAL_TEST_ENDPOINT`
+unset the tier skips, which is what keeps the suite green on a machine with no
+node. With it set, a node that does not greet **fails** every live test with the
+precheck's reason rather than skipping them. A skip there is indistinguishable
+from a pass in the one line a run ends on. Before this rule, a run whose
+endpoint named a socket nothing listened on ended
+`OK (skipped=157, expected failures=2)`, verified at `263c792`, so a run that
+was asked to exercise the live tier reported success without touching it. `gate()`
+is where that rule lives, and every live base class goes through it.
 """
 
 from __future__ import annotations
@@ -80,6 +90,22 @@ async def verdict() -> str:
     return _VERDICT
 
 
+async def gate(case: unittest.TestCase) -> None:
+    """Return when the live tier may run; otherwise skip or fail `case`.
+
+    Skip when the tier is not opted into, and fail when it is and the node did
+    not greet. The verdict is still computed once per process, so a dead node
+    costs one probe and each test fails at once on the cached reason rather than
+    on its own deadline.
+    """
+    reason = await verdict()
+    if not reason:
+        return
+    if endpoint() is None:
+        case.skipTest(reason)
+    case.fail(f"{ENDPOINT_VAR} is set, so the live tier must run: {reason}")
+
+
 class LiveCase(unittest.IsolatedAsyncioTestCase):
     """One client per test, closed by the test, with the descriptors counted.
 
@@ -88,9 +114,7 @@ class LiveCase(unittest.IsolatedAsyncioTestCase):
     """
 
     async def asyncSetUp(self) -> None:
-        reason = await verdict()
-        if reason:
-            self.skipTest(reason)
+        await gate(self)
         self.endpoint = endpoint()
         # Taken inside the loop, so the loop's own self-pipe is in the baseline.
         self.sockets_before = socket_fds()
