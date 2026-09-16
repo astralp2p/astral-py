@@ -1,15 +1,40 @@
 """`services`: what a node offers, and the cache of what its peers offer.
 
-Tier 1, two ops, and the module that proves the `bundle` kind inside a record.
+Tier 1, three ops, and the module that proves the `bundle` kind inside a record.
 
 | Op | Mode | Answer | Effect |
 |---|---|---|---|
+| `services.advertise` | BD, held open | `ack` \\| `error_message`, then nothing | publishes while open |
 | `services.discover` | ST, ST+follow | `services.update` × n ++ `eos` | read-only |
 | `services.sync` | RR, BD with `follow` | `ack` \\| `error_message` | **mutates** |
 
-Both are the complete surface: the live `shell.spec` registry holds
-`services.discover` and `services.sync` and nothing else under this module.
-Verified against `furry-bolt` this session.
+The three are the complete surface: the live `shell.spec` registry holds
+`services.advertise`, `services.discover` and `services.sync` and nothing else
+under this module, verified on astrald `26bb51d5`. `furry-bolt` held the last two
+only; `services.advertise` is astrald `0ac18022`.
+
+**`services.advertise` publishes a service for exactly as long as its channel is
+open.** The provider is the caller and never an argument, so an app advertises
+nothing but itself. The op authorizes the caller under
+`mod.auth.serve_apps_action`, refuses a network-origin query, answers `ack` once
+the service is published, and then reads `bundle` objects off the channel, each
+replacing the advertised info in place. Closing the channel withdraws the
+service (`mod/services/src/op_advertise.go` at astrald `26bb51d5`).
+`services.discover` serves these advertisements beside the module discoverers':
+one `services.update` with `available` true on publish and on every info change,
+and one with `available` false on withdrawal. `advertise()` returns an
+`Advertisement`, the counterpart of astral-go's
+(`api/services/client/advertise.go` at astral-go `6ea26c7`), and `async with` is
+its contract, because the open channel **is** the advertisement.
+
+**An anonymous caller is the node, and the node cannot advertise to itself.**
+astrald substitutes the node's identity for an anonymous IPC caller, the node
+passes the ServeApps check, and the op answers
+`error_message("the node cannot advertise to itself")` before it publishes
+anything. Verified on astrald `26bb51d5`. An app therefore advertises under its
+own token. Verified there too: an identity from `apphost.register` advertised,
+and a follower of `services.discover` saw the publication, the info change and the
+withdrawal.
 
 **`services.update` is one record with two pointer slots.** Field order,
 widths and both nil flags read off the node itself -- `objects.new?type=
@@ -129,6 +154,7 @@ heads this module was read against.
 
 from __future__ import annotations
 
+from types import TracebackType
 from typing import Any, AsyncIterator, Final, Sequence
 
 from .. import querystring
@@ -138,7 +164,7 @@ from .. import querystring
 # is the direction `client.py` already keeps by importing `astral.api.*` inside
 # its property bodies.
 from ..client import StreamContext
-from ..errors import BadArgument
+from ..errors import BadArgument, BadArgumentType, ProtocolError
 from ..object import Ack, Bundle
 from ..record import record, wire
 from ..spec import Primitive, Ptr, Spec
@@ -147,6 +173,8 @@ from ..types import Identity
 from .base import ModuleClient
 
 __all__ = [
+    "Advertisement",
+    "OP_ADVERTISE",
     "OP_DISCOVER",
     "OP_SYNC",
     "SERVICES_TYPES",
@@ -154,6 +182,7 @@ __all__ = [
     "Update",
 ]
 
+OP_ADVERTISE: Final = "services.advertise"
 OP_DISCOVER: Final = "services.discover"
 OP_SYNC: Final = "services.sync"
 
@@ -165,6 +194,9 @@ OP_SYNC: Final = "services.sync"
 # letting it reach a node that rejects the whole query. `identity` is `string8`
 # and not the `identity` type: the op resolves this argument server-side and a
 # directory name is a legitimate value for it.
+_ADVERTISE: Final[dict[str, Spec]] = {
+    "name": Primitive("string8"),
+}
 _DISCOVER: Final[dict[str, Spec]] = {
     "follow": Primitive("bool"),
 }
@@ -219,6 +251,105 @@ class Update:
         return () if self.info is None else tuple(self.info)
 
 
+# --- a standing advertisement --------------------------------------------
+
+
+class Advertisement:
+    """`async with services.advertise(name) as ad:` -- a service, published.
+
+    The service is available from `__aenter__` until the channel closes, and
+    closing the channel is what withdraws it: there is no withdraw op. Nothing
+    is routed on construction, so building one and discarding it publishes
+    nothing, the way `StreamContext` opens nothing.
+
+    `__aenter__` routes the query on the persistent lane, because the channel is
+    held for as long as the service stands, and reads the node's `ack`. A
+    refusal raises and leaves nothing open: `QueryRejected` for a caller not
+    authorized to serve apps or a network-origin query, and `RemoteError` for
+    the node's `error_message`, such as `name is required` or
+    `the node cannot advertise to itself`. `timeout` bounds the route and the
+    `ack` together and defaults to the client's query timeout. The held channel
+    that follows has no deadline.
+
+    **The channel must be closed.** It holds one of the node's 32 apphost
+    workers for as long as it is open, the same cost a follow stream has.
+    """
+
+    __slots__ = ("_services", "_name", "_info", "_kw", "_stream")
+
+    def __init__(
+        self, services: Services, name: str, info: Bundle | None, kw: dict[str, Any]
+    ) -> None:
+        self._services = services
+        self._name = name
+        self._info = info
+        self._kw = kw
+        self._stream: Stream | None = None
+
+    @property
+    def name(self) -> str:
+        """The service name this advertisement publishes."""
+        return self._name
+
+    async def __aenter__(self) -> Advertisement:
+        kw = dict(self._kw)
+        client = self._services.client
+        timeout = kw.pop("timeout", client.query_timeout)
+        kw.setdefault("persistent", True)
+        stream = await client.query(
+            querystring.build(OP_ADVERTISE, _encode(_ADVERTISE, {"name": self._name})),
+            timeout=timeout,
+            **kw,
+        )
+        try:
+            answer = await stream.first(timeout=timeout)
+            if answer is None:
+                raise ProtocolError(
+                    f"{OP_ADVERTISE}: the stream ended before the node "
+                    "acknowledged the advertisement"
+                )
+            ModuleClient._expect(answer, Ack, OP_ADVERTISE)
+            if self._info is not None:
+                await stream.send(self._info, timeout=timeout)
+        except BaseException:
+            await stream.aclose()
+            raise
+        self._stream = stream
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+    async def set_info(self, info: Bundle, *, timeout: float | None = None) -> None:
+        """Replace the advertised info. The service stays available.
+
+        The node publishes the new info in place, so a follower of
+        `services.discover` sees one more update with `available` true rather
+        than a withdrawal and a fresh publication. `timeout` bounds the send.
+        """
+        if not isinstance(info, Bundle):
+            raise BadArgumentType(
+                f"{OP_ADVERTISE}: info must be a Bundle, got {type(info).__name__}; "
+                "the op reads bundles and ends the advertisement on anything else"
+            )
+        if self._stream is None:
+            raise ProtocolError(
+                f"{OP_ADVERTISE}: the advertisement of {self._name!r} is not open"
+            )
+        await self._stream.send(info, timeout=timeout)
+
+    async def aclose(self) -> None:
+        """Withdraw the service by closing its channel. Idempotent."""
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            await stream.aclose()
+
+
 # --- the client ----------------------------------------------------------
 
 
@@ -230,6 +361,32 @@ class Services(ModuleClient):
     """
 
     __slots__ = ()
+
+    # --- advertising ---
+
+    def advertise(
+        self, name: str, info: Bundle | None = None, **kw: Any
+    ) -> Advertisement:
+        """`async with s.advertise(name, info) as ad:` -- BD, held open.
+
+        Publishes `name` with this client's caller as the provider, for as long
+        as the `async with` block runs. `info` is sent after the node's `ack`
+        when given, and `Advertisement.set_info` replaces it later.
+
+        An empty `name` is refused here: the node answers `name is required`
+        only after it has spent a worker on the query.
+        """
+        if not isinstance(name, str):
+            raise BadArgumentType(
+                f"{OP_ADVERTISE}: name must be str, got {type(name).__name__}"
+            )
+        if not name:
+            raise BadArgument(f"{OP_ADVERTISE}: the service name is empty")
+        if info is not None and not isinstance(info, Bundle):
+            raise BadArgumentType(
+                f"{OP_ADVERTISE}: info must be a Bundle, got {type(info).__name__}"
+            )
+        return Advertisement(self, name, info, kw)
 
     # --- discovery: read-only ---
 

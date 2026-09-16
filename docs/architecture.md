@@ -141,7 +141,7 @@ src/astral/
     crypto.py            Tier 1. crypto.* ops + secp256k1.new + the four pure helpers.
     auth.py              Tier 1. auth.* ops, contract/permit/action types.
     objects.py           Tier 1, largest. 25 ops, the Writer protocol, the search grammar.
-    services.py          Tier 1. services.discover/sync, services.update.
+    services.py          Tier 1. services.advertise/discover/sync, services.update.
     user.py              Tier 2. 15 ops incl. the non-EOS sync_assets stream.
     bip137sig.py         Tier 2. Four ops; local mnemonic/seed via bip39.py.
     ip.py                Tier 2. Three ops, mod.ip.ip_address.
