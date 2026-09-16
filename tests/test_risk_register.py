@@ -372,8 +372,9 @@ class R8RepositoryFree(unittest.TestCase):
     """
 
     # Every `mod.objects.repository_info` frame payload, in the order the node
-    # sent them.
-    LIVE = {
+    # sent them -- captured before astrald `c520482e`, so each is the record's
+    # first three fields and stops there.
+    CAPTURED_PREFIX = {
         "memory": bytes.fromhex(
             "066d656d6f7279" "0f496e2d6d656d6f7279207265706f73" "0000000007ffffb9"
         ),
@@ -388,8 +389,21 @@ class R8RepositoryFree(unittest.TestCase):
         "main": bytes.fromhex("046d61696e" "05576f726c64" "00000002431adfb9"),
     }
 
+    # `Kind: "repository"`, no children, not concurrent -- the tail astrald
+    # `c520482e` appended after `Free`. R-8 is a claim about the eight bytes
+    # before it, so the captured prefixes still carry the evidence and this
+    # completes them into records the current decoder reads. Held apart from
+    # the captures rather than folded into them: these bytes were constructed
+    # here, and a fixture that mixes the two invites the next reader to cite
+    # constructed bytes as something the node said.
+    NEW_FIELD_TAIL = bytes.fromhex("0a" "7265706f7369746f7279" "00000000" "00")
+
+    @property
+    def live(self) -> dict[str, bytes]:
+        return {n: p + self.NEW_FIELD_TAIL for n, p in self.CAPTURED_PREFIX.items()}
+
     def test_every_free_value_is_eight_unsigned_bytes(self):
-        for name, payload in self.LIVE.items():
+        for name, payload in self.live.items():
             with self.subTest(repo=name):
                 info = decode(RepositoryInfo, payload)
                 self.assertEqual(info.name, name)
@@ -397,9 +411,15 @@ class R8RepositoryFree(unittest.TestCase):
                 self.assertEqual(encode(info), payload)
 
     def test_the_captured_values_are_the_ones_the_node_sent(self):
-        self.assertEqual(decode(RepositoryInfo, self.LIVE["memory"]).free, 0x07FFFFB9)
-        self.assertEqual(decode(RepositoryInfo, self.LIVE["removable"]).free, 0)
-        self.assertEqual(decode(RepositoryInfo, self.LIVE["main"]).label, "World")
+        self.assertEqual(decode(RepositoryInfo, self.live["memory"]).free, 0x07FFFFB9)
+        self.assertEqual(decode(RepositoryInfo, self.live["removable"]).free, 0)
+        self.assertEqual(decode(RepositoryInfo, self.live["main"]).label, "World")
+
+    def test_the_captured_bytes_are_still_the_prefix_of_what_is_decoded(self):
+        """The completion is a suffix, so R-8 still reads the node's own bytes."""
+        for name, prefix in self.CAPTURED_PREFIX.items():
+            with self.subTest(repo=name):
+                self.assertEqual(self.live[name][: len(prefix)], prefix)
 
     def test_the_documented_minus_one_is_the_all_ones_pattern(self):
         """What D-22's `-1` is on the wire, and what this SDK decodes it to.
@@ -408,7 +428,11 @@ class R8RepositoryFree(unittest.TestCase):
         this pins the SDK's reading of the pattern and claims nothing about the
         node.
         """
-        payload = bytes.fromhex("0464617461" "0744656661756c74") + b"\xff" * 8
+        payload = (
+            bytes.fromhex("0464617461" "0744656661756c74")
+            + b"\xff" * 8
+            + self.NEW_FIELD_TAIL
+        )
         self.assertEqual(decode(RepositoryInfo, payload).free, 0xFFFF_FFFF_FFFF_FFFF)
 
 

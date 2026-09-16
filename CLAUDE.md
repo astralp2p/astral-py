@@ -14,6 +14,17 @@ Authorities, in precedence order: the live node, astral-go
 (`../astral-go/main` @ `5b1d282`, the revision astrald `d5bb0bbd` requires), astrald, astral-docs.
 The SDK supports the node at those revisions and no older one, so a claim about
 an earlier astrald or astral-go has no place in this tree.
+
+**One type is read past the pins.** `mod.objects.repository_info` gained `Kind`,
+`Children` and `Concurrent` in astrald `c520482e`, hours after `d5bb0bbd` was
+cut, and `api/objects.py` decodes the six-field record — so `objects.repositories`
+now requires a node at or past that commit and fails against one at the pins.
+The rest of the tree is unaffected. That type's evidence is therefore a byte
+corpus generated from astral-go `21acd1b` rather than a `path:line` citation,
+because no citation to those fields resolves at `5b1d282`. Moving the pins is a
+re-read of every citation in the package — 27 citation assertions across six
+modules fail on the bump — and is its own change, not a side effect of the next
+one to touch this type.
 Where the docs disagree with the node, the node wins and the disagreement is a
 bug report in design section 9.2. A wire fact sourced from astral-docs alone is
 not established.
