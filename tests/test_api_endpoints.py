@@ -76,24 +76,18 @@ from mock_apphost import bounded, frame
 #
 # The three that no upstream change has touched are `furry-bolt`'s answers.
 #
-# The two tor payloads changed width when astral-go `eeb31e3` (PR #90) landed,
-# so `furry-bolt`'s old answers -- `0000` for the endpoint and an empty payload
-# for the digest -- are bytes the fixed reader cannot consume, and pinning them
-# would pin the defect. Their provenance is therefore two sources rather than
-# one:
+# The two tor payloads are the widths astral-go `eeb31e3` (PR #90) set, and
+# their provenance is two sources rather than one:
 #
 # - read from a node built at astrald `31ab2b6d` against astral-go `5b1d282`,
 #   raw, with no SDK decoder in the path and confirmed through a second encoder
 #   (`&out=base64`): 37 null bytes and 35 null bytes. That node was wired with a
 #   `replace` directive, so it is a measurement and not the deployment.
-# - reproduced from astral-go `5b1d282` itself, the revision astrald `114a40de`
+# - reproduced from astral-go `5b1d282` itself, the revision astrald `d5bb0bbd`
 #   requires, by encoding both zero values with its own `WriteTo`. Same bytes.
 #
 # `TorUpstreamFixTest` reads that revision and checks the widths against it, so
-# the pin is falsifiable without a node. **Tier C fails on these two against any
-# node whose build predates astrald `114a40de`**, which is the intended signal:
-# the node is the authority, and a red test names the side that is behind.
-# Re-read both from `furry-bolt` once it carries that astrald or later.
+# the pin is falsifiable without a node.
 LIVE_ZERO_PAYLOADS = {
     "mod.tcp.endpoint": bytes.fromhex("000000"),
     "mod.kcp.endpoint": bytes.fromhex("000000"),
@@ -471,11 +465,11 @@ class TorEndpointTest(unittest.TestCase):
         self.assertTrue(back.is_zero())
         self.assertEqual(back.address(), "unknown")
 
-    def test_a_short_zero_endpoint_is_still_a_short_read(self):
-        """The two bytes an unfixed node sends. The reader commits to 37 before
-        it reads, so the frame an old node puts on the wire is unreadable here
-        -- deliberately, because a lenient reader would resynchronise on
-        nothing and decode the rest of a `link_info` as something else."""
+    def test_a_truncated_tor_endpoint_is_a_short_read(self):
+        """The reader commits to 37 bytes before it reads, so a shorter payload
+        is a fault rather than a partial value -- deliberately, because a
+        lenient reader would resynchronise on nothing and decode the rest of a
+        `link_info` as something else."""
         with self.assertRaises(ShortRead):
             read_object(object_reader(bytes.fromhex("0000")), "mod.tor.endpoint")
 
@@ -536,21 +530,18 @@ class TorEndpointTest(unittest.TestCase):
 class TorUpstreamFixTest(unittest.TestCase):
     """The two tor behaviours above are ported, so upstream is read, not recalled.
 
-    They document changes merged after this suite's astral-go pin, so each names
-    its own revision and is read there -- the mechanism `tests/reference.py`
-    exists for. Absent reference, skip; present and disagreeing, fail, because
-    then this module is making a false statement about the protocol.
+    Both changes are in astral-go at this suite's pin -- `eeb31e3` (PR #90, the
+    fixed-width digest) and `54f55b0` (PR #91, the text form) -- so each is read
+    there, which is the mechanism `tests/reference.py` exists for. Absent
+    reference, skip; present and disagreeing, fail, because then this module is
+    making a false statement about the protocol.
     """
 
     GO = reference.ASTRAL_GO
-    REV = "5b1d282"
-    """astral-go `main` with both fixes: `eeb31e3` (PR #90, the fixed-width
-    digest) and `54f55b0` (PR #91, the text form). astrald `114a40de` requires
-    exactly this revision, so it is the first astrald a node can carry it in."""
 
     def source(self, path: str) -> str:
         try:
-            return reference.read(self.GO, path, self.REV)
+            return reference.read(self.GO, path)
         except reference.Unavailable as exc:  # pragma: no cover -- may be absent
             self.skipTest(str(exc))
 

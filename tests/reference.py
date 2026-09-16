@@ -16,12 +16,14 @@ this suite has an opinion about. Upstream drift becomes a deliberate act -- bump
 the pin here, re-read the module, update the prose -- instead of a surprise.
 
 `PINS` holds the revision a module reads by default, and a reader passes `rev`
-to read one claim somewhere else. The two are not the same act: the pin governs
-every `path:line` in `astral/api/*.py` at once, so moving it is a re-read of the
-whole package, while a module that documents one merged upstream change names
-that change's revision in its own prose and reads it there. Without `rev` such a
-claim is prose no test can check, which is how `api/apphost.py` carried a
-security note that had stopped being true.
+to read one claim somewhere else. The pin governs every `path:line` in
+`astral/api/*.py` at once, so moving it is a re-read of the whole package.
+
+**No module passes `rev` today.** The SDK supports the node at the pins and no
+older one, so a claim about another revision has nowhere to live: every citation
+resolves at a pin or it is deleted. `rev` stays because a claim named in prose
+and never read is prose no test can check, which is how `api/apphost.py` once
+carried a security note that had stopped being true.
 
 **Absent is a skip, wrong is a failure.** No clone, no git, or a revision that
 was never fetched: skip, because the reference is not part of this repository
