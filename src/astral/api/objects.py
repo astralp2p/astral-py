@@ -1,6 +1,6 @@
 """`objects.*` -- repositories, object bytes, descriptors, search and schema.
 
-The largest module in the SDK: 25 ops, nine wire types, the `Writer` lifecycle
+The largest module in the SDK: 24 ops, nine wire types, the `Writer` lifecycle
 and the search grammar. Every op below is present on the live node's `shell.spec`
 registry, verified this session against `furry-bolt`.
 
@@ -17,7 +17,6 @@ per-op contract and is **not** discoverable from the wire):
 | `objects.echo` | BD | the objects sent, filtered | read-only |
 | `objects.find` | ST | `identity` x n ++ `eos` | read-only |
 | `objects.get_blueprint` | RR | `astral.blueprint` | read-only |
-| `objects.get_type` | RR | `string8` | read-only |
 | `objects.load` | RR / BD | the decoded object per id | read-only |
 | `objects.new` | RR | a zero value of the named type, or `nil` | read-only |
 | `objects.new_mem` | RR | `ack` | **mutates** |
@@ -216,7 +215,6 @@ __all__ = [
     "OP_ECHO",
     "OP_FIND",
     "OP_GET_BLUEPRINT",
-    "OP_GET_TYPE",
     "OP_LOAD",
     "OP_NEW",
     "OP_NEW_MEM",
@@ -272,7 +270,6 @@ OP_DESCRIBE: Final = "objects.describe"
 OP_ECHO: Final = "objects.echo"
 OP_FIND: Final = "objects.find"
 OP_GET_BLUEPRINT: Final = "objects.get_blueprint"
-OP_GET_TYPE: Final = "objects.get_type"
 OP_LOAD: Final = "objects.load"
 OP_NEW: Final = "objects.new"
 OP_NEW_MEM: Final = "objects.new_mem"
@@ -1217,8 +1214,7 @@ class Objects(ModuleClient):
     ) -> Probe:
         """An object's type, repository, mime type and probe cost. RR.
 
-        The replacement for `get_type`, which is deprecated. `repo` defaults to
-        the node's read-default repository.
+        `repo` defaults to the node's read-default repository.
         """
         params: dict[str, Any] = {"id": _object_id(id, OP_PROBE)}
         if repo is not None:
@@ -1245,19 +1241,6 @@ class Objects(ModuleClient):
             _typed(obj, Probe, OP_PROBE, index, self._c.endpoint)
             for index, obj in enumerate(answers)
         ]
-
-    async def get_type(self, id: ObjectID | str, **kw: Any) -> str:  # noqa: A002
-        """An object's astral type name. RR. **Deprecated -- use `probe`.**
-
-        An object the node cannot type answers `error_message("unknown type")`,
-        which surfaces as `RemoteError` and says nothing about why. `probe`
-        answers the same question with the repository and the mime type beside
-        it, which is why astrald marks this one deprecated.
-        """
-        qs = querystring.build(
-            OP_GET_TYPE, _encode({"id": _object_id(id, OP_GET_TYPE)})
-        )
-        return str(self._expect(await self._c.call_one(qs, **kw), String8, OP_GET_TYPE))
 
     async def load(
         self,
