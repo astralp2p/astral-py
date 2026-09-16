@@ -1704,4 +1704,6 @@ and skips on its own, and `LiveGateTest` pins both halves with no node.
 
 Narrower skips keep their meaning. The HTTP and WebSocket tests still skip when their listener does
 not answer, because `bind_http` is configurable and the gate variable names the apphost endpoint,
-not that one. The serving tests still skip without `ASTRAL_TEST_TOKEN`.
+not that one. The serving tests still skip without `ASTRAL_TEST_TOKEN`, and so do the signing round
+trips in `test_api_crypto.LiveSigningTest`: from astrald `341fcdd5` an anonymous caller is the node,
+and the node's key is not signable through the op surface.

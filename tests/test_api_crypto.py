@@ -16,13 +16,13 @@ claim:
   signature and never verifies anything; the tests below assert on the frames
   the mock received, so an implementation that stopped streaming would fail
   here rather than silently pass everything.
-- **Tier C** runs the read-only half against a real node, including the four
-  paths that had never been driven live at all: `sign_hash` in its RR
-  query-argument form, `sign_text` with its payload on the body, and both
-  verdicts. Every other live sign call names the public key of a private key
-  `secp256k1.new` generated and the node stored nowhere, so the op gets as far
-  as looking the private key up and then declines -- which is the failure half,
-  and covering only that half was the gap.
+- **Tier C** runs the read-only half against a real node. Every anonymous sign
+  call is a refusal from astrald `341fcdd5` on: the node's own key with no `key`,
+  and the public key of a private key `secp256k1.new` generated and the node
+  stored nowhere with one. The four paths that produce a real signature --
+  `sign_hash` in its RR query-argument form, `sign_text` with its payload on the
+  body, and both verdicts -- need a caller that is not the node, so they run in
+  `LiveSigningTest` only when `ASTRAL_TEST_TOKEN` names one.
 
 **Two live calls are deliberately absent and must stay absent.**
 
@@ -31,20 +31,24 @@ astrald answers with a nil `*crypto.PublicKey` whose `ObjectType()` dereferences
 nil, in a goroutine nothing recovers. The guard that refuses it is tested
 against the mock, where the assertion is that *nothing was sent at all*.
 
-`crypto.sign_hash` and `crypto.sign_text` with no `key` make the node sign as
-itself, because the core router substitutes its own identity for an anonymous
-caller. That is a signing *oracle* when the content is somebody else's choice,
-so Tier C signs exactly two fixed constants declared in this file -- `DIGEST` and
-`SIGNED_TEXT` -- and verifies them in the same process. Reaching the RR form,
-the body form and the verdict path needs a real signature and there is no other
-way to one; taking the payload from anywhere but this file would be the hazard.
+`crypto.sign_hash` and `crypto.sign_text` with no `key` sign as the caller. On
+a node that predates astrald `341fcdd5` an anonymous caller is the node and
+gets a node signature, which is a signing *oracle* when the content is somebody
+else's choice. From that commit the node's key is refused and a token's
+identity signs as itself. Either way Tier C signs exactly two fixed constants
+declared in this file -- `DIGEST` and `SIGNED_TEXT` -- and verifies them in the
+same process. Reaching the RR form, the body form and the verdict path needs a
+real signature and there is no other way to one; taking the payload from
+anywhere but this file would be the hazard.
 """
 
 from __future__ import annotations
 
+import os
 import pathlib
 import unittest
 
+import astral
 from astral.api.crypto import (
     CRYPTO_TYPES,
     Crypto,
@@ -133,6 +137,14 @@ Fixed here rather than taken from anywhere, which is the whole of the safety
 argument: a signing oracle is a node that signs what somebody else chose. It
 names itself so a signature found in a log is traceable to this suite.
 """
+
+NODE_KEY = "cannot sign with the node's key"
+"""astrald's `ErrNodeKeyNotSignable`, from `341fcdd5`: the answer to a caller
+that would sign as the node, which an anonymous caller is."""
+
+FOREIGN_KEY = "cannot sign with another identity's key"
+"""astrald's `ErrForeignKey`, from `341fcdd5`: the answer to a key that is
+neither the caller's nor one it may sudo to."""
 
 
 def frame_of(obj: object) -> tuple[str, bytes]:
@@ -1137,10 +1149,37 @@ class AstraldParityTest(unittest.TestCase):
         source = self.source("core/router.go")
         self.assertIn('Infov(0, "%v routed in %v", q.Query, d)', source)
 
+    def test_from_341fcdd5_both_sign_ops_build_their_signer_per_signature(self):
+        """The fix to the defect the next test pins at the pin, read where it
+        landed: `NewTextSigner` moved inside `signAndSend`, after the
+        authorization every signature passes. The module's docstring says a
+        streamed key is honoured and a refused key answers per text from this
+        commit, and this is that claim's source."""
+        try:
+            text_source = reference.read(
+                reference.ASTRALD, f"{self.ASTRALD}/op_sign_text.go", "26bb51d5"
+            )
+            guard = reference.read(
+                reference.ASTRALD, f"{self.ASTRALD}/sign_guard.go", "26bb51d5"
+            )
+            errors = reference.read(reference.ASTRALD, "mod/crypto/errors.go", "26bb51d5")
+        except reference.Unavailable as exc:  # pragma: no cover -- may be absent
+            self.skipTest(str(exc))
+        start = text_source.index("var signAndSend")
+        self.assertGreater(text_source.index("mod.NewTextSigner"), start)
+        self.assertGreater(
+            text_source.index("mod.NewTextSigner"),
+            text_source.index("mod.authorizeSigner", start),
+        )
+        self.assertIn("return cryptomod.ErrNodeKeyNotSignable", guard)
+        self.assertIn('"cannot sign with the node\'s key"', errors)
+        self.assertIn('"cannot sign with another identity\'s key"', errors)
+
     def test_op_sign_text_still_builds_its_signer_before_the_switch(self):
-        """The reason this SDK sends `key` as an argument on every sign op. When
-        astrald moves the construction inside `signAndSend`, as `op_sign_hash.go`
-        already does, this fails and the note can go."""
+        """The reason this SDK sends `key` as an argument on every sign op, read
+        at the pin. astrald moved the construction inside `signAndSend` at
+        `341fcdd5` (the test above), so the note now describes older nodes and
+        stays for them; this fails only when the pin moves past that commit."""
         text_source = self.source(f"{self.ASTRALD}/op_sign_text.go")
         hash_source = self.source(f"{self.ASTRALD}/op_sign_hash.go")
         # In sign_text the signer is built once, above `signAndSend`.
@@ -1160,27 +1199,16 @@ class AstraldParityTest(unittest.TestCase):
 
 
 class LiveCryptoTest(live_support.LiveCase):
-    """The read-only half, against a real node. Skips when none answers.
+    """The read-only half, against a real node, as an anonymous caller.
 
     Nothing here sends a private key whose type is not `secp256k1`, because that
     kills the node.
 
-    **Signing, narrowly.** This tier used to obtain no signature at all, which
-    left the module's most opinionated decision -- `sign_text` sends its payload
-    on the channel **body** where the op inventory declares RR, on the grounds
-    recorded in `crypto.py` -- live-tested only in the mode where the node
-    refuses before it reads. Every live sign call named a key the node could not
-    hold, so `sign_hash` in its RR query-argument form was never driven at all,
-    no signature this SDK produced was ever verified, and the whole verdict path
-    rested on the mock. Four paths, all of them working, none of them covered.
-
-    So two cases sign with the node's own key, over `SIGNED_TEXT` below: a fixed,
-    self-describing string chosen here and not by any caller. That is the line
-    the docstring's old "nothing here asks a real node to sign anything" was
-    drawing, and it is the part worth keeping -- a signing *oracle* is a node
-    that will sign what somebody else picked. Signing one constant and verifying
-    it in the same process is not one, and it is the only way to reach the RR
-    form, the body form and the verdict together.
+    **Every sign call here is refused.** From astrald `341fcdd5` a caller signs
+    only as itself, the core router makes an anonymous caller the node, and the
+    node's key is never signable through the op surface. So the anonymous tier
+    asserts the two refusals, and the signatures that prove the RR form, the
+    body form and the verdict path come from `LiveSigningTest`, under a token.
     """
 
     @bounded(30)
@@ -1283,7 +1311,7 @@ class LiveCryptoTest(live_support.LiveCase):
     async def test_a_streamed_digest_reaches_the_op_as_a_typed_object(self):
         """`sign_hash_many` against a key the node cannot hold -- the public key of
         a private key it generated and stored nowhere. astrald reads the digest
-        *before* it looks for a signer, so `unsupported` here proves the
+        *before* it authorizes the signer, so the refusal here proves the
         `mod.crypto.hash` frame decoded on the node. No signature is produced."""
         client = await self.client()
         try:
@@ -1291,52 +1319,41 @@ class LiveCryptoTest(live_support.LiveCase):
             unheld = await api.public_key(await api.new_key(timeout=10), timeout=10)
             with self.assertRaises(RemoteError) as caught:
                 await api.sign_hash_many([DIGEST], key=unheld, timeout=10)
-            self.assertIn("unsupported", str(caught.exception))
+            self.assertEqual(caught.exception.message, FOREIGN_KEY)
         finally:
             await client.aclose()
 
     @bounded(30)
-    async def test_sign_text_with_an_unusable_key_is_the_translated_reset(self):
-        """astrald builds the text signer before reading anything, so it answers
-        and closes with the body unread. Pinned live because it is the one
-        failure mode a caller of this module will meet that no mock would have
-        predicted.
-
-        **Both arrival orders are legal and the test accepts both.** The op's
-        outcome is a race between astrald's `error_message` and its close: when
-        the reset reaches this side first, `_batch` translates the
-        `ConnectionResetError` and the caller sees `ProtocolError`; when the
-        `String16` and the `eos` reach the socket before the reset does, the
-        node's own error object is read cleanly and the caller sees
-        `RemoteError: … unsupported` -- which is what the sibling test three
-        cases up asserts for the identical condition on `sign_hash_many`.
-        Measured against `furry-bolt`: solo, every attempt resets; with six
-        concurrent attempts, 7 of 72 read the error object instead. Asserting
-        one branch made this an ERROR under whole-suite live load and a pass on
-        every serial run.
-
-        What is invariant, and what is asserted: the op fails, and the failure
-        names the key the node cannot hold.
-        """
+    async def test_sign_text_with_an_unusable_key_reads_the_refusal_after_the_body(
+        self,
+    ):
+        """On a node that predates astrald `341fcdd5`, the text signer was built
+        before anything was read, and the op answered and closed with the body
+        unread: a reset, or the error object, by a race measured against
+        `furry-bolt`. From that commit the signer is built per signature after
+        the text is read, so the body form reads the node's refusal cleanly,
+        every time. Four sequential attempts, because the old race lost on a
+        serial run."""
         client = await self.client()
         try:
             api = Crypto(client)
             unheld = await api.public_key(await api.new_key(timeout=10), timeout=10)
-            with self.assertRaises((ProtocolError, RemoteError)) as caught:
-                await api.sign_text("astral-py live tier", key=unheld, timeout=10)
-            if isinstance(caught.exception, ProtocolError):
-                self.assertIn("without reading the body", str(caught.exception))
-            else:
-                self.assertIn("unsupported", str(caught.exception))
+            for attempt in range(4):
+                with self.subTest(attempt=attempt):
+                    with self.assertRaises(RemoteError) as caught:
+                        await api.sign_text(
+                            "astral-py live tier", key=unheld, timeout=10
+                        )
+                    self.assertEqual(caught.exception.message, FOREIGN_KEY)
         finally:
             await client.aclose()
+        await self.assert_no_open_sockets()
 
     @bounded(30)
     async def test_the_same_query_with_the_text_as_an_argument_answers_cleanly(self):
-        """The control for the test above, and the evidence that the reset is
-        astrald closing on an unread body rather than anything this SDK does:
-        the identical failure, with no body written, arrives as an
-        `error_message`."""
+        """The control for the test above: the identical failure with no body
+        written arrives as the same `error_message`, so the body form and the
+        argument form now fail alike."""
         from astral import querystring
 
         client = await self.client()
@@ -1348,20 +1365,73 @@ class LiveCryptoTest(live_support.LiveCase):
             )
             with self.assertRaises(RemoteError) as caught:
                 await client.call_one(qs, timeout=10)
-            self.assertIn("unsupported", str(caught.exception))
+            self.assertEqual(caught.exception.message, FOREIGN_KEY)
         finally:
             await client.aclose()
 
+    @bounded(30)
+    async def test_an_anonymous_caller_cannot_sign_with_the_node_s_key(self):
+        """The core router makes an anonymous caller the node, and the node's
+        key is refused on the self branch of `authorizeSigner`. Checked in all
+        three forms, because each reaches the guard by a different path."""
+        client = await self.client()
+        try:
+            api = Crypto(client)
+            for name, call in (
+                ("sign_hash", lambda: api.sign_hash(DIGEST, timeout=10)),
+                ("sign_hash_many", lambda: api.sign_hash_many([DIGEST], timeout=10)),
+                ("sign_text", lambda: api.sign_text(SIGNED_TEXT, timeout=10)),
+            ):
+                with self.subTest(form=name):
+                    with self.assertRaises(RemoteError) as caught:
+                        await call()
+                    self.assertEqual(caught.exception.message, NODE_KEY)
+        finally:
+            await client.aclose()
+        await self.assert_no_open_sockets()
+
+
+class LiveSigningTest(live_support.LiveCase):
+    """Real signatures, from a caller that is not the node.
+
+    Runs only when `ASTRAL_TEST_TOKEN` names an identity whose private key the
+    node holds -- `apphost.register` issues one -- because from astrald
+    `341fcdd5` a caller signs only as itself and an anonymous caller is the
+    node, whose key is refused. Registering one here would be a write, which the
+    live tier does not perform, so the token is set out of band.
+
+    This tier used to obtain no signature at all, which left the module's most
+    opinionated decision -- `sign_text` sends its payload on the channel
+    **body** where the op inventory declares RR, on the grounds recorded in
+    `crypto.py` -- live-tested only in the mode where the node refuses before it
+    reads. So the cases here sign `DIGEST` and `SIGNED_TEXT`: fixed,
+    self-describing constants chosen in this file and not by any caller. A
+    signing *oracle* is a node that will sign what somebody else picked; signing
+    one constant and verifying it in the same process is not one, and it is the
+    only way to reach the RR form, the body form and the verdict together.
+    """
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        self.token = os.environ.get("ASTRAL_TEST_TOKEN") or None
+        if self.token is None:
+            self.skipTest(
+                "ASTRAL_TEST_TOKEN is not set: a signature needs a caller other "
+                "than the node (astrald 341fcdd5), and minting one is a write"
+            )
+
+    async def client(self, **kw: object) -> astral.Client:
+        kw.setdefault("token", self.token)
+        return await super().client(**kw)
 
     @bounded(30)
     async def test_sign_hash_in_its_rr_form_answers_an_asn1_signature(self):
-        """The one op this module drives as RR, and it was never called live.
+        """The one op this module drives as RR.
 
         `sign_hash` takes its digest as a **query argument** and answers one
         `mod.crypto.signature` at a bare EOF with no `eos`, which is what
-        `call_one` reads. The default key is the caller's, which for an anonymous
-        IPC guest is the node's own, and the hash engine's default scheme is
-        `asn1`.
+        `call_one` reads. The default key is the caller's, which under a token
+        is the token's identity, and the hash engine's default scheme is `asn1`.
         """
         client = await self.client()
         try:
@@ -1396,7 +1466,7 @@ class LiveCryptoTest(live_support.LiveCase):
             self.assertEqual(signature.scheme, SCHEME_BIP137)
 
             good = await api.verify_text_signature(SIGNED_TEXT, signature, timeout=10)
-            self.assertTrue(good, f"the node refused its own signature: {good.message}")
+            self.assertTrue(good, f"the node refused the caller's signature: {good.message}")
 
             bad = await api.verify_text_signature(
                 SIGNED_TEXT + " tampered", signature, timeout=10
@@ -1417,7 +1487,7 @@ class LiveCryptoTest(live_support.LiveCase):
             signature = await api.sign_hash(DIGEST, timeout=10)
             verdict = await api.verify_hash_signature(DIGEST, signature, timeout=10)
             self.assertTrue(
-                verdict, f"the node refused its own signature: {verdict.message}"
+                verdict, f"the node refused the caller's signature: {verdict.message}"
             )
         finally:
             await client.aclose()
