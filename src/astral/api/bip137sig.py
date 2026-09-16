@@ -36,8 +36,8 @@ Each op body is a single `ch.Receive()`, a single `ch.Send()` and a deferred
 `ch.Close()` (`astrald/mod/bip137sig/src/op_*.go`), so an `eos` written after
 the input is never read: the node closes with unread data in its receive buffer,
 which is a reset, and a reset discards the answer the node had already written.
-This is the opposite of `crypto`, whose ops end their `ch.Switch` with
-`BreakOnEOS` and need the terminator. Every exchange here is therefore one send
+This is the opposite of `crypto`, whose ops leave their `ch.Switch` on an `eos`
+and need the terminator. Every exchange here is therefore one send
 and one read, and `Client.call_with(expect=1)` is that shape.
 
 Every op ends at a **bare EOF**, never at an `eos`. Verified live for all four,
@@ -198,7 +198,7 @@ class _Bytes8Alias(AliasRecord):
 
         **The length rule holds here too, and in astral-go it does not.** Go
         checks it in `WriteTo`/`ReadFrom` and not in `MarshalText`/`UnmarshalText`
-        (`api/bip137sig/entropy.go` at `5c18d9c`), so over there a JSON or text
+        (`api/bip137sig/entropy.go` at `6ea26c7`), so over there a JSON or text
         channel carries an entropy the binary channel refuses -- and once such a
         value exists nothing can re-emit it, because the only encoding it came
         through is the one that let it in. The rule belongs to the type rather

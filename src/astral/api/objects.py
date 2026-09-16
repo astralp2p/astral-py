@@ -86,12 +86,15 @@ blueprint the node does not know fails with an `error_message` whether or not
 client-side tolerance is `allow_unparsed=True`, which is a different keyword on a
 different side of the wire.
 
-**`objects.new` on `mod.nodes.node_info` panics the node.** A nil `*Identity`
-reaches a value-receiver `WriteTo` and astrald dies; the fix is not merged. That
-one type name is refused here rather than sent (`CRASHES_ON_NEW`), because a
-refusal is strictly better than a node crash and this module is the only thing
-between the two. `client.call_one("objects.new?type=…")` is the deliberate
-bypass, and the refusal is one line to delete when the fix lands.
+**`objects.new` on `mod.nodes.node_info` panics a node built on astral-go
+`5c18d9c`.** A nil `*Identity` reaches a value-receiver `WriteTo` and astrald
+dies. astral-go `0a15afb` fixes it, and astral-go `6ea26c7`, the revision astrald
+`26bb51d5` builds against, carries the fix. A client cannot see which astral-go a
+node was built with, so that one type name is refused here rather than sent
+(`CRASHES_ON_NEW`), because a refusal is strictly better than a node crash and
+this module is the only thing between the two.
+`client.call_one("objects.new?type=…")` is the deliberate bypass, and the
+refusal is one line to delete once no supported node predates `0a15afb`.
 
 **`objects.get_blueprint` exists and answers.** Design bug G-21 -- "there is no
 way to fetch a blueprint's schema from a node" -- is **withdrawn**: the op is on
@@ -127,7 +130,7 @@ string, sends no zone the caller did not ask for, and sends the `eos`.
 
 **The `zone` argument is not the routing zone, and on four ops it destroys it.**
 Eight ops declare a `zone` query-string argument. astrald sets the op's context
-zone from `route_query_msg.Zone` (`mod/apphost/src/guest.go:220`), and then
+zone from `route_query_msg.Zone` (`mod/apphost/src/guest.go:224`), and then
 `describe`, `find`, `search` and `read` *widen* it with `IncludeZone(args.Zone)`
 while `scan`, `delete`, `purge` and `load` *replace* it with `WithZone` --
 defaulting to `ZoneAll` when the argument is absent. So on those four a routing
@@ -355,9 +358,11 @@ CRASHES_ON_NEW: Final[frozenset[str]] = frozenset({"mod.nodes.node_info"})
 """Type names `objects.new` must never be sent.
 
 `mod.nodes.node_info` holds a `*astral.Identity` and astral-go's zero value
-leaves it nil; the type's `WriteTo` has a value receiver, so serialising the zero
-value dereferences nil and **the node dies**. Deterministic, observed, and the
-fix is on an unmerged astral-go branch, so the running node still crashes.
+leaves it nil; at astral-go `5c18d9c` the type's `WriteTo` has a value receiver,
+so serialising the zero value dereferences nil and **the node dies**.
+Deterministic and observed. astral-go `0a15afb` substitutes the zero identity,
+and astral-go `6ea26c7` carries it; a node built on an earlier astral-go still
+crashes, and a client cannot tell the two apart.
 """
 
 
@@ -1608,9 +1613,9 @@ class Objects(ModuleClient):
         is returned as one. A primitive name answers that primitive's zero value.
 
         **`mod.nodes.node_info` is refused rather than sent**: the query panics
-        astrald deterministically (see `CRASHES_ON_NEW`). Sweeping this op over
-        `blueprints()` is therefore not safe on any node running an astral-go
-        without the unmerged fix.
+        a node built on an astral-go before `0a15afb` deterministically (see
+        `CRASHES_ON_NEW`). Sweeping this op over `blueprints()` is therefore not
+        safe on any such node.
 
         Absent from astral-go entirely.
         """
@@ -1619,7 +1624,7 @@ class Objects(ModuleClient):
             raise BadArgument(
                 f"{OP_NEW}: {name!r} crashes the node -- its zero value has a nil "
                 "*Identity and a value-receiver WriteTo, so serialising it "
-                "dereferences nil. The fix is not merged"
+                "dereferences nil on a node built before astral-go 0a15afb"
             )
         qs = querystring.build(OP_NEW, _encode({"type": name}))
         return await self._c.call_one(qs, **kw)

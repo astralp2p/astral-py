@@ -482,10 +482,11 @@ class ApplyFiltersOpTest(DirCase):
 
     @bounded()
     async def test_it_queries_apply_filters_and_never_set_alias(self):
-        """Design bug G-8. astral-go's `ApplyFilters` sends its arguments to
-        `dir.set_alias` (`api/dir/client/apply_filters.go:20`), so a read
-        helper mutates the directory. The assertion is on the op name the node
-        received, because that is the only place the bug is visible."""
+        """Design bug G-8. astral-go `5c18d9c`'s `ApplyFilters` sends its
+        arguments to `dir.set_alias` (`api/dir/client/apply_filters.go:19` at
+        `5c18d9c`), so a read helper mutates the directory. The assertion is
+        on the op name the node received, because that is the only place the
+        bug is visible."""
         mock = MockApphost(routes={OP_APPLY_FILTERS: Accept(objects=[frame_bool(True)])})
         async with mock:
             d = await self.dir(mock)
@@ -514,11 +515,12 @@ class ApplyFiltersOpTest(DirCase):
     @bounded()
     async def test_the_identity_argument_accepts_a_directory_name(self):
         """Unlike `get_alias`, this method sends a name for the node to resolve:
-        the op declares `ID string` at the pin
-        (`mod/dir/src/op_apply_filters.go:14`) and `Identity string` at astrald
-        `bd98bbe8`. Verified live on a node that predates `bd98bbe8`:
-        `dir.apply_filters?filters=all&id=furry-bolt` answers `bool(true)`. No
-        query is spent resolving the name here."""
+        the op declares `ID string` at astrald `074a852b`
+        (`mod/dir/src/op_apply_filters.go:13` at `074a852b`) and
+        `Identity string` from `bd98bbe8` on
+        (`mod/dir/src/op_apply_filters.go:13`). Verified live on a node that
+        predates `bd98bbe8`: `dir.apply_filters?filters=all&id=furry-bolt`
+        answers `bool(true)`. No query is spent resolving the name here."""
         mock = MockApphost(routes={OP_APPLY_FILTERS: Accept(objects=[frame_bool(True)])})
         async with mock:
             d = await self.dir(mock)
@@ -593,7 +595,7 @@ class SetAliasOpTest(DirCase):
     async def test_removal_sends_an_explicitly_empty_alias(self):
         """Design bug D-18. astrald declares `Alias *string` as required and
         reads removal from an empty value, and the required check tests key
-        **presence** (`astral-go/lib/routing/op.go:137`). An omitted `alias` is
+        **presence** (`astral-go/lib/routing/op.go:166`). An omitted `alias` is
         a rejected query, so `alias=` and no `alias` are different queries."""
         mock = MockApphost(routes={OP_SET_ALIAS: Accept(objects=[ACK_FRAME])})
         async with mock:
@@ -718,7 +720,7 @@ class LiveDirTest(live_support.LiveCase):
         to the identity it greeted with. Node-agnostic: the alias asserted is
         whatever the greeting reported, and astrald guarantees the node has one
         -- `setDefaultAlias` runs at load and generates one when the table is
-        empty (`mod/dir/src/module.go:150`).
+        empty (`mod/dir/src/module.go:155`).
         """
         async with await self.client() as client:
             m = await Dir(client).alias_map()
@@ -853,7 +855,7 @@ class CitationTest(unittest.TestCase):
 
     # What must appear on the line each anchor names, keyed by the file.
     EXPECTED = {
-        "op_set_alias.go": "Alias *string",
+        "op_set_alias.go": '*string `query:"required"` // required but can be empty',
         "op_apply_filters.go": 'strings.Split(args.Filters, ",")',
     }
 
@@ -881,14 +883,32 @@ class CitationTest(unittest.TestCase):
                 self.assertIn(self.EXPECTED[name], line)
 
     def test_the_bare_line_citations_still_land(self):
-        """The anchors that were already exact, kept exact."""
-        for relative, number, expected in (
-            ("mod/dir/src/module.go", 131, "func (mod *Module) ApplyFilters"),
-            ("mod/dir/src/module.go", 56, 'if s == "" || s == "anyone"'),
+        """The anchors that were already exact, kept exact.
+
+        `None` reads at the pin. A named revision is a claim about that
+        revision alone: astral-go `5c18d9c`'s `ApplyFilters` is bug G-8, which
+        the pin no longer carries.
+        """
+        astrald, go = self.ASTRALD, reference.ASTRAL_GO
+        module, filters = "mod/dir/src/module.go", "mod/dir/src/op_apply_filters.go"
+        client = "api/dir/client/apply_filters.go"
+        for repo, relative, number, expected, rev in (
+            (astrald, module, 133, "func (mod *Module) ApplyFilters", None),
+            (astrald, module, 58, 'if s == "" || s == "anyone"', None),
+            (astrald, module, 155, "func (mod *Module) setDefaultAlias", None),
+            (astrald, "mod/dir/src/db.go", 9, '`gorm:"primaryKey"`', None),
+            (astrald, "mod/dir/src/db.go", 10, '`gorm:"index;unique;not null"`', None),
+            (astrald, filters, 13, "ID      string", "074a852b"),
+            (astrald, filters, 13, "Identity string", None),
+            (go, "lib/routing/op.go", 166, "field required", None),
+            (go, client, 19, "dir.MethodSetAlias", "5c18d9c"),
+            (go, client, 17, "matches all of them", "5c18d9c"),
+            (go, client, 20, "dir.MethodApplyFilters", None),
+            (go, client, 17, "matches any of them", None),
         ):
-            with self.subTest(file=relative, line=number):
+            with self.subTest(file=relative, line=number, rev=rev):
                 try:
-                    line = reference.cited_line(self.ASTRALD, relative, number)
+                    line = reference.cited_line(repo, relative, number, rev)
                 except reference.Unavailable as exc:  # pragma: no cover
                     self.skipTest(str(exc))
                 self.assertIn(expected, line)

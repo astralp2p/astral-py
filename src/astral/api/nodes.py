@@ -45,7 +45,10 @@ Parameter names follow astrald `bd98bbe8`: `nodes.resolve_endpoints`,
 registry rather than off the docs, on a node that predates `bd98bbe8`:
 `nodes.migrate_session` marks `session_id` and `link_id` required and
 `nodes.new_link` marks its identity argument, `target` there, required; every
-other parameter of every other op is optional there, `out` included.
+other parameter of every other op is optional there, `out` included. astrald
+`26bb51d5` marks seven required in source: those three, `identity` on
+`nodes.resolve_endpoints` and `nodes.add_endpoint`, `endpoint` on
+`nodes.add_endpoint`, and `link_id` on `nodes.close_link`.
 
 **`nodes.migrate_session` ships only in its `start=true` form.** Design section
 4.5 drops the negotiated mode -- the `ready`/`switched`/`resume`/`done` signal
@@ -85,11 +88,14 @@ in those bytes and both are pinned by vectors generated from astral-go itself:
 `5c18d9c`: `WriteTo` hands `info.Identity`, a `*astral.Identity`, to
 `streams.WriteAllTo`, and `Identity.WriteTo` has a value receiver, so the nil
 pointer in the zero value the registry builds is dereferenced rather than
-erroring, on a goroutine with no recover. A guard exists on an unmerged
-astral-go branch. Decoding a `node_info` is entirely safe -- it is what this
-module does -- and asking the node to build one is not. `NodeInfo()` here is
-that zero value, needs no node, and is byte-identical to what astral-go writes
-once the identity is non-nil.
+erroring, on a goroutine with no recover. astral-go `0a15afb` substitutes the
+zero identity for a nil one, and astral-go `6ea26c7`, the revision astrald
+`26bb51d5` builds against, carries it. A client cannot see which astral-go a
+node was built with, so the rule stands for every node. Decoding a `node_info`
+is entirely safe -- it is what this module does -- and asking the node to build
+one is not. `NodeInfo()` here is that zero value, needs no node, and is
+byte-identical to what astral-go writes: the zero identity is 33 null bytes
+either way.
 
 The text form is base62 of that blob (`jxskiss/base62`, alphabet `[A-Za-z0-9]`),
 and so is the JSON form: `NodeInfo` has a `MarshalText` and no `MarshalJSON`, so
@@ -203,12 +209,12 @@ def require_experimental(op: str, opted_in: bool) -> None:
     What the gate is not is a claim that these ops are unsafe to call:
     `nodes.links` is read-only and answers on any node. What it is, is design
     section 0.1's Tier 3 in force. This surface is the least covered by the
-    reference client -- 2 of 7 `nodes` ops have an astral-go client at all --
-    two of `nat`'s five ops are dropped outright (section 4.5), and four of
-    these seven **mutate node state**: `close_link` drops a live link,
-    `add_endpoint` writes a record that stands for 90 days. An SDK that let all
-    of that be reached by a typo in an attribute name would be overstating what
-    it has verified.
+    reference client -- 3 of 7 `nodes` ops have an astral-go client at
+    astral-go `6ea26c7`, and 2 at `5c18d9c` -- two of `nat`'s five ops are
+    dropped outright (section 4.5), and four of these seven **mutate node
+    state**: `close_link` drops a live link, `add_endpoint` writes a record that
+    stands for 90 days. An SDK that let all of that be reached by a typo in an
+    attribute name would be overstating what it has verified.
 
     The message names the class the caller would construct, which is read off
     the op's own module prefix so it cannot name the wrong one.

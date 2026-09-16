@@ -2,8 +2,8 @@
 
 Three tiers, as `test_api_nodes.py` has them and for the same reason:
 
-- **Tier A** pins the wire against **astral-go's own output**, printed this
-  session by a Go program linked against `api/nat` at the pinned revision. The
+- **Tier A** pins the wire against **astral-go's own output**, printed by a Go
+  program linked against `api/nat` at astral-go `5c18d9c`. The
   vectors matter most for `nat.hole`, whose two endpoint fields are concrete
   values rather than the type-tagged interface fields `nodes` uses -- three
   bytes each for a zero endpoint, with nothing naming the type.
@@ -76,7 +76,7 @@ def ip(text: str) -> IPAddress:
 EP4 = Endpoint(ip=ip("10.21.0.5"), port=41234)
 EP6 = Endpoint(ip=ip("fe80::8aa2:9eff:fea8:4ab0"), port=41234)
 
-# astral-go's own bytes, printed this session from `api/nat` at the pin.
+# astral-go's own bytes, printed from `api/nat` at astral-go `5c18d9c`.
 GO_VECTORS = {
     "endpoint_v4": "040a150005a112",
     "endpoint_v6": "10fe800000000000008aa29efffea84ab0a112",
@@ -701,9 +701,9 @@ class LiveNatTest(live_support.LiveCase):
 class ReferenceClaimTest(unittest.TestCase):
     """Every claim this module makes about astral-go and astrald, re-read."""
 
-    def source(self, repo: str, path: str) -> str:
+    def source(self, repo: str, path: str, rev: str | None = None) -> str:
         try:
-            return reference.read(repo, path)
+            return reference.read(repo, path, rev)
         except reference.Unavailable as exc:
             self.skipTest(str(exc))
 
@@ -726,16 +726,32 @@ class ReferenceClaimTest(unittest.TestCase):
         self.assertIn("Arg bool", astrald_src)
         self.assertIn('"arg": enabled', go_src)
 
-    def test_list_holes_takes_with_and_resolves_it_per_hole(self):
+    def test_list_holes_takes_identity_and_answers_a_bad_name_in_the_stream(self):
+        """The unresolvable name is an `error_message` after `AcceptRaw`, which
+        is why `list_holes` raises `RemoteError` and not `QueryRejected`."""
         src = self.source(reference.ASTRALD, "mod/nat/src/op_list_holes.go")
-        self.assertIn('With string `query:"optional"`', src)
-        self.assertIn("mod.Dir.ResolveIdentity(string(args.With))", src)
-        self.assertIn("ch.Send(astral.NewError(err.Error()))", src)
+        self.assertIn("Identity string", src)
+        self.assertLess(
+            src.index("q.AcceptRaw()"),
+            src.index("mod.Dir.ResolveIdentity(args.Identity)"),
+        )
+        self.assertIn("return ch.Send(astral.Err(err))", src)
+        self.assertIn("hole.MatchesPeer(target)", src)
 
     def test_punch_asks_the_node_to_be_the_initiator(self):
         src = self.source(reference.ASTRALD, "mod/nat/src/op_punch.go")
-        self.assertIn("Target string", src)
+        self.assertIn('Identity string `query:"required"`', src)
+        self.assertIn("mod.Dir.ResolveIdentity(args.Identity)", src)
         self.assertIn("client.NodePunch(ctx, target, localIP, puncher)", src)
+
+    def test_astrald_074a852b_names_the_arguments_with_and_target(self):
+        """The names the module attributes to a node that predates `bd98bbe8`."""
+        at = "074a852b"
+        holes = self.source(reference.ASTRALD, "mod/nat/src/op_list_holes.go", at)
+        punch = self.source(reference.ASTRALD, "mod/nat/src/op_punch.go", at)
+        self.assertIn('With string `query:"optional"`', holes)
+        self.assertIn("mod.Dir.ResolveIdentity(string(args.With))", holes)
+        self.assertIn("Target string", punch)
 
     def test_the_two_dropped_ops_need_a_puncher(self):
         """Both astral-go clients take a `nat.Puncher`, or drive a handshake

@@ -19,7 +19,7 @@ prefix and the type name of a single apphost frame, split across two WebSocket
 messages. astral-go's `BinarySender.Send` issues **four** `Write` calls per frame
 -- `String8.WriteTo` writes the length byte and then the name, `Bytes32.WriteTo`
 the length and then the payload (`astral/channel/binary_sender.go`,
-`astral/string_types.go:21`, `astral/byte_types.go:160`) -- and
+`astral/string_types.go:21`, `astral/byte_types.go:164`) -- and
 `websocket.NetConn` maps one `Write` to one message. Frame boundaries therefore
 carry no information whatsoever. `WebSocketByteTransport` concatenates every
 binary payload into one byte stream and never treats a message boundary as a

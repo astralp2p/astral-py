@@ -867,16 +867,15 @@ class SecurityNoteTest(unittest.TestCase):
     caller they were open. A census is a claim with a shelf life, so each one
     here names its revision and is read there.
 
-    `AT` is the revision the docstring's *Authorization* section names. It is
-    not the pin, and moving the pin is not this test's business: the pin governs
-    every astrald citation in the package at once.
+    The current census is read at the pin, so moving the pin re-counts it. The
+    census before both guards is read at `HISTORY`, which the docstring names.
     """
 
     SRC = "mod/apphost/src"
-    AT = "cc1cd3b7"
+    HISTORY = "074a852b"
 
-    # At the pin. History, and the docstring says so.
-    PINNED_GUARDED = {
+    # At `HISTORY`. Named as history, and the docstring says so.
+    HISTORIC_GUARDED = {
         "bind",
         "hold_object",
         "unhold_object",
@@ -884,7 +883,7 @@ class SecurityNoteTest(unittest.TestCase):
         "register_handler",
         "install_app",
     }
-    PINNED_UNGUARDED = {
+    HISTORIC_UNGUARDED = {
         "whoami",
         "list_tokens",
         "create_token",
@@ -894,7 +893,7 @@ class SecurityNoteTest(unittest.TestCase):
         "cancel",
     }
 
-    # At `AT`. The ops that ask an action before they touch what they guard.
+    # At the pin. The ops that ask an action before they touch what they guard.
     ADMIN_MANAGE_APPS = {
         "create_token",
         "delete_token",
@@ -929,8 +928,8 @@ class SecurityNoteTest(unittest.TestCase):
         except reference.Unavailable as exc:  # pragma: no cover -- may be absent
             self.skipTest(str(exc))
 
-    def test_the_pin_era_census_is_still_true_of_the_pin(self):
-        """Read at the pinned revision, not out of the working tree.
+    def test_the_historic_census_is_still_true_of_its_revision(self):
+        """Read at `HISTORY`, not at the pin and not out of the working tree.
 
         Globbing the checkout is what made this test fail on a sibling
         repository's pull: astrald moved to `3392926b`, gained a guarded
@@ -938,27 +937,27 @@ class SecurityNoteTest(unittest.TestCase):
         running node did not serve and no SDK method drove. The census is a
         statement about the revision it names, so it is read at that revision.
         """
-        ops = self.ops()
+        ops = self.ops(self.HISTORY)
         guarded = {name for name, src in ops.items() if "OriginNetwork" in src}
-        self.assertEqual(guarded, self.PINNED_GUARDED)
-        self.assertEqual(set(ops) - guarded, self.PINNED_UNGUARDED)
+        self.assertEqual(guarded, self.HISTORIC_GUARDED)
+        self.assertEqual(set(ops) - guarded, self.HISTORIC_UNGUARDED)
 
         doc = apphost_module.__doc__ or ""
         self.assertNotIn("alone among its neighbours", doc)
-        self.assertIn(reference.PINS[reference.ASTRALD][1], doc)
+        self.assertIn(self.HISTORY, doc)
         self.assertIn("named as history", doc)
-        for name in self.PINNED_UNGUARDED:
+        for name in self.HISTORIC_UNGUARDED:
             with self.subTest(op=name):
                 self.assertIn(name, doc)
 
-    def test_the_current_census_matches_merged_astrald(self):
-        """The census the docstring states at `AT`, recounted from the source.
+    def test_the_current_census_matches_the_pin(self):
+        """The census the docstring states at the pin, recounted from the source.
 
         Recounted rather than compared against a number in the prose: the prose
         is what goes stale, and a test that read its numbers out of the prose
         would agree with it whatever it said.
         """
-        ops = self.ops(self.AT)
+        ops = self.ops()
         guarded = {name for name, src in ops.items() if "OriginNetwork" in src}
 
         self.assertEqual(len(ops), 14)
@@ -968,7 +967,7 @@ class SecurityNoteTest(unittest.TestCase):
         # Unwrapped, because a line break inside a sentence is a formatting
         # choice and the claim is the sentence.
         doc = " ".join((apphost_module.__doc__ or "").split())
-        self.assertIn(self.AT, doc)
+        self.assertIn(f"re-derived at `{reference.PINS[reference.ASTRALD][1]}`", doc)
         self.assertIn("Fourteen `op_*.go` files.", doc)
         self.assertIn("Twelve refuse a network origin", doc)
         self.assertIn("the two that do not are `whoami` and `register`", doc)
@@ -980,7 +979,7 @@ class SecurityNoteTest(unittest.TestCase):
         before `AcceptRaw`, or a caller holding nothing has already been handed
         a channel by the time it is told no.
         """
-        ops = self.ops(self.AT)
+        ops = self.ops()
         asked = {
             name
             for name, src in ops.items()
@@ -1016,12 +1015,10 @@ class SecurityNoteTest(unittest.TestCase):
         """
         try:
             user_auth = reference.read(
-                reference.ASTRALD, "mod/user/src/authorize_user_or_node.go", self.AT
+                reference.ASTRALD, "mod/user/src/authorize_user_or_node.go"
             )
-            router = reference.read(reference.ASTRALD, "core/router.go", self.AT)
-            guard = reference.read(
-                reference.ASTRALD, "mod/crypto/src/sign_guard.go", self.AT
-            )
+            router = reference.read(reference.ASTRALD, "core/router.go")
+            guard = reference.read(reference.ASTRALD, "mod/crypto/src/sign_guard.go")
         except reference.Unavailable as exc:  # pragma: no cover -- may be absent
             self.skipTest(str(exc))
 
@@ -1034,15 +1031,15 @@ class SecurityNoteTest(unittest.TestCase):
         self.assertIn("with no live run behind it", doc)
 
     def test_every_astrald_line_the_authorization_section_cites_lands(self):
-        """`path:line` at `AT`, each one read and matched against its claim.
+        """`path:line` at the pin, each one read and matched against its claim.
 
         A citation that names the wrong line is a reader sent to the wrong
         place, which is the failure this whole file exists to make loud.
         """
         admin = "authorizeAdminManageApps"
         cites = (
-            (f"{self.SRC}/op_list_tokens.go", 19, "OriginNetwork"),
-            (f"{self.SRC}/op_list_tokens.go", 23, admin),
+            (f"{self.SRC}/op_list_tokens.go", 20, "OriginNetwork"),
+            (f"{self.SRC}/op_list_tokens.go", 24, admin),
             (f"{self.SRC}/op_create_token.go", 20, "OriginNetwork"),
             (f"{self.SRC}/op_create_token.go", 24, admin),
             (f"{self.SRC}/op_delete_token.go", 19, "OriginNetwork"),
@@ -1065,7 +1062,7 @@ class SecurityNoteTest(unittest.TestCase):
         for path, number, fragment in cites:
             with self.subTest(citation=f"{path}:{number}"):
                 try:
-                    line = reference.cited_line(reference.ASTRALD, path, number, self.AT)
+                    line = reference.cited_line(reference.ASTRALD, path, number)
                 except reference.Unavailable as exc:  # pragma: no cover
                     self.skipTest(str(exc))
                 self.assertIn(fragment, line)

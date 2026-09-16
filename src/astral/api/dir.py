@@ -35,29 +35,32 @@ bare EOF with no `eos`; `dir.filters` ends at an `eos`. Both shapes verified
 live against `furry-bolt` this session. `set_alias` is the one op here that
 writes, and it is the only one no live test calls.
 
-**`apply_filters` is read-only here.** astral-go's client sends it to
-`dir.set_alias` (`api/dir/client/apply_filters.go:20`), so a read helper names
-the write op: with `id` and `filters` present and `alias` absent the required
-check fails (`astral-go/lib/routing/op.go:137`) and the query is rejected, and a
-caller that also carried an `alias` renames an identity while asking a question.
-Design bug G-8, not inherited. `OP_APPLY_FILTERS` is the only op name
-`apply_filters` sends, and a test asserts on the op the node received.
+**`apply_filters` is read-only here.** astral-go `5c18d9c`'s client sends it to
+`dir.set_alias` (`api/dir/client/apply_filters.go:19` at `5c18d9c`), so a read
+helper names the write op: with `id` and `filters` present and `alias` absent
+the required check fails (`astral-go/lib/routing/op.go:166`) and the query is
+rejected, and a caller that also carried an `alias` renames an identity while
+asking a question. Design bug G-8, not inherited. The pin sends
+`dir.MethodApplyFilters` (`api/dir/client/apply_filters.go:20`).
+`OP_APPLY_FILTERS` is the only op name `apply_filters` sends, and a test asserts
+on the op the node received.
 
 **`apply_filters` is OR, not AND.** astrald returns true when the identity
-passes **any** named filter (`mod/dir/src/module.go:131`), and skips a filter
-name it does not know. astral-go's client documents "returns true if the
-identity matches all of them" (`api/dir/client/apply_filters.go:15`), which is
-the opposite. astrald is the authority and OR is what this module documents. An
-unknown filter name contributes nothing, so a misspelled name is a silent
-`False` -- verified live: `dir.apply_filters?filters=nope` answers `bool(false)`
+passes **any** named filter (`mod/dir/src/module.go:133`), and skips a filter
+name it does not know. astral-go `5c18d9c`'s client documents "returns true if
+the identity matches all of them" (`api/dir/client/apply_filters.go:17` at
+`5c18d9c`), which is the opposite; the pin's documents "any of them"
+(`api/dir/client/apply_filters.go:17`). astrald is the authority and OR is what
+this module documents. An unknown filter name contributes nothing, so a
+misspelled name is a silent `False` -- verified live: `dir.apply_filters?filters=nope` answers `bool(false)`
 and `dir.apply_filters?filters=` answers `bool(false)`.
 
 **`set_alias` needs both arguments, `alias` included when it is empty.**
 astrald declares `Alias *string` with `query:"required"` and the comment
 "required but can be empty" (`mod/dir/src/op_set_alias.go` `opSetAliasArgs.Alias`,
-line 11 at astrald `154ba3ae`); the required
+line 11 at astrald `26bb51d5`); the required
 check tests key **presence** in the parsed parameters
-(`astral-go/lib/routing/op.go:137`). Removal is therefore `alias=` with an empty
+(`astral-go/lib/routing/op.go:166`). Removal is therefore `alias=` with an empty
 value, which is a different query string from an absent `alias`. Design bug
 D-18. `remove_alias()` is the named form of it.
 
@@ -81,7 +84,7 @@ resolving one. Verified live on a node that predates `bd98bbe8`:
 `identity` answers with the **zero identity** rather than an error -- verified
 live under the argument's earlier name, `name`; `bd98bbe8` renames the field
 and changes nothing else in `OpResolve` -- because astrald maps
-`""` and `"anyone"` to `astral.Identity{}` (`mod/dir/src/module.go:56`). A
+`""` and `"anyone"` to `astral.Identity{}` (`mod/dir/src/module.go:58`). A
 caller that meant a name and sent an empty one gets `anyone`, which routes
 somewhere else entirely, so `resolve("")` raises instead. `Identity.ANYONE` is
 the way to name that identity on purpose.
@@ -100,7 +103,9 @@ package eagerly so registration never depends on the property being touched.
 **Source citations name the symbol as well as the line.** astrald is a moving
 target and three anchors in this file had already drifted by a line or two, which
 costs a reader more than an absent citation: it makes them distrust the exact
-ones. Line numbers below are pinned to astrald `154ba3ae`.
+ones. Line numbers below are pinned to astrald `26bb51d5` and astral-go
+`6ea26c7`, the revisions `tests/reference.py` pins; a citation that names
+another revision is read at that revision.
 """
 
 from __future__ import annotations
@@ -149,7 +154,7 @@ OP_SET_ALIAS: Final = "dir.set_alias"
 
 # astrald joins and splits filter names on this byte, so a name containing one
 # is two names on the server (`mod/dir/src/op_apply_filters.go` `OpApplyFilters`,
-# line 25 at astrald `154ba3ae`).
+# line 29 at astrald `26bb51d5`).
 FILTER_SEPARATOR: Final = ","
 
 # The parameter specs, so every value travels as the bare payload half of its

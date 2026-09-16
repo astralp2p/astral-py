@@ -809,7 +809,7 @@ class LiveHTTPTest(unittest.IsolatedAsyncioTestCase):
 
     Read-only, and unauthenticated on purpose: astrald has **no anonymous HTTP
     guest** -- `AuthenticateToken("")` fails, so every query without a token is
-    401 (`access_tokens.go:48`). Minting a token is a write op and this tier does
+    401 (`access_tokens.go:51`). Minting a token is a write op and this tier does
     not perform one, so the authenticated path is exercised against `HTTPMock`
     and the refusal path against the node.
     """

@@ -45,7 +45,7 @@ in the table is not. Filed as a design objection.
 
 **A digest's length rule is one-directional, and astral-go's is too.**
 `Digest.WriteTo` writes whatever bytes it holds and `Digest.ReadFrom` demands
-exactly 35 (`api/tor/digest.go`, astral-go `5c18d9c`), so the zero value encodes
+exactly 35 (`api/tor/digest.go`, astral-go `6ea26c7`), so the zero value encodes
 to nothing and cannot be read back. The node proves it:
 `objects.new?type=mod.tor.digest` answers a **zero-byte** frame, and
 `objects.new?type=mod.tor.endpoint` answers `0000`, which is a two-byte payload
@@ -81,7 +81,7 @@ fields, because a `@record` owns its schema. `nat.endpoint` is a third of the
 same shape -- `IP` ref, `Port` uint16, `Network()` of `kcp` -- and Tier 3 can
 reuse `IPEndpoint` rather than restate it.
 
-Source citations are pinned to astral-go `5c18d9c` and astrald `074a852b`.
+Source citations are pinned to astral-go `6ea26c7` and astrald `26bb51d5`.
 """
 
 from __future__ import annotations
@@ -119,17 +119,17 @@ MAX_PORT: Final = 0xFFFF
 TCP_NETWORK: Final = "tcp"
 TCP_ALIAS: Final = "inet"
 """astrald's TCP module parses and unpacks `inet` as well as `tcp`
-(`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `074a852b`). The
+(`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `26bb51d5`). The
 endpoint's own `Network()` is `tcp` and never `inet`."""
 
 KCP_NETWORK: Final = "kcp"
 TOR_NETWORK: Final = "tor"
 GATEWAY_NETWORK: Final = "gw"
-"""`mod/gateway/src/module.go` `NetworkName`, line 27 at astrald `074a852b`.
+"""`mod/gateway/src/module.go` `NetworkName`, line 28 at astrald `26bb51d5`.
 The module is `gateway` and its network is `gw`."""
 
 TOR_DEFAULT_PORT: Final = 1791
-"""`mod/tor/src/module.go` `defaultListenPort`, line 17 at astrald `074a852b`.
+"""`mod/tor/src/module.go` `defaultListenPort`, line 17 at astrald `26bb51d5`.
 astrald's tor parser supplies it for an address with no port; astral-go's
 `UnmarshalText` requires one. `TorEndpoint.parse` accepts both."""
 
@@ -482,7 +482,7 @@ class TorEndpoint(Endpoint):
 
         `unknown` is the zero value, which is astral-go's `UnmarshalText`. A
         missing port defaults to 1791, which is astrald's parser
-        (`mod/tor/src/parse.go` `Parse`, astrald `074a852b`) and is accepted
+        (`mod/tor/src/parse.go` `Parse`, astrald `26bb51d5`) and is accepted
         here so a string the node reads is a string this SDK reads. A port
         outside `uint16` raises rather than truncating.
         """
@@ -540,7 +540,7 @@ class GatewayEndpoint(Endpoint):
 
     astrald's parser does two things this one cannot: it resolves each half
     through the directory, and it refuses an endpoint whose gateway is its
-    target (`mod/gateway/src/parser.go` `Module.Parse`, astrald `074a852b`).
+    target (`mod/gateway/src/parser.go` `Module.Parse`, astrald `26bb51d5`).
     Both need a node. A wire type has none, so `parse` is astral-go's
     `ParseEndpoint`: two identities, parsed locally, no resolution and no
     equality rule.
@@ -561,7 +561,7 @@ class GatewayEndpoint(Endpoint):
 
         An absent identity renders as 66 zeros, because astral-go's
         `Identity.String()` answers `anyoneKey` for a nil receiver
-        (`astral/identity.go`, astral-go `5c18d9c`).
+        (`astral/identity.go`, astral-go `6ea26c7`).
         """
         return f"{_identity_text(self.gateway_id)}:{_identity_text(self.target_id)}"
 
@@ -620,7 +620,7 @@ NODE_INFO_TAGS: Final[Mapping[int, type[Endpoint]]] = {
 
 `NodeInfo.WriteTo` writes `uint8 count` and then one `uint8` tag and one bare
 payload per endpoint, with `0 = tcp`, `1 = tor`, `2 = gateway` and an error for
-anything else (`api/nodes/node_info.go`, astral-go `5c18d9c`). No other type
+anything else (`api/nodes/node_info.go`, astral-go `6ea26c7`). No other type
 uses these numbers: `mod.nodes.link_info` and `mod.nodes.endpoint_with_ttl` hold
 their endpoints in polymorphic slots, which carry the type name.
 

@@ -109,7 +109,7 @@ __all__ = [
 ]
 
 DEFAULT_HTTP_PORT: Final = 8624
-"""astrald's default `bind_http`, `tcp:0.0.0.0:8624` (sourced: `config.go:51`)."""
+"""astrald's default `bind_http`, `tcp:127.0.0.1:8624` (sourced: `config.go:57`)."""
 
 DEFAULT_HTTPS_PORT: Final = 443
 """The node serves no TLS. `https:` and `wss:` reach it through a proxy, where

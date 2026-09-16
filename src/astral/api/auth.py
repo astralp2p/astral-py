@@ -82,7 +82,7 @@ The mechanism differs from the shape and is worth naming, because it is the
 reason an SDK cannot derive one rule from the other. astral-go marshals a type
 that declares `MarshalJSON` through its own reflection walker, which keys every
 immediate field by the Go field name -- an embedded field's name is its type's
-name (`astral-go/astral/struct_value.go:149`). No action type declares
+name (`astral-go/astral/struct_value.go:163`). No action type declares
 `MarshalJSON`, so every one of them is marshalled by `encoding/json`, which
 promotes anonymous fields. The nesting is astral-go's rule; the flattening is
 Go's default showing through a gap.

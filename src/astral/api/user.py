@@ -37,7 +37,7 @@ per-op contract and is **not** discoverable from the wire):
 **`user.sync_assets` is the third streaming shape and the reason design section
 3.10 has one.** Zero or more `mod.user.op_update` objects, then a bare `uint64`
 that is the next unread height, then the close -- and **no `eos` at any point**
-(`astrald/mod/user/src/op_sync_assets.go:47`, the op's last statement). Every
+(`astrald/mod/user/src/op_sync_assets.go:51`, the op's last statement). Every
 generic reader in this SDK terminates on `eos` or EOF, so `call()`, `collect()`
 and `async for` all block on this op until the responder closes. `sync_assets()`
 below is hand-written for it and returns an `AssetSync`, which is
@@ -46,8 +46,8 @@ below is hand-written for it and returns an `AssetSync`, which is
 by EOF with `Stream.terminated_by == "eof"`.
 
 The height is the poll cursor. An empty answer echoes `start` back, so the same
-value re-polls safely (`op_sync_assets.go:33`); a non-empty answer is the highest
-row's height plus one (`op_sync_assets.go:44`).
+value re-polls safely (`op_sync_assets.go:37`); a non-empty answer is the highest
+row's height plus one (`op_sync_assets.go:48`).
 
 **Four ops end at `eos`, ten end at a bare EOF, and one ends at a value.**
 `assets`, `list_expelled`, `list_siblings` and `swarm_status` each close with
@@ -101,26 +101,36 @@ and the op's target (the node being adopted or expelled) are different nodes.
 **An empty target adopts or expels `anyone`.** At `074a852b` astrald declares
 `Target string` with no `query:"required"` tag, so an absent argument reaches
 `Dir.ResolveIdentity("")`, which maps the empty string to the zero identity
-(`astrald/mod/dir/src/module.go:56`) rather than failing. The op then signs a
+(`astrald/mod/dir/src/module.go:58`) rather than failing. The op then signs a
 membership contract, or an irreversible ban, for `anyone`. The same hole is on
 `user.add_asset` and `user.remove_asset` -- `ID *astral.ObjectID`, untagged, and
 no nil guard between the op and the row it writes
 (`astrald/mod/user/src/db.go:60`) -- and on `user.sync_with`, whose `Node` is an
 identity the op never checks. Every one of those arguments is mandatory here and
 an empty name is refused client-side. Defect filed against astrald. At `bd98bbe8`
-the three node arguments are `Identity string` and tagged required, and
-`user.sync_with` resolves its argument and rejects the zero identity with code 3.
+the three node arguments are `Identity string` and tagged required, `ID` is
+tagged required, and `user.sync_with` resolves its argument and rejects the zero
+identity with code 3. The tag tests that the key is present, not that it holds a
+value (`lib/routing/op.go` `Op.invoke` at astral-go `6ea26c7`), and `user.adopt`
+and `user.expel` at `26bb51d5` do not test the identity they resolve. Inferred
+from those two, not run: `identity=` with no value still hands the zero identity
+to both ops there.
 
-**Two declared arguments are inert on astrald `074a852b`.**
-`user.list_siblings`'s `zone` builds a context the op then never uses --
-`mod.getSiblings()` takes none (`astrald/mod/user/src/op_list_siblings.go:17`) --
-and `user.sync_with`'s `start` is never read at all
-(`astrald/mod/user/src/op_sync_with.go:20`). Both are still sent, because a
-declared argument is the op's own statement of its interface, but they are sent
-differently: `zone` always, because the value is forwarded to the routing zone
-too and that lever is not inert; `start` only when the caller names one, because
-the node has its own default for it and an implicit zero would mean "re-read the
-whole log" the moment the argument is wired up. Defect filed against astrald.
+**`user.list_siblings`'s `zone` is inert on astrald `26bb51d5`.** It builds a
+context the op then never uses -- `mod.getSiblings()` takes none
+(`astrald/mod/user/src/op_list_siblings.go:22`). It is still sent when the caller
+names one, because a declared argument is the op's own statement of its
+interface, and the value is forwarded to the routing zone too, where it is not
+inert. Defect filed against astrald.
+
+**`user.sync_with`'s `start` is not an argument on astrald `26bb51d5`.** At
+`074a852b` the op declares it and never reads it
+(`astrald/mod/user/src/op_sync_with.go:20` at `074a852b`). astrald `ac938c56`
+removes it, and the argument binder skips a key the op does not declare
+(`lib/query/editor.go` `Editor.SetMany` at astral-go `6ea26c7`), so a `start`
+sent to `26bb51d5` is accepted and ignored. It is sent only when the caller names
+one, because an implicit zero would mean "re-read the whole log" to a node that
+reads it.
 
 **Reject codes are numeric and carry no message.** Code 2 is "no active
 contract" on `adopt`, `expel`, `info`, `list_expelled`, `request_membership` and
@@ -128,7 +138,7 @@ contract" on `adopt`, `expel`, `info`, `list_expelled`, `request_membership` and
 `accept_membership` -- the same number for opposite states, because the state a
 node has is not the state either op wants. On `adopt`, `expel` and `sync_with`
 code 3 is an unresolvable target. Code 4 is an unauthorized caller on every op
-that authorizes (`astrald/mod/user/src/op_adopt.go:34`). `sync_assets` rejects
+that authorizes (`astrald/mod/user/src/op_adopt.go:32`). `sync_assets` rejects
 with 2 on a database fault. `add_asset` and `remove_asset` reject with
 `astral.CodeInternalError` on one, which is 4 as well
 (`astral-go/astral/codes.go`), so on those two a 4 alone does not say which
@@ -207,10 +217,10 @@ them `users.`-prefixed. astral-go declares the type in `api/user`
 the type is decodable when a peer sends one, and for nothing else.
 
 Reached as `client.user`, a `functools.cached_property` on `Client` built on
-first use (design section 5.1). Source citations are pinned to astrald
-`074a852b` and astral-go `5c18d9c`, the revisions `tests/reference.py` names;
-`tests/test_api_user.py` reads every one of them back and fails when it stops
-landing.
+first use (design section 5.1). A source citation resolves at astrald `26bb51d5`
+and astral-go `6ea26c7`, the revisions `tests/reference.py` pins, unless it names
+its own revision; `tests/test_api_user.py` reads every `path:line` back at the
+revision it resolves at and fails when it stops landing.
 """
 
 from __future__ import annotations
@@ -354,7 +364,7 @@ class Info:
     moment of the query, so neither is a stable identifier and neither is part
     of the contract. `Dir.DisplayName` is an alias when there is one, else a
     resolver's name, else the identity's fingerprint -- eight hex characters, a
-    colon, eight hex characters (`astrald/mod/dir/src/module.go:105`); the zero
+    colon, eight hex characters (`astrald/mod/dir/src/module.go:107`); the zero
     identity renders as `<anyone>`. Verified live: `furry-bolt` for the node,
     `03a40290:839f941d` for the user, which is a fingerprint and not a name.
 
@@ -715,8 +725,8 @@ class User(ModuleClient):
 
         `zone` is sent as the op's argument **and** as the routing zone, the
         way `Objects` sends its one scope to both levers. The op's own
-        argument is inert on astrald `074a852b` -- the context built from it is
-        never used (`mod/user/src/op_list_siblings.go:17`) -- and the routing
+        argument is inert on astrald `26bb51d5` -- the context built from it is
+        never used (`mod/user/src/op_list_siblings.go:22`) -- and the routing
         zone is not.
 
         The op has no active-contract guard of its own, but it authorizes the
@@ -881,14 +891,16 @@ class User(ModuleClient):
         `074a852b` the op's argument is not marked required and an absent one
         syncs with the zero identity.
 
-        **`start` is inert on astrald `074a852b`.** The op declares it and
-        `OpSyncWith` never reads it: `syncAssets` takes the node and reads the
-        height out of the tree itself (`mod/user/src/op_sync_with.go:20`,
-        `mod/user/src/sync.go:29`). It is therefore sent only when the caller
-        names it, never by default -- an implicit `start=0` is identical to an
-        absent one today and would mean "re-read the whole log from zero" the
-        moment astrald wires the argument up, which is not what a caller who
-        named no height asked for.
+        **`start` reaches no code on astrald `26bb51d5`.** `syncAssets` takes
+        the node and reads the height out of the tree itself
+        (`mod/user/src/op_sync_with.go:34`, `mod/user/src/sync.go:29`), and the
+        op no longer declares `start`: astrald `ac938c56` removes it, and the
+        binder skips an undeclared key. At `074a852b` the op declares it and
+        never reads it (`mod/user/src/op_sync_with.go:20` at `074a852b`). It is
+        therefore sent only when the caller names it, never by default -- an
+        implicit `start=0` is identical to an absent one on both revisions and
+        would mean "re-read the whole log from zero" to a node that reads it,
+        which is not what a caller who named no height asked for.
         """
         params: dict[str, Any] = {
             "identity": _identity(node, OP_SYNC_WITH).text()
@@ -912,7 +924,7 @@ class User(ModuleClient):
 
         Rejects with 2 without an active contract, 3 when `node` does not
         resolve, and 4 when the caller holds no `mod.user.admin_swarm_action` permit
-        (`astrald/mod/user/src/op_adopt.go:34`). The user always holds it.
+        (`astrald/mod/user/src/op_adopt.go:32`). The user always holds it.
 
         `node` is resolved by the node's directory: an alias, `localnode` or 66
         hex characters all reach it. An empty name is refused here -- the
@@ -1039,9 +1051,11 @@ class User(ModuleClient):
         claiming a node is a one-time transition. Every validation failure is
         an `error_message` and arrives as `RemoteError`.
 
-        astrald `074a852b` carries the op (`op_accept_contract.go`, astrald
-        #357) and astral-go `5c18d9c` carries no client for it; the client that
-        exists upstream is newer than the pin.
+        astrald carries the op from `074a852b` on (`op_accept_contract.go`,
+        astrald #357). astral-go `5c18d9c` carries no client for it; astral-go
+        `6ea26c7` does (`api/user/client/accept_contract.go`), and that client
+        sends the contract with no `eos` and expects an `ack`, as this method
+        does.
         """
         if not isinstance(signed, SignedContract):
             raise BadArgumentType(
