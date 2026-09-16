@@ -829,10 +829,16 @@ class AstraldParityTest(unittest.TestCase):
             names = reference.listdir(reference.ASTRALD, self.ASTRALD)
         except reference.Unavailable as exc:  # pragma: no cover -- may be absent
             self.skipTest(str(exc))
+        # `_test.go` is excluded for the reason the crypto census excludes it:
+        # astrald grows `op_*_test.go` beside the ops, and none of them is an op.
+        # `mod/bip137sig/src` carries none at the pinned revision, so this census
+        # passes either way today and would fail on the first one added.
         ops = {
             name[len("op_") : -len(".go")]
             for name in names
-            if name.startswith("op_") and name.endswith(".go")
+            if name.startswith("op_")
+            and name.endswith(".go")
+            and not name.endswith("_test.go")
         }
         self.assertEqual(ops, self.IMPLEMENTED)
         for name in ops:

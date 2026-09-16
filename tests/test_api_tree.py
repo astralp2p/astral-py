@@ -98,17 +98,21 @@ TRUE_FRAME = ("bool", b"\x01")
 UNKNOWN_FRAME = ("mod.nearby.mode", b"\x00")
 
 
-def switch(*replies: tuple[str, bytes]):  # type: ignore[no-untyped-def]
+def switch(*replies: tuple[str, bytes], mirror_eos: bool = False):  # type: ignore[no-untyped-def]
     """astrald's batch `ch.Switch`: read one object, answer one, `BreakOnEOS`.
 
     `tree.set` without a `value` argument has exactly this shape at astral-go
     `5c18d9c` (`astral-go/api/tree/client/server.go:132` at `5c18d9c`), and a
     canned `Accept` cannot model it: `MockApphost` writes an `Accept` body and
     closes at once, while the op writes its input **after** the query has been
-    accepted, so the two race and the client's frames are dropped. At the pin
-    the op is `channel.Batch` (`astral-go/api/tree/client/server.go:132`),
-    which answers the same way and also mirrors the `eos` back; this handler
-    omits the mirrored `eos`.
+    accepted, so the two race and the client's frames are dropped.
+
+    At the pin the op is `channel.Batch` (`astral-go/api/tree/client/server.go:132`),
+    which answers the same way and mirrors the terminator: "an explicit EOS
+    input is answered with a final EOS, while a stream ended by EOF is not"
+    (`astral-go/astral/channel/batch.go` at `6ea26c7`). The client always sends
+    an explicit `eos`, so a node at the pin always answers one. `mirror_eos`
+    selects that shape; it defaults off so the `5c18d9c` shape stays covered.
 
     Replies are consumed in order, one per input object. An input past the last
     reply is read and left unanswered, which is how a short-answering op is
@@ -119,13 +123,22 @@ def switch(*replies: tuple[str, bytes]):  # type: ignore[no-untyped-def]
         conn.send_raw(frame("mod.apphost.query_accepted_msg"))
         await conn.flush()
         pending = list(replies)
+        saw_eos = False
         while True:
             received = await conn.recv_frame_or_none()
-            if received is None or received[0] == "eos":
+            if received is None:
+                break
+            if received[0] == "eos":
+                saw_eos = True
                 break
             if pending:
                 conn.send_frame(*pending.pop(0))
                 await conn.flush()
+        # `Batch` mirrors only what it saw: `sawEOS` gates the final `EOS`, so a
+        # stream ended by EOF gets none.
+        if mirror_eos and saw_eos:
+            conn.send_frame(*EOS_FRAME)
+            await conn.flush()
         await conn.aclose()
 
     return handler
@@ -613,6 +626,33 @@ class SetTest(TreeCase):
             t = await self.tree(mock)
             with self.assertRaises(ProtocolError):
                 await t.set("/tmp/k", Bool(True))
+
+    @bounded()
+    async def test_a_mirrored_eos_after_the_acks_is_tolerated(self):
+        """The shape a node at the pin actually answers with. `channel.Batch`
+        ends an explicitly terminated input stream with an `EOS` of its own
+        (`astral-go/astral/channel/batch.go` at `6ea26c7`), and every mock here
+        omitted it, so nothing covered the client meeting one."""
+        mock = MockApphost(
+            routes={OP_SET: switch(ACK_FRAME, ACK_FRAME, mirror_eos=True)}
+        )
+        async with mock:
+            t = await self.tree(mock)
+            await t.set_many("/tmp/k", [Bool(True), Bool(False)])
+        self.assertEqual(
+            self.body(mock), [("bool", b"\x01"), ("bool", b"\x00"), EOS_FRAME]
+        )
+
+    @bounded()
+    async def test_a_mirrored_eos_is_not_counted_as_an_answer(self):
+        """The mirrored `eos` arrives where a third ack would, so a client that
+        counted it would read a short answer list as complete."""
+        mock = MockApphost(routes={OP_SET: switch(ACK_FRAME, mirror_eos=True)})
+        async with mock:
+            t = await self.tree(mock)
+            with self.assertRaises(ProtocolError) as caught:
+                await t.set_many("/tmp/k", [Bool(True), Bool(False)])
+        self.assertIn("2 object(s)", str(caught.exception))
 
     @bounded()
     async def test_an_empty_batch_names_create_and_sends_nothing(self):
