@@ -11,9 +11,8 @@ must agree:
   SDK produced, so a round trip through it cannot agree with itself while
   disagreeing with the node.
 - **Tier B** pins the six ops against `MockApphost`: the query string each one
-  builds, the answer each one accepts, and the two reference bugs neither may
-  reproduce -- astral-go's `apply_filters` querying `dir.set_alias` (G-8) and
-  the omitted `alias=` on removal (D-18).
+  builds, the answer each one accepts, and the reference bug none may reproduce
+  -- the omitted `alias=` on removal (D-18).
 - **Tier C** runs the same six ops against a real node, minus `set_alias`. It
   is the gate of implementation step 9: a live `dir.alias_map` decodes to a
   typed `AliasMap` whose keys are aliases and whose values are `Identity`.
@@ -414,11 +413,10 @@ class GetAliasOpTest(DirCase):
     @bounded()
     async def test_a_directory_name_is_refused_before_it_is_sent(self):
         """This client parses the argument locally and names the fix. astrald
-        `bd98bbe8` resolves a name here; a node that predates it parses the
-        argument with `astral.ParseIdentity`, so a name reaches that node as a
-        **rejected query** and not as an error message. Verified live on such
-        a node: 66 hex characters that are not a curve point are rejected with
-        code 1."""
+        resolves a name here, so a name is answered rather than refused:
+        `ResolveIdentity` looks an alias up in the alias table and `GetAlias`
+        looks it back up, and the op hands the caller back the name it was
+        given."""
         mock = MockApphost()
         async with mock:
             d = await self.dir(mock)
@@ -478,22 +476,18 @@ class FiltersOpTest(DirCase):
 
 
 class ApplyFiltersOpTest(DirCase):
-    """`dir.apply_filters`, and the astral-go bug it must not reproduce."""
+    """`dir.apply_filters`: OR over the named filters, and read-only."""
 
     @bounded()
-    async def test_it_queries_apply_filters_and_never_set_alias(self):
-        """Design bug G-8. astral-go `5c18d9c`'s `ApplyFilters` sends its
-        arguments to `dir.set_alias` (`api/dir/client/apply_filters.go:19` at
-        `5c18d9c`), so a read helper mutates the directory. The assertion is
-        on the op name the node received, because that is the only place the
-        bug is visible."""
+    async def test_it_sends_one_name_under_the_ops_own_name(self):
+        """The op is read-only, and the assertion is on the op name the node
+        received: `OP_APPLY_FILTERS` is the only op this method sends."""
         mock = MockApphost(routes={OP_APPLY_FILTERS: Accept(objects=[frame_bool(True)])})
         async with mock:
             d = await self.dir(mock)
             got = await d.apply_filters("all")
         self.assertIs(got, True)
         self.assertEqual(mock.queries[0].op, OP_APPLY_FILTERS)
-        self.assertNotIn(OP_SET_ALIAS, self.sent(mock))
         self.assertEqual(self.sent(mock), f"{OP_APPLY_FILTERS}?filters=all")
 
     @bounded()
@@ -515,12 +509,10 @@ class ApplyFiltersOpTest(DirCase):
     @bounded()
     async def test_the_identity_argument_accepts_a_directory_name(self):
         """Unlike `get_alias`, this method sends a name for the node to resolve:
-        the op declares `ID string` at astrald `074a852b`
-        (`mod/dir/src/op_apply_filters.go:13` at `074a852b`) and
-        `Identity string` from `bd98bbe8` on
-        (`mod/dir/src/op_apply_filters.go:13`). Verified live on a node that
-        predates `bd98bbe8`: `dir.apply_filters?filters=all&id=furry-bolt`
-        answers `bool(true)`. No query is spent resolving the name here."""
+        the op declares `Identity string`
+        (`mod/dir/src/op_apply_filters.go:13`) and hands a non-empty one to
+        `ResolveIdentity` (`mod/dir/src/op_apply_filters.go:34`). No query is
+        spent resolving the name here."""
         mock = MockApphost(routes={OP_APPLY_FILTERS: Accept(objects=[frame_bool(True)])})
         async with mock:
             d = await self.dir(mock)
@@ -885,30 +877,30 @@ class CitationTest(unittest.TestCase):
     def test_the_bare_line_citations_still_land(self):
         """The anchors that were already exact, kept exact.
 
-        `None` reads at the pin. A named revision is a claim about that
-        revision alone: astral-go `5c18d9c`'s `ApplyFilters` is bug G-8, which
-        the pin no longer carries.
+        Every one reads at the pin: the SDK documents the node it supports, so
+        no citation in this module names another revision.
         """
         astrald, go = self.ASTRALD, reference.ASTRAL_GO
         module, filters = "mod/dir/src/module.go", "mod/dir/src/op_apply_filters.go"
         client = "api/dir/client/apply_filters.go"
-        for repo, relative, number, expected, rev in (
-            (astrald, module, 133, "func (mod *Module) ApplyFilters", None),
-            (astrald, module, 58, 'if s == "" || s == "anyone"', None),
-            (astrald, module, 155, "func (mod *Module) setDefaultAlias", None),
-            (astrald, "mod/dir/src/db.go", 9, '`gorm:"primaryKey"`', None),
-            (astrald, "mod/dir/src/db.go", 10, '`gorm:"index;unique;not null"`', None),
-            (astrald, filters, 13, "ID      string", "074a852b"),
-            (astrald, filters, 13, "Identity string", None),
-            (go, "lib/routing/op.go", 166, "field required", None),
-            (go, client, 19, "dir.MethodSetAlias", "5c18d9c"),
-            (go, client, 17, "matches all of them", "5c18d9c"),
-            (go, client, 20, "dir.MethodApplyFilters", None),
-            (go, client, 17, "matches any of them", None),
+        for repo, relative, number, expected in (
+            (astrald, module, 133, "func (mod *Module) ApplyFilters"),
+            (astrald, module, 58, 'if s == "" || s == "anyone"'),
+            (astrald, module, 72, 'Where("alias = ?", s)'),
+            (astrald, module, 155, "func (mod *Module) setDefaultAlias"),
+            (astrald, "mod/dir/src/db.go", 9, '`gorm:"primaryKey"`'),
+            (astrald, "mod/dir/src/db.go", 10, '`gorm:"index;unique;not null"`'),
+            (astrald, "mod/dir/src/alias.go", 23, 'First(&row, "identity = ?", identity)'),
+            (astrald, "mod/dir/src/op_resolve.go", 22, "mod.ResolveIdentity(args.Identity)"),
+            (astrald, filters, 13, "Identity string"),
+            (astrald, filters, 34, "mod.ResolveIdentity(args.Identity)"),
+            (go, "lib/routing/op.go", 166, "field required"),
+            (go, client, 20, "dir.MethodApplyFilters"),
+            (go, client, 17, "matches any of them"),
         ):
-            with self.subTest(file=relative, line=number, rev=rev):
+            with self.subTest(file=relative, line=number):
                 try:
-                    line = reference.cited_line(repo, relative, number, rev)
+                    line = reference.cited_line(repo, relative, number)
                 except reference.Unavailable as exc:  # pragma: no cover
                     self.skipTest(str(exc))
                 self.assertIn(expected, line)

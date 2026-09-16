@@ -19,11 +19,9 @@ and four pure local helpers that need no node at all.
 (`astral/channel/channel.go` `Close`), and every crypto op ends in
 `defer ch.Close()`, so each one terminates at EOF. The SDK sends `eos` on the
 ops that read a body, because every one of them leaves its `ch.Switch` on the
-terminator rather than on a read error: `channel.BreakOnEOS` at astrald
-`074a852b`, `channel.MarkEOS` from `dc89aa71`. From `dc89aa71` the five body ops
-answer that `eos` with a final `eos` of their own; at `074a852b` none does.
-`secp256k1.new` and the query-argument form of `crypto.sign_hash` read no body
-and send no `eos` at either revision.
+terminator rather than on a read error (`channel.MarkEOS`). The five body ops
+answer that `eos` with a final `eos` of their own. `secp256k1.new` and the
+query-argument form of `crypto.sign_hash` read no body and send no `eos`.
 
 **The input shape is the trap this module is famous for.** astral-js and
 astral-py once shared a bug in which `crypto.public_key`,
@@ -34,7 +32,7 @@ on the channel body (`mod/crypto/src/op_verify_hash_signature.go`,
 `op_verify_text_signature.go`), so an implementation that never streams one
 gets an accepted query, no answer, EOF -- and, if it reports that as success,
 **silently never verifies**. Every shape below was read out of astrald's
-`mod/crypto/src` at `26bb51d5`, never out of a sibling SDK.
+`mod/crypto/src` at `d5bb0bbd`, never out of a sibling SDK.
 
 **One rule decides where each value travels**, and it is stated once here so no
 method has to argue it again:
@@ -53,58 +51,31 @@ every routed query to its log at the default verbosity** --
 `Infov(0, "%v routed in %v", q.Query, d)`, and `astral.Query` has no `String()`,
 so `%v` renders the struct with `QueryString` in it.
 
-**`crypto.public_key` crashes a node on astrald `074a852b` and astral-go
-`5c18d9c` when the key type is not `secp256k1`.** `OpPublicKey` there sends
-`secp256k1.PublicKey(key)` straight onto the channel, and that function returns
-a **nil** `*crypto.PublicKey` for any other key type
-(`astral-go/api/secp256k1/module.go` `PublicKey`, line 31). Every sender starts
-with `object.ObjectType()`, `ObjectType` is declared on the value receiver, and
-calling it through a nil pointer dereferences nil. Nothing recovers at those
-revisions: the op runs in a bare `go func()` (`astral-go/lib/routing/op.go`
-`RouteQuery`, line 91 at `5c18d9c`) and there is exactly one `recover()` outside
-tests in either repository, in `astrald/debug`, which re-panics anyway.
-
-**The pins do not crash, for two independent reasons.** astral-go `f86be1a`
-recovers a panicking op into `ErrPanic` (`lib/routing/op.go` `invoke`), and
-`8391b20` closes the connection such an op abandons. astrald `640fbc12` answers
-a foreign key type in band with `unsupported key type: <type>` before any nil
-reaches the channel (`mod/crypto/src/op_public_key.go`). A node carrying either
-`f86be1a` or `640fbc12` survives the call; a node carrying neither dies.
+**`crypto.public_key` answers an unsupported key type in band.** `OpPublicKey`
+rejects a key type that is not `secp256k1` with `unsupported key type: <type>`
+before anything reaches the channel (`mod/crypto/src/op_public_key.go`). The
+type it would otherwise send is a **nil** `*crypto.PublicKey`
+(`astral-go/api/secp256k1/module.go` `PublicKey`, line 31), and every sender
+starts with `object.ObjectType()` on a value receiver, so the nil would be
+dereferenced; astral-go recovers a panicking op into `ErrPanic`
+(`lib/routing/op.go` `invoke`) and closes the connection it abandons, which is
+the second of two independent guards.
 
 **No authentication stands between a caller and it.** An IPC guest is never
 gated -- `blocksAnonymousWeb` returns false for an empty web origin, so a local
 process needs no token at all -- and an unauthenticated *browser* guest reaches
 it too while the node is unclaimed, because `crypto.public_key` is on the
 `anonymous_web_allowlist.Unclaimed` list (`mod/apphost/src/config.go`, line 82).
-**`public_key()` refuses a foreign key type before it sends anything**, because
-a caller cannot tell which side of those two commits a node is on; that guard is
-the most load-bearing line in this file.
 
-It is the same defect class as `objects.new?type=mod.nodes.node_info`, which
-astral-go `0a15afb`, "stop NodeInfo.WriteTo panicking on a nil Identity", fixes
-by substituting the zero identity for a nil pointer. This one is fixed by
-astrald `640fbc12` and is the sharper of the two: `NodeInfo` needed a nil field
-*inside* a value, where `OpPublicKey` at `074a852b` hands the channel a nil
-*object* and the panic lands in `ObjectType()` before any field is read.
+**`crypto.sign_text` honours a public key streamed on its body.** `OpSignText`
+builds the text signer per signature inside `signAndSend`, as its sibling
+`OpSignHash` does. This SDK sends `key` as a query argument on every sign and
+verify op, which is parsed before the switch, so nothing here reads the streamed
+form.
 
-**Before astrald `341fcdd5`, `crypto.sign_text` ignores a public key streamed on
-its body.** `OpSignText` builds its signer from `signerKey` *before* entering
-`ch.Switch` (`mod/crypto/src/op_sign_text.go`, line 38 at `074a852b`); the
-`*crypto.PublicKey` branch then assigns to `signerKey` and answers `ack`, but
-`signer` has already captured the old key, so the text is signed as the caller
-and the `ack` says otherwise. Its sibling `OpSignHash` builds the signer
-*inside* `signAndSend` and does honour a streamed key, which is what makes this
-an oversight rather than a design. This
-SDK sends `key` as a query argument on every sign and verify op, which is
-parsed before the switch and therefore works on both -- so nothing here depends
-on the broken path, and nothing here can be repaired into depending on it.
-astrald `341fcdd5` builds the text signer per signature inside `signAndSend`,
-so from that commit a streamed key is honoured too; the rule stands because it
-works on nodes on either side of it.
-
-**A caller signs as itself, and an anonymous caller cannot sign at all.** From
-astrald `341fcdd5` every signature passes `authorizeSigner`
-(`mod/crypto/src/sign_guard.go` at `26bb51d5`): the key must be the caller's
+**A caller signs as itself, and an anonymous caller cannot sign at all.** Every
+signature passes `authorizeSigner`
+(`mod/crypto/src/sign_guard.go` at `d5bb0bbd`): the key must be the caller's
 own identity, or one the caller holds a `mod.auth.sudo_action` for, and the
 node's own key is refused on the self branch. The core router substitutes the
 node's identity for an anonymous caller, so an anonymous IPC guest is refused
@@ -148,11 +119,11 @@ Reached as `client.crypto`, the `functools.cached_property` design section 5.1
 asks for, or as `Crypto(client)`, which constructs the same object and is what
 the tests here use.
 
-Source citations are pinned to astrald `26bb51d5` and astral-go `6ea26c7`, the
-revisions `tests/reference.py` names. A citation that names another revision
-resolves at that revision: the `074a852b` and `5c18d9c` ones describe nodes that
-predate the commit named beside them. `tests/test_api_crypto.py` reads those
-directories rather than trusting this paragraph.
+Source citations are pinned to astrald `d5bb0bbd` and astral-go `5b1d282`, the
+revisions `tests/reference.py` names. The SDK supports the node at those
+revisions and no older one, so every citation here resolves at a pin.
+`tests/test_api_crypto.py` reads those directories rather than trusting this
+paragraph.
 """
 
 from __future__ import annotations
@@ -400,7 +371,7 @@ def _split_key_text(text: str, type_name: str) -> tuple[str, str]:
     A missing colon is `invalid format` there and a `ParseError` here. **An empty
     prefix is not refused**, because astral-go does not refuse it -- its
     `UnmarshalText` checks the part count and nothing else (`api/crypto/
-    public_key.go` at `6ea26c7`) -- and because the zero value of all three types
+    public_key.go` at `5b1d282`) -- and because the zero value of all three types
     is exactly the one this used to reject: `PublicKey().text()` is `":"`, so a
     parser that refused it refused its own encoder's output and the text channel
     was the one framing of four that could not carry a zero key.
@@ -645,27 +616,6 @@ def _key_param(value: PublicKey | Identity | str, op: str) -> str:
     return identity_to_public_key(Identity.parse(value)).text()
 
 
-def _refuse_node_crash(key: PrivateKey, op: str) -> None:
-    """The guard that keeps `crypto.public_key` from killing the node.
-
-    At astrald `074a852b`, `OpPublicKey` answers with whatever
-    `secp256k1.PublicKey(key)` returns and that is a nil pointer for every key
-    type but `secp256k1`; the sender then calls `ObjectType()` through it and,
-    at astral-go `5c18d9c`, the process dies with no recovery anywhere above
-    (see the module docstring). astrald `640fbc12` answers the type in band and
-    astral-go `f86be1a` contains the panic, but a caller cannot tell which node
-    it has. The message names the crash because a caller who reads "unsupported
-    key type" will retry.
-    """
-    if key.is_secp256k1:
-        return
-    raise BadArgument(
-        f"{op}: key type {key.type!r} is not {KEY_TYPE!r}, and this op **crashes "
-        f"the node** for any other type -- astrald sends a nil public key whose "
-        f"ObjectType() dereferences nil, in a goroutine nothing recovers. Not sent."
-    )
-
-
 def _texts(values: Iterable[str], op: str) -> list[String16]:
     """Texts to be signed or verified, as the `string16` the op switches on.
 
@@ -759,8 +709,6 @@ class Crypto(ModuleClient):
         keys = [_require_private_key(k, OP_PUBLIC_KEY) for k in private_keys]
         if not keys:
             raise BadArgument(f"{OP_PUBLIC_KEY}: no private keys")
-        for key in keys:
-            _refuse_node_crash(key, OP_PUBLIC_KEY)
         return await self._batch(OP_PUBLIC_KEY, keys, PublicKey, OP_PUBLIC_KEY, kw)
 
     # --- signing. Every one of these uses a node-held private key. ---
@@ -776,15 +724,14 @@ class Crypto(ModuleClient):
         """Sign one digest with a node-held key. RR, digest in the query string.
 
         **Privileged.** The node signs with the private key it holds for `key`,
-        and from astrald `341fcdd5` only when `key` is the caller's own identity
-        or one the caller may sudo to. `key` defaults to the query's caller. For
+        and only when `key` is the caller's own identity or one the caller may
+        sudo to. `key` defaults to the query's caller. For
         an anonymous IPC guest that is **the node's own identity** -- astrald's
         core router substitutes it for a nil caller -- and the node's key is
         never signable through this op, so an anonymous call answers
         `cannot sign with the node's key` without `key` and
-        `cannot sign with another identity's key` with one. Verified on
-        `26bb51d5`. On a node that predates `341fcdd5`, the anonymous form signs
-        as the node.
+        `cannot sign with another identity's key` with one. Observed on astrald
+        `26bb51d5`.
 
         The digest goes in the query string because that is the op's own
         request/response path: with `hash` present `OpSignHash` answers one
@@ -818,10 +765,8 @@ class Crypto(ModuleClient):
         ignore the body.
 
         The key travels as a query argument even though this op does honour one
-        streamed on the body -- unlike `crypto.sign_text` before astrald
-        `341fcdd5`, which acked a streamed key and then signed with the caller's
-        anyway. One path that works on both ops, and on nodes either side of
-        that commit, is worth more than the one this op alone would allow.
+        streamed on the body: one path that works on every sign and verify op is
+        worth more than the one this op alone would allow.
 
         The authorization is per digest, after it is read, so a refused key
         raises `RemoteError` on the first digest.
@@ -861,21 +806,10 @@ class Crypto(ModuleClient):
         `scheme` omitted leaves astrald's `bip137`, the only text scheme any
         stock engine implements.
 
-        **On a node that predates astrald `341fcdd5`, a key or scheme the node
-        cannot serve resets the connection here.** `OpSignText` there builds its
-        signer *before* entering `ch.Switch`, so it answers `unsupported` and
-        closes with the body still unread, and a close with unread data is a TCP
-        reset that destroys the message the node just wrote. Verified live
-        against `furry-bolt`: the same call with the text in the query string
-        answers a clean `error_message`, the body form does not. The reset is
-        reported as a `ProtocolError` naming this, rather than as the bare
-        `ConnectionResetError` the socket raises. `sign_hash` builds its signer
-        inside the switch and does not share the defect.
-
-        From `341fcdd5` the text signer is built per signature, after the text
-        is read, so the same call reads the node's `error_message` as
-        `RemoteError`. Verified on `26bb51d5`: five sequential calls with a key
-        the node does not hold each answered
+        The text signer is built per signature, after the text is read, so a key
+        or scheme the node cannot serve reads back as a clean `error_message`
+        and the connection survives. Observed on astrald `26bb51d5`: five
+        sequential calls with a key the node does not hold each answered
         `cannot sign with another identity's key`, and none reset.
         """
         return (await self.sign_text_many([text], key=key, scheme=scheme, **kw))[0]
@@ -892,11 +826,8 @@ class Crypto(ModuleClient):
 
         **Privileged.** One signature per text, in order. Each text is a
         `string16`; the op has a `string8` branch too and this SDK never uses
-        it, so one length rule covers every call. `sign_text` documents the
-        reset a key the node cannot serve produces on a node that predates
-        astrald `341fcdd5`; there it applies to the whole batch, because the op
-        fails before reading any of it. From that commit the first refused text
-        raises `RemoteError`.
+        it, so one length rule covers every call. The first refused text raises
+        `RemoteError`.
         """
         values = _texts(texts, OP_SIGN_TEXT)
         qs = _params(
@@ -1059,10 +990,9 @@ class Crypto(ModuleClient):
         async with self._one_shot(qs, kw) as (stream, budget):
             for obj in inputs:
                 await stream.send(obj, timeout=budget.remaining)
-            # Every crypto op leaves its switch on `eos` (`BreakOnEOS` at
-            # astrald `074a852b`, `MarkEOS` from `dc89aa71`), so the terminator
-            # is what lets the op leave its read loop cleanly rather than on the
-            # read error a bare close produces.
+            # Every crypto op leaves its switch on `eos` (`MarkEOS`), so the
+            # terminator is what lets the op leave its read loop cleanly rather
+            # than on the read error a bare close produces.
             await stream.send_eos(timeout=budget.remaining)
             answers = stream.raw_objects()
             seen: list[Any] = []
@@ -1091,13 +1021,9 @@ class Crypto(ModuleClient):
 def _reset(op: str, exc: BaseException) -> ProtocolError:
     """The connection reset an op produces by closing without draining its body.
 
-    astrald's `OpSignText`, before `341fcdd5`, answers and closes before it
-    reads anything when it cannot build a signer, so the caller's body sits
-    unread in the node's
-    receive buffer; a close with unread data is a reset, and a reset discards
-    whatever the node had already written -- including the `error_message` that
-    would have said *why*. Verified live: the same call with the text as a query
-    argument, which writes no body, answers `unsupported` cleanly.
+    A close with unread data is a reset, and a reset discards whatever the node
+    had already written -- including the `error_message` that would have said
+    *why*.
 
     Translated to a `ProtocolError` because the op has broken the shape it
     declares -- it accepts a query whose whole input is a channel body and then
@@ -1109,10 +1035,7 @@ def _reset(op: str, exc: BaseException) -> ProtocolError:
     return ProtocolError(
         f"{op}: the node closed the stream without reading the body it asked "
         f"for, which reset the connection and destroyed its own error message "
-        f"({type(exc).__name__}: {exc}). The usual cause is a key or scheme no "
-        f"engine on that node serves, on an astrald older than 341fcdd5, which "
-        f"builds the signer before reading and cannot report it. The node may "
-        f"also simply have gone."
+        f"({type(exc).__name__}: {exc}). The node may simply have gone."
     )
 
 

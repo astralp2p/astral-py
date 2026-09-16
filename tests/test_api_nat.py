@@ -18,7 +18,7 @@ Three tiers, as `test_api_nodes.py` has them and for the same reason:
 -Target`; parameter matching is case-sensitive and unknown keys are dropped in
 silence, so every one of those examples asks a different question from the one
 it looks like. The query-string assertions below are on the lowercase names
-astrald `bd98bbe8` declares, `identity` among them.
+astrald declares, `identity` among them.
 """
 
 from __future__ import annotations
@@ -508,8 +508,8 @@ class ListHolesOpTest(NatCase):
 
     @bounded()
     async def test_a_peer_travels_as_lowercase_identity(self):
-        """astrald `bd98bbe8` names the key `identity` and ignores the earlier
-        `with`. D-17: the docs write `-With`, which the node drops in silence."""
+        """astrald names the key `identity`. D-17: the docs write `-With`, which
+        the node drops in silence."""
         async with MockApphost(
             routes={f"{OP_LIST_HOLES}?identity={FURRY_BOLT_ALIAS}": Accept(eos=True)}
         ) as mock:
@@ -743,15 +743,6 @@ class ReferenceClaimTest(unittest.TestCase):
         self.assertIn('Identity string `query:"required"`', src)
         self.assertIn("mod.Dir.ResolveIdentity(args.Identity)", src)
         self.assertIn("client.NodePunch(ctx, target, localIP, puncher)", src)
-
-    def test_astrald_074a852b_names_the_arguments_with_and_target(self):
-        """The names the module attributes to a node that predates `bd98bbe8`."""
-        at = "074a852b"
-        holes = self.source(reference.ASTRALD, "mod/nat/src/op_list_holes.go", at)
-        punch = self.source(reference.ASTRALD, "mod/nat/src/op_punch.go", at)
-        self.assertIn('With string `query:"optional"`', holes)
-        self.assertIn("mod.Dir.ResolveIdentity(string(args.With))", holes)
-        self.assertIn("Target string", punch)
 
     def test_the_two_dropped_ops_need_a_puncher(self):
         """Both astral-go clients take a `nat.Puncher`, or drive a handshake

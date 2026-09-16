@@ -87,19 +87,15 @@ shellsession examples is a no-op that reports success. The real names are
 `tree.get?path=/mod/tcp/settings/listen&recursive=true` is accepted and answers
 exactly what the same query without the key answers.
 
-**G-11: at astral-go `5c18d9c`, `tree.Node.Create` issues `tree.set` and never
-reads the response** (`astral-go/api/tree/client/node.go:151` opens the query,
-`astral-go/api/tree/client/node.go:160` returns without a read, both at
-`5c18d9c`). The consequence is worse than the unread `ack` the survey records:
-batch mode answers one object per object received, so a `Create` that sent none
-leaves **nothing** on the wire when it succeeds and an `error_message` when the
-path walk failed -- the one case a caller needs. `create()` sends the `eos` and
-reads to the end of the stream, so a failed creation raises `RemoteError`
-instead of returning a handle for a node that does not exist. At the pin,
-`Create` sends the `eos` (`astral-go/api/tree/client/node.go:165`) and reads to
-it with errors passed through (`astral-go/api/tree/client/node.go:168`), and
-batch mode mirrors the `eos` back on success
-(`astral-go/api/tree/client/server.go:132`, `channel.Batch`).
+**A creation is a batch with no objects in it, and the answer is the `eos`.**
+Batch mode answers one object per object received, so a `tree.set` that sent
+none leaves **nothing** on the wire when it succeeds and an `error_message` when
+the path walk failed -- the one case a caller needs. astral-go's `Create` sends
+the `eos` (`astral-go/api/tree/client/node.go:165`) and reads to it with errors
+passed through (`astral-go/api/tree/client/node.go:168`), and batch mode mirrors
+the `eos` back on success (`astral-go/api/tree/client/server.go:132`,
+`channel.Batch`). `create()` does the same, so a failed creation raises
+`RemoteError` instead of returning a handle for a node that does not exist.
 
 **`client.tree` is the surface design section 5.1 specifies**, a cached property
 in `client.py`; `Tree(client)` constructs the same object and is what the tests
@@ -110,8 +106,8 @@ Source citations name a single line each, and every one of them is read back by
 `tests/test_api_tree.py`. astrald and astral-go are moving targets, and a
 citation that has drifted by two lines costs a reader more than an absent one:
 it makes them distrust the exact ones. Line numbers are pinned to astral-go
-`6ea26c7` and astrald `26bb51d5`, the revisions `tests/reference.py` pins; a
-citation that names another revision is read at that revision.
+`5b1d282` and astrald `d5bb0bbd`, the revisions `tests/reference.py` pins, and
+no citation names another revision.
 """
 
 from __future__ import annotations
@@ -396,12 +392,10 @@ class Tree(ModuleClient):
         (`astral-go/api/tree/client/server.go:127`), then reads objects until
         the `eos` and answers one per object -- none, here.
 
-        The `eos` is sent and the stream is read to its end, which is what
-        astral-go `5c18d9c`'s `Node.Create` omits (bug G-11): on success a node
-        at that revision answers nothing, and on a failed walk it answers an
-        `error_message` that the Go client discards, so a creation that failed
-        is reported as one that worked. Here it raises `RemoteError`. At the
-        pin, success answers the mirrored `eos` and no object.
+        The `eos` is sent and the stream is read to its end: success answers
+        the mirrored `eos` and no object, and a failed walk answers an
+        `error_message`, which raises `RemoteError` rather than returning a
+        handle for a node that does not exist.
 
         An `ack` is tolerated and not required, because zero objects earn zero
         answers on this node and a node that acknowledged the empty batch would
@@ -450,12 +444,12 @@ class Tree(ModuleClient):
         would mount a subtree of `anyone`.
 
         **`node`, not `target`, and the name is the whole point.** The op's wire
-        argument is `identity=`; astrald `bd98bbe8` renames it from `target=` and
-        ignores the old name. `target` is the routing keyword every method of
-        every module client forwards to `Client.query` -- "route this query to
-        node X" -- and this op is the one place in the SDK where those are two
-        different nodes. Taking the op's argument under its old wire name,
-        `target`, ate the routing keyword: `mount_remote(p, X)`
+        argument is `identity=` and the node requires it
+        (`astrald/mod/tree/src/op_mount_remote.go:11`). `target` is the routing
+        keyword every method of every module client forwards to `Client.query`
+        -- "route this query to node X" -- and this op is the one place in the
+        SDK where those are two different nodes. Taking the op's argument under
+        the name `target` ate the routing keyword: `mount_remote(p, X)`
         put X in the query string and routed to the local node, with no way to
         reach the routing target on this op at all and nothing said about it.
         `Objects` met the same collision on `zone`, where the two levers really

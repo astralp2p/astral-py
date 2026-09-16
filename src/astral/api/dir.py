@@ -35,59 +35,52 @@ bare EOF with no `eos`; `dir.filters` ends at an `eos`. Both shapes verified
 live against `furry-bolt` this session. `set_alias` is the one op here that
 writes, and it is the only one no live test calls.
 
-**`apply_filters` is read-only here.** astral-go `5c18d9c`'s client sends it to
-`dir.set_alias` (`api/dir/client/apply_filters.go:19` at `5c18d9c`), so a read
-helper names the write op: with `id` and `filters` present and `alias` absent
-the required check fails (`astral-go/lib/routing/op.go:166`) and the query is
-rejected, and a caller that also carried an `alias` renames an identity while
-asking a question. Design bug G-8, not inherited. The pin sends
-`dir.MethodApplyFilters` (`api/dir/client/apply_filters.go:20`).
-`OP_APPLY_FILTERS` is the only op name `apply_filters` sends, and a test asserts
-on the op the node received.
+**`apply_filters` is read-only, and names its own op.** astral-go's client sends
+it to `dir.MethodApplyFilters` (`api/dir/client/apply_filters.go:20`), and
+`OP_APPLY_FILTERS` is the only op name this module's `apply_filters` sends; a
+test asserts on the op the node received.
 
 **`apply_filters` is OR, not AND.** astrald returns true when the identity
 passes **any** named filter (`mod/dir/src/module.go:133`), and skips a filter
-name it does not know. astral-go `5c18d9c`'s client documents "returns true if
-the identity matches all of them" (`api/dir/client/apply_filters.go:17` at
-`5c18d9c`), which is the opposite; the pin's documents "any of them"
-(`api/dir/client/apply_filters.go:17`). astrald is the authority and OR is what
-this module documents. An unknown filter name contributes nothing, so a
-misspelled name is a silent `False` -- verified live: `dir.apply_filters?filters=nope` answers `bool(false)`
+name it does not know; astral-go's client documents "returns true if the
+identity matches any of them" (`api/dir/client/apply_filters.go:17`). An unknown
+filter name contributes nothing, so a misspelled name is a silent `False` --
+verified live: `dir.apply_filters?filters=nope` answers `bool(false)`
 and `dir.apply_filters?filters=` answers `bool(false)`.
 
 **`set_alias` needs both arguments, `alias` included when it is empty.**
 astrald declares `Alias *string` with `query:"required"` and the comment
 "required but can be empty" (`mod/dir/src/op_set_alias.go` `opSetAliasArgs.Alias`,
-line 11 at astrald `26bb51d5`); the required
+line 11 at astrald `d5bb0bbd`); the required
 check tests key **presence** in the parsed parameters
 (`astral-go/lib/routing/op.go:166`). Removal is therefore `alias=` with an empty
 value, which is a different query string from an absent `alias`. Design bug
 D-18. `remove_alias()` is the named form of it.
 
 **Four arguments named `identity`, one type, resolved by the node.** astrald
-`bd98bbe8` declares `Identity string` on `dir.resolve`, `dir.get_alias`,
-`dir.set_alias` and `dir.apply_filters` and hands each to `ResolveIdentity`, so
-an alias, `localnode` or a hex key reaches every one of them. `dir.get_alias`
-and `dir.set_alias` refuse the zero identity, which the empty string and
-`anyone` resolve to, with `missing identity` (`opGetAliasArgs`,
-`opSetAliasArgs`). The old names -- `name` on `dir.resolve`, `id` on the other
-three -- are ignored. This module keeps the distinction it drew when
-`get_alias` and `set_alias` parsed their argument as an `*astral.Identity`:
-those two take an identity and refuse a directory name client-side,
-`apply_filters` takes a name **or** an identity and never spends a query
-resolving one. Verified live on a node that predates `bd98bbe8`:
-`dir.apply_filters?filters=all&id=furry-bolt` answers `bool(true)`, and
-`dir.get_alias?id=` with 66 hex characters that are not a curve point is
-**rejected** rather than answered, because astral-go validates the point.
+declares `Identity string` on `dir.resolve`, `dir.get_alias`, `dir.set_alias`
+and `dir.apply_filters` and hands each to `ResolveIdentity`, so an alias,
+`localnode` or a hex key reaches every one of them. `dir.get_alias` and
+`dir.set_alias` refuse the zero identity, which the empty string and `anyone`
+resolve to, with `missing identity` (`opGetAliasArgs`, `opSetAliasArgs`).
 
-**An empty name is refused client-side.** `dir.resolve` with an empty
-`identity` answers with the **zero identity** rather than an error -- verified
-live under the argument's earlier name, `name`; `bd98bbe8` renames the field
-and changes nothing else in `OpResolve` -- because astrald maps
-`""` and `"anyone"` to `astral.Identity{}` (`mod/dir/src/module.go:58`). A
-caller that meant a name and sent an empty one gets `anyone`, which routes
-somewhere else entirely, so `resolve("")` raises instead. `Identity.ANYONE` is
-the way to name that identity on purpose.
+This module draws a distinction the node does not: `get_alias` and `set_alias`
+take an identity and refuse a directory name client-side, and `apply_filters`
+takes a name **or** an identity and never spends a query resolving one. The
+refusal earns its place on the two that would otherwise answer the wrong
+question: `ResolveIdentity` looks a name up in the alias table
+(`mod/dir/src/module.go:72`) and `GetAlias` looks the same table back up by
+identity (`mod/dir/src/alias.go:23`), so an alias on `get_alias` is answered
+with itself, and an alias on `set_alias` -- the one op here that writes --
+renames the identity that table already holds it against.
+
+**An empty name is refused client-side.** `dir.resolve` hands its `identity`
+argument straight to that resolver (`mod/dir/src/op_resolve.go:22`), which maps
+`""` and `"anyone"` to `astral.Identity{}` (`mod/dir/src/module.go:58`), so an
+empty name answers with the **zero identity** rather than an error. A caller
+that meant a name and sent an empty one gets `anyone`, which routes somewhere
+else entirely, so `resolve("")` raises instead. `Identity.ANYONE` is the way to
+name that identity on purpose.
 
 **No cache.** astral-go's client memoizes `resolve` and `get_alias` behind
 `EnableCache`. An alias is mutable node state -- `set_alias` from any app
@@ -103,9 +96,9 @@ package eagerly so registration never depends on the property being touched.
 **Source citations name the symbol as well as the line.** astrald is a moving
 target and three anchors in this file had already drifted by a line or two, which
 costs a reader more than an absent citation: it makes them distrust the exact
-ones. Line numbers below are pinned to astrald `26bb51d5` and astral-go
-`6ea26c7`, the revisions `tests/reference.py` pins; a citation that names
-another revision is read at that revision.
+ones. Line numbers below are pinned to astrald `d5bb0bbd` and astral-go
+`5b1d282`, the revisions `tests/reference.py` pins, and no citation names
+another revision.
 """
 
 from __future__ import annotations
@@ -154,7 +147,7 @@ OP_SET_ALIAS: Final = "dir.set_alias"
 
 # astrald joins and splits filter names on this byte, so a name containing one
 # is two names on the server (`mod/dir/src/op_apply_filters.go` `OpApplyFilters`,
-# line 29 at astrald `26bb51d5`).
+# line 29 at astrald `d5bb0bbd`).
 FILTER_SEPARATOR: Final = ","
 
 # The parameter specs, so every value travels as the bare payload half of its
@@ -357,8 +350,7 @@ class Dir(ModuleClient):
         `localnode`, or a hex key: the op resolves this argument server-side.
         A name the node does not know answers with an `error_message`.
 
-        Read-only. astral-go's client sends this op's arguments to
-        `dir.set_alias` (bug G-8); this one never names another op.
+        Read-only, and `OP_APPLY_FILTERS` is the only op name it sends.
         """
         params: dict[str, Any] = {
             "filters": _param(_STRING8, _filter_list(names)),
@@ -419,10 +411,10 @@ _param = ModuleClient._param
 def _identity(value: Identity | str, op: str) -> Identity:
     """An identity argument. 66 hex characters or `anyone`, never a name.
 
-    astrald `bd98bbe8` resolves this argument through the node's directory, so
-    the node accepts a name here too. This client parses it locally and refuses
-    a name, the rule it kept from the revisions that parsed the argument with
-    `astral.ParseIdentity` and rejected a name.
+    astrald resolves this argument through the node's directory, so the node
+    accepts a name here too. This client parses it locally and refuses one:
+    `get_alias` would answer an alias with itself, and `set_alias` would rename
+    whatever identity the alias table holds it against.
     """
     if isinstance(value, Identity):
         return value

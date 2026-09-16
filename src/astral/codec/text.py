@@ -327,7 +327,7 @@ def channel_text_body(obj: AnyValue) -> str | None:
       by its terminator alone, so `String16('x\\n#[eos] ')` would be read back as
       two objects, the second a forged `eos` that ends the stream early. astral-go
       writes `" " + text + "\\n"` with no escaping (`astral/channel/text_sender.go`
-      at `6ea26c7`) and has the same hole; escaping instead would leave the node
+      at `5b1d282`) and has the same hole; escaping instead would leave the node
       behind, and base64 is a spelling its `TextReceiver` already reads.
     - **A body its own type cannot parse is not a body.** `encode` used to take
       the text branch for any object with a `text()` and `decode` needs a

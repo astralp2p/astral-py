@@ -15,8 +15,8 @@ document states the resolution, and the resolution is binding.
 | Rank | Authority | Location |
 |---|---|---|
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
-| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `5c18d9c` (the commit the node pins) |
-| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `25f96f17` — authoritative for session semantics the client never exercises |
+| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `5b1d282` (the commit the node pins) |
+| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `d5bb0bbd` — authoritative for session semantics the client never exercises |
 | 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `1d6787c` |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 

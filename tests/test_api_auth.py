@@ -270,10 +270,10 @@ class AuthTypesTest(unittest.TestCase):
         self.assertEqual(Auth.TYPES, AUTH_TYPES)
 
     def test_mod_auth_action_is_not_a_registered_type(self):
-        """The node answers `nil` to `objects.new?type=mod.auth.action` and
-        `blueprint not found` to `objects.get_blueprint`, both verified live.
-        astral-go's `auth.Action` has no `ObjectType` method and is never added
-        to the registry, so a record here would invent a name nothing knows."""
+        """This SDK declares no `mod.auth.action`: the two fields are carried
+        inline by every concrete action, so a record here would nest them in
+        JSON under a key nothing sends. astral-go registers the name from
+        `5b1d282` on; what this asserts is the SDK's own registry."""
         self.assertFalse(default_blueprints().has("mod.auth.action"))
         self.assertFalse(hasattr(Action, "ASTRAL_TYPE"))
         self.assertNotIn(Action, AUTH_TYPES)
@@ -827,9 +827,9 @@ class IndexOpTest(AuthCase):
 
     @bounded()
     async def test_a_rejected_query_surfaces_as_query_rejected(self):
-        """The shape an absent `id` produces on a node that predates astrald
-        `fdbddccb`, reproduced here so the distinction from an `error_message`
-        is pinned: a rejection carries a code and no message."""
+        """The routing layer refuses a query before the op runs, and the shape
+        it produces is pinned here so the distinction from an `error_message`
+        is kept: a rejection carries a code and no message."""
         mock = MockApphost(routes={f"{OP_INDEX}?id={OID}": Reject(1)})
         async with mock:
             api = await self.auth(mock)
@@ -1014,7 +1014,7 @@ class LiveAuthTest(live_support.LiveCase):
     Nothing here signs, stores or indexes. `auth.index` gets an empty batch and
     IDs of objects no repository holds: the op loads before it indexes and
     answers `object not found` without reaching the index
-    (`mod/auth/src/op_index.go` at astrald `26bb51d5`, `indexOne`).
+    (`mod/auth/src/op_index.go` at astrald `d5bb0bbd`, `indexOne`).
     `auth.sign_contract` is opened and closed with nothing on the body, so the
     node has nothing to sign. Both are the ops' refusal shapes and both are
     verified rather than assumed.
@@ -1039,9 +1039,8 @@ class LiveAuthTest(live_support.LiveCase):
 
     @bounded(30.0)
     async def test_the_index_op_s_object_id_is_optional(self):
-        """The node's own flag, and the pin on the batch mode: astrald
-        `fdbddccb` makes `id` optional, and its absence selects the batch
-        `index_many()` drives. A node that predates that commit fails here."""
+        """The node's own flag, and the pin on the batch mode: `id` is optional
+        and its absence selects the batch `index_many()` drives."""
         async with await self.client() as client:
             spec = json.loads(
                 (await client.call_raw(f"shell.spec?op={OP_INDEX}&out=json", timeout=20.0))

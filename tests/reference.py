@@ -41,13 +41,13 @@ ASTRALD: Final = "astrald"
 ASTRAL_GO: Final = "astral-go"
 
 PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
-    # The revisions the modules were read against: astrald `26bb51d5` and the
-    # astral-go its `go.mod` requires. Every `path:line` citation in
-    # `astral/api/*.py` resolves at one of these two unless its prose names
-    # another revision, so bumping one means re-reading the citations that name
-    # it.
-    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "26bb51d5"),
-    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "6ea26c7"),
+    # The revisions the modules were read against: astrald `d5bb0bbd` and the
+    # astral-go its `go.mod` requires. The SDK supports the current node and no
+    # older one, so every `path:line` citation in `astral/api/*.py` resolves at
+    # one of these two and none names another revision. Bumping one means
+    # re-reading the citations that name it.
+    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "d5bb0bbd"),
+    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "5b1d282"),
 }
 
 

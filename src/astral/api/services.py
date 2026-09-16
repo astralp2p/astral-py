@@ -19,12 +19,12 @@ nothing but itself. The op authorizes the caller under
 `mod.auth.serve_apps_action`, refuses a network-origin query, answers `ack` once
 the service is published, and then reads `bundle` objects off the channel, each
 replacing the advertised info in place. Closing the channel withdraws the
-service (`mod/services/src/op_advertise.go` at astrald `26bb51d5`).
+service (`mod/services/src/op_advertise.go` at astrald `d5bb0bbd`).
 `services.discover` serves these advertisements beside the module discoverers':
 one `services.update` with `available` true on publish and on every info change,
 and one with `available` false on withdrawal. `advertise()` returns an
 `Advertisement`, the counterpart of astral-go's
-(`api/services/client/advertise.go` at astral-go `6ea26c7`), and `async with` is
+(`api/services/client/advertise.go` at astral-go `5b1d282`), and `async with` is
 its contract, because the open channel **is** the advertisement.
 
 **An anonymous caller is the node, and the node cannot advertise to itself.**
@@ -47,10 +47,11 @@ fields::
     01 03b270…ae1               ProviderID  ptr, flag then 33 flat identity bytes
     01 <bundle payload>         Info        ptr, flag then the bundle
 
-`Available` is a plain Go `bool` in astral-go's struct, not an `astral.Bool`;
-the reflection codec encodes both as one byte, so the distinction never reaches
-the wire. `Name` is an explicit `astral.String8`. Both pointers are genuinely
-nil on this node, so both nil flags are exercised by the zero value above.
+`Available` is an `astral.Bool` in astral-go's struct and `Name` an
+`astral.String8` (`api/services/update.go` at astral-go `5b1d282`), which is why
+the declaration here is `Primitive("bool")` and `Primitive("string8")`. Both
+pointers are genuinely nil on this node, so both nil flags are exercised by the
+zero value above.
 
 **R-13 is settled, and the answer is that `Info` is a full `bundle`.** The
 legacy SDK treated a bundle as opaque bytes, which made every object a provider
@@ -110,7 +111,7 @@ node's service list over `ZoneNetwork` and writes it into the local cache. The
 write is destructive first: `syncServices` calls `deleteAllProviderServices`
 before the first update arrives and never opens a transaction
 (`astrald/mod/services/src/module.go` `syncServices`, lines 42-61 at astrald
-`26bb51d5`), so a sync that dies mid-stream leaves the local registry **empty**
+`d5bb0bbd`), so a sync that dies mid-stream leaves the local registry **empty**
 for that provider rather than unchanged. astrald ships `DB.InTx` and documents
 it as "the only transaction API"; this path does not use it. The defect is
 reported against astrald and carries no number in the design's register.
@@ -123,19 +124,17 @@ reads (`op_sync.go:35-38`). So the shape is BD, not RR -- the caller must send
 something to end it -- and `sync_follow()` is that method. `sync()` is the RR
 form and never sets `follow`.
 
-**The wire key is `identity`.** astrald `bd98bbe8` renames `opSyncArgs.ID` to
-`opSyncArgs.Identity` and ignores the old `id`. The Python parameter stays `id`.
+**The wire key is `identity`.** astrald declares the argument as
+`opSyncArgs.Identity` and knows no `id` key (`mod/services/src/op_sync.go` at
+astrald `d5bb0bbd`). The Python parameter stays `id`.
 
-**The identity is required by this module.** At `3392926b` astrald declares
-`opSyncArgs.ID string` with no `query` tag, so `Op.invoke`'s required check does
-not fire and an absent argument reaches the op as the empty string, which
-`dir.ResolveIdentity` maps to the **zero identity**
-(`astrald/mod/dir/src/module.go:58`). A sync of `anyone` wipes the cache for the
-zero identity and then routes a query to it. `sync()` therefore refuses an empty
-id rather than sending one, the same rule `dir.resolve` applies for the same
-reason. astrald `bd98bbe8` tags `opSyncArgs.Identity` `query:"required"`; an
-empty value still passes that check, which tests key presence (`astral.api.dir`
-on `dir.set_alias`), and still resolves to the zero identity.
+**The identity is required by this module.** astrald tags `opSyncArgs.Identity`
+`query:"required"`, and that check tests key presence (`astral.api.dir` on
+`dir.set_alias`): an empty value passes it and `dir.ResolveIdentity` maps it to
+the **zero identity** (`astrald/mod/dir/src/module.go:58`). A sync of `anyone`
+wipes the cache for the zero identity and then routes a query to it. `sync()`
+therefore refuses an empty id rather than sending one, the same rule
+`dir.resolve` applies for the same reason.
 
 The identity is resolved by the node, not parsed as an identity: the field is a
 plain Go `string`, so an alias, `localnode`, a hex key or a directory name all
@@ -148,7 +147,7 @@ Registration does not wait on it either way: `astral/__init__.py` imports the
 whole `api` package eagerly, so whether `services.update` decodes never depends
 on which property a caller happened to touch.
 
-Line numbers cite astrald `26bb51d5` and astral-go `6ea26c7`, the revisions
+Line numbers cite astrald `d5bb0bbd` and astral-go `5b1d282`, the revisions
 `tests/reference.py` pins, and `tests/test_api_services.py` reads each one back.
 """
 

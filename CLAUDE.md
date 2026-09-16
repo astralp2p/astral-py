@@ -11,7 +11,9 @@ amendments that supersede the sections they name. **Section 11.4 is deferred**:
 the wire core's `Any`/nil behaviour stays as it is.
 
 Authorities, in precedence order: the live node, astral-go
-(`../astral-go/main` @ `6ea26c7`, the revision astrald `26bb51d5` requires), astrald, astral-docs.
+(`../astral-go/main` @ `5b1d282`, the revision astrald `d5bb0bbd` requires), astrald, astral-docs.
+The SDK supports the node at those revisions and no older one, so a claim about
+an earlier astrald or astral-go has no place in this tree.
 Where the docs disagree with the node, the node wins and the disagreement is a
 bug report in design section 9.2. A wire fact sourced from astral-docs alone is
 not established.
@@ -224,17 +226,6 @@ runs `git show <rev>:<path>`, so an upstream pull cannot turn this suite red.
 
 ### Live-node discipline
 
-- **Never route `objects.new?type=mod.nodes.node_info`.** It panics astrald
-  deterministically on every build whose astral-go predates `0a15afb`, `5c18d9c`
-  among them: the registry's zero value holds a nil `*astral.Identity`,
-  `NodeInfo.WriteTo` hands it to `streams.WriteAllTo`, and `Identity.WriteTo` has
-  a value receiver, so the dereference happens on a goroutine with no recover.
-  astral-go `0a15afb` substitutes the zero identity, and astrald `cd4c2242` is the
-  first astrald to require it. The build of the node under test is not checked
-  before a live run, so the rule stands for every node. Decoding a `node_info` is
-  safe.
-  `FORBIDDEN_LIVE_QUERIES` in `tests/test_risk_register.py` names the query and a
-  test asserts no file in `tests/` sends it.
 - Never leave a follow stream undrained, `log.listen` above all.
 - Reuse one session for many ops and close it explicitly. Read-only ops only; the
   excluded mutating set is design 7.3's.

@@ -17,31 +17,19 @@ claim:
   the mock received, so an implementation that stopped streaming would fail
   here rather than silently pass everything.
 - **Tier C** runs the read-only half against a real node. Every anonymous sign
-  call is a refusal from astrald `341fcdd5` on: the node's own key with no `key`,
+  call is a refusal: the node's own key with no `key`,
   and the public key of a private key `secp256k1.new` generated and the node
   stored nowhere with one. The four paths that produce a real signature --
   `sign_hash` in its RR query-argument form, `sign_text` with its payload on the
   body, and both verdicts -- need a caller that is not the node, so they run in
   `LiveSigningTest` only when `ASTRAL_TEST_TOKEN` names one.
 
-**Two live calls are deliberately absent and must stay absent.**
-
-`crypto.public_key` with a key type other than `secp256k1` **kills a node that
-carries neither astrald `640fbc12` nor astral-go `f86be1a`**: astrald
-`074a852b` answers with a nil `*crypto.PublicKey` whose `ObjectType()`
-dereferences nil, in a goroutine nothing at astral-go `5c18d9c` recovers. The
-guard that refuses it is tested against the mock, where the assertion is that
-*nothing was sent at all*.
-
-`crypto.sign_hash` and `crypto.sign_text` with no `key` sign as the caller. On
-a node that predates astrald `341fcdd5` an anonymous caller is the node and
-gets a node signature, which is a signing *oracle* when the content is somebody
-else's choice. From that commit the node's key is refused and a token's
-identity signs as itself. Either way Tier C signs exactly two fixed constants
-declared in this file -- `DIGEST` and `SIGNED_TEXT` -- and verifies them in the
-same process. Reaching the RR form, the body form and the verdict path needs a
-real signature and there is no other way to one; taking the payload from
-anywhere but this file would be the hazard.
+`crypto.sign_hash` and `crypto.sign_text` with no `key` sign as the caller, and
+the node's key is refused while a token's identity signs as itself. Tier C signs
+exactly two fixed constants declared in this file -- `DIGEST` and `SIGNED_TEXT`
+-- and verifies them in the same process. Reaching the RR form, the body form
+and the verdict path needs a real signature and there is no other way to one;
+taking the payload from anywhere but this file would be the hazard.
 """
 
 from __future__ import annotations
@@ -141,12 +129,12 @@ names itself so a signature found in a log is traceable to this suite.
 """
 
 NODE_KEY = "cannot sign with the node's key"
-"""astrald's `ErrNodeKeyNotSignable`, from `341fcdd5`: the answer to a caller
-that would sign as the node, which an anonymous caller is."""
+"""astrald's `ErrNodeKeyNotSignable`: the answer to a caller that would sign as
+the node, which an anonymous caller is."""
 
 FOREIGN_KEY = "cannot sign with another identity's key"
-"""astrald's `ErrForeignKey`, from `341fcdd5`: the answer to a key that is
-neither the caller's nor one it may sudo to."""
+"""astrald's `ErrForeignKey`: the answer to a key that is neither the caller's
+nor one it may sudo to."""
 
 
 def frame_of(obj: object) -> tuple[str, bytes]:
@@ -634,40 +622,16 @@ class PublicKeyTest(CryptoCase):
         self.assertEqual(len(mock.queries), 1)
 
     @bounded()
-    async def test_a_foreign_key_type_is_refused_and_nothing_is_sent(self):
-        """The guard that matters most in this module. astrald `074a852b`
-        answers a nil `*crypto.PublicKey` for any type but `secp256k1`, the
-        sender calls `ObjectType()` through it, and at astral-go `5c18d9c` the
-        process dies with no recovery anywhere above. The assertion is that the
-        node was never asked."""
+    async def test_a_foreign_key_type_reaches_the_node(self):
+        """The supported node answers an unsupported key type in band
+        (`mod/crypto/src/op_public_key.go`), so the SDK sends the query rather
+        than refusing it. The assertion is that the node was asked."""
         async with MockApphost(
             routes={OP_PUBLIC_KEY: op(PUBLIC_KEY_FRAME)}
         ) as mock:
             api = await self.crypto(mock)
-            with self.assertRaises(BadArgument) as caught:
-                await api.public_key(PrivateKey(type="ed25519", key=bytes(32)))
-            self.assertEqual(mock.queries, [])
-        message = str(caught.exception)
-        self.assertIn("crashes", message)
-        self.assertIn("ed25519", message)
-
-    @bounded()
-    async def test_one_foreign_key_anywhere_in_a_batch_sends_nothing(self):
-        """Every key is checked before the first is written, because a batch
-        that failed halfway would have already killed a node that carries
-        neither astrald `640fbc12` nor astral-go `f86be1a`."""
-        async with MockApphost(
-            routes={OP_PUBLIC_KEY: op(PUBLIC_KEY_FRAME)}
-        ) as mock:
-            api = await self.crypto(mock)
-            with self.assertRaises(BadArgument):
-                await api.public_key_many(
-                    [
-                        PrivateKey(type=KEY_TYPE, key=bytes(32)),
-                        PrivateKey(type="ed25519", key=bytes(32)),
-                    ]
-                )
-            self.assertEqual(mock.queries, [])
+            await api.public_key(PrivateKey(type="ed25519", key=bytes(32)))
+            self.assertEqual(len(mock.queries), 1)
 
     @bounded()
     async def test_an_empty_batch_is_refused(self):
@@ -871,7 +835,7 @@ class ResetTest(CryptoCase):
         self.assertIn(OP_SIGN_TEXT, message)
         self.assertIn("without reading the body", message)
         self.assertIn("ConnectionResetError", message)
-        self.assertIn("may also simply have gone", message)
+        self.assertIn("may simply have gone", message)
 
     @bounded()
     async def test_a_node_that_closes_before_reading_is_reported_as_that(self):
@@ -1128,24 +1092,10 @@ class AstraldParityTest(unittest.TestCase):
                 self.assertIn("crypto.Signature", source)
                 self.assertIn("ch.Switch", source)
 
-    def test_at_074a852b_op_public_key_sends_an_underived_public_key(self):
-        """The crash the guard exists for, read at the revision it describes.
-        `secp256k1.PublicKey` answers nil for a foreign key type and
-        `OpPublicKey` there sends the result unchecked."""
-        try:
-            source = reference.read(
-                reference.ASTRALD, f"{self.ASTRALD}/op_public_key.go", "074a852b"
-            )
-        except reference.Unavailable as exc:  # pragma: no cover -- may be absent
-            self.skipTest(str(exc))
-        self.assertIn("ch.Send(secp256k1.PublicKey(key))", source)
-        self.assertNotIn("== nil", source)
-
-    def test_from_640fbc12_op_public_key_answers_a_foreign_key_in_band(self):
-        """The fix the module docstring names, read at the pin: the nil is
-        tested before it reaches the channel and answered as an
-        `ErrUnsupportedKeyType` error object. The SDK's guard stays, because a
-        caller cannot tell which side of this commit a node is on."""
+    def test_op_public_key_answers_a_foreign_key_in_band(self):
+        """Read at the pin: the nil is tested before it reaches the channel and
+        answered as an `ErrUnsupportedKeyType` error object. This is why the SDK
+        sends a foreign key type rather than refusing it."""
         source = self.source(f"{self.ASTRALD}/op_public_key.go")
         self.assertIn("if publicKey == nil {", source)
         self.assertIn("cryptomod.ErrUnsupportedKeyType", source)
@@ -1176,12 +1126,11 @@ class AstraldParityTest(unittest.TestCase):
         source = self.source("core/router.go")
         self.assertIn('Infov(0, "%v routed in %v", q.Query, d)', source)
 
-    def test_from_341fcdd5_both_sign_ops_build_their_signer_per_signature(self):
-        """The fix to the defect the next test reads at `074a852b`, read at the
-        pin: `NewTextSigner` moved inside `signAndSend`, after the authorization
-        every signature passes. The module's docstring says a streamed key is
-        honoured and a refused key answers per text from this commit, and this
-        is that claim's source."""
+    def test_both_sign_ops_build_their_signer_per_signature(self):
+        """Read at the pin: `NewTextSigner` sits inside `signAndSend`, after the
+        authorization every signature passes. The module's docstring says a
+        streamed key is honoured and a refused key answers per text, and this is
+        that claim's source."""
         text_source = self.source(f"{self.ASTRALD}/op_sign_text.go")
         guard = self.source(f"{self.ASTRALD}/sign_guard.go")
         errors = self.source("mod/crypto/errors.go")
@@ -1195,44 +1144,15 @@ class AstraldParityTest(unittest.TestCase):
         self.assertIn('"cannot sign with the node\'s key"', errors)
         self.assertIn('"cannot sign with another identity\'s key"', errors)
 
-    def test_at_074a852b_op_sign_text_builds_its_signer_before_the_switch(self):
-        """The reason this SDK sends `key` as an argument on every sign op, read
-        at the revision the module docstring names for it. astrald moved the
-        construction inside `signAndSend` at `341fcdd5` (the test above), so the
-        note describes older nodes and stays for them."""
-        try:
-            text_source = reference.read(
-                reference.ASTRALD, f"{self.ASTRALD}/op_sign_text.go", "074a852b"
-            )
-            hash_source = reference.read(
-                reference.ASTRALD, f"{self.ASTRALD}/op_sign_hash.go", "074a852b"
-            )
-        except reference.Unavailable as exc:  # pragma: no cover -- may be absent
-            self.skipTest(str(exc))
-        # In sign_text the signer is built once, above `signAndSend`.
-        self.assertLess(
-            text_source.index("mod.NewTextSigner"),
-            text_source.index("var signAndSend"),
-        )
-        # In sign_hash it is built inside, which is why that op honours a
-        # streamed key and its sibling does not.
-        self.assertGreater(
-            hash_source.index("mod.NewHashSigner"),
-            hash_source.index("var signAndSend"),
-        )
-
-
 # --- Tier C: the live node ------------------------------------------------
 
 
 class LiveCryptoTest(live_support.LiveCase):
     """The read-only half, against a real node, as an anonymous caller.
 
-    Nothing here sends a private key whose type is not `secp256k1`, because that
-    kills a node that carries neither astrald `640fbc12` nor astral-go
-    `f86be1a`.
+    Nothing here sends a private key whose type is not `secp256k1`.
 
-    **Every sign call here is refused.** From astrald `341fcdd5` a caller signs
+    **Every sign call here is refused.** A caller signs
     only as itself, the core router makes an anonymous caller the node, and the
     node's key is never signable through the op surface. So the anonymous tier
     asserts the two refusals, and the signatures that prove the RR form, the
@@ -1355,13 +1275,9 @@ class LiveCryptoTest(live_support.LiveCase):
     async def test_sign_text_with_an_unusable_key_reads_the_refusal_after_the_body(
         self,
     ):
-        """On a node that predates astrald `341fcdd5`, the text signer was built
-        before anything was read, and the op answered and closed with the body
-        unread: a reset, or the error object, by a race measured against
-        `furry-bolt`. From that commit the signer is built per signature after
-        the text is read, so the body form reads the node's refusal cleanly,
-        every time. Four sequential attempts, because the old race lost on a
-        serial run."""
+        """The signer is built per signature after the text is read, so the body
+        form reads the node's refusal cleanly, every time. Four sequential
+        attempts."""
         client = await self.client()
         try:
             api = Crypto(client)
@@ -1423,9 +1339,8 @@ class LiveSigningTest(live_support.LiveCase):
     """Real signatures, from a caller that is not the node.
 
     Runs only when `ASTRAL_TEST_TOKEN` names an identity whose private key the
-    node holds -- `apphost.register` issues one -- because from astrald
-    `341fcdd5` a caller signs only as itself and an anonymous caller is the
-    node, whose key is refused. Registering one here would be a write, which the
+    node holds -- `apphost.register` issues one -- because a caller signs only
+    as itself and an anonymous caller is the node, whose key is refused. Registering one here would be a write, which the
     live tier does not perform, so the token is set out of band.
 
     This tier used to obtain no signature at all, which left the module's most
@@ -1445,7 +1360,7 @@ class LiveSigningTest(live_support.LiveCase):
         if self.token is None:
             self.skipTest(
                 "ASTRAL_TEST_TOKEN is not set: a signature needs a caller other "
-                "than the node (astrald 341fcdd5), and minting one is a write"
+                "than the node, and minting one is a write"
             )
 
     async def client(self, **kw: object) -> astral.Client:
