@@ -550,7 +550,7 @@ class SearchGrammarTest(unittest.TestCase):
         """A query built rather than parsed can hold what the grammar cannot
         spell, and the text channel loses it silently -- `bin`, `json` and
         `canonical` all carry it exactly. The loss is astral-go's
-        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 6ea26c7),
+        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 5b1d282),
         which a registered searcher parses the same query with, so the SDK
         matching it is what keeps the two agreeing about the question.
 

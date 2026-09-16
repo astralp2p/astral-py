@@ -86,8 +86,7 @@ Go's default showing through a gap.
 **`auth.Action` is a registered astral object at the pin.**
 `api/auth/action.go` at astral-go `5b1d282` declares
 `func (Action) ObjectType() string { return "mod.auth.action" }` (line 22) and
-registers it with `astral.MustAdd(&Action{})` (line 55). At astral-go `6ea26c7`
-it declared neither.
+registers it with `astral.MustAdd(&Action{})` (line 55).
 
 That changes what astral-go can derive. `specFromType` probes `tryObjectType`
 ahead of its container dispatch (`astral/blueprint_reflect.go` at `5b1d282`), so
