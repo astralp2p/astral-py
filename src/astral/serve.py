@@ -165,6 +165,50 @@ every interface, and the node's TCP listener is the one that wedges.
 """
 
 RESPOND_TIMEOUT: Final = HANDSHAKE_TIMEOUT
+
+
+RENEW_DIVISOR: Final = 3
+"""A lease is renewed after this fraction of it has run.
+
+A third leaves room for two consecutive failed renewals -- a reconnect, a node
+briefly busy -- before the registration actually lapses.
+"""
+
+MIN_RENEW_INTERVAL: Final = 1.0
+"""Seconds. The floor under a renewal interval.
+
+A node granting a very short lease would otherwise have an app renewing in a
+tight loop against a worker pool of 32, which costs the node more than the stale
+registration the lease exists to prevent.
+"""
+
+_REGISTER_METHOD: Final[Mapping[str, str]] = {
+    OP_REGISTER_SEARCHER: "register_searcher",
+    OP_REGISTER_DESCRIBER: "register_describer",
+    OP_REGISTER_FINDER: "register_finder",
+}
+"""Which `Objects` method performs each registration op.
+
+Going through the module client rather than building the query here keeps one
+definition of the op's arguments and its answer type, and it is what lets this
+module reach `api.objects` at all: importing it directly would close the cycle
+`serve -> api.objects -> client -> serve`.
+"""
+
+
+async def _register_lease(client: "Client", register_op: str, duration: int | None) -> Any:
+    """Register, or renew, and hand back the lease the node granted."""
+    return await getattr(client.objects, _REGISTER_METHOD[register_op])(duration)
+
+
+def _renew_after(lease: Any) -> float:
+    """Seconds to wait before renewing the lease just granted.
+
+    The grant is what is divided, not the request: the node clamps, so an app
+    timing renewals off what it asked for would renew after the registration it
+    is renewing had already lapsed.
+    """
+    return max(float(lease.duration) / 1e9 / RENEW_DIVISOR, MIN_RENEW_INTERVAL)
 """How long one `ack`, `query_rejected_msg` or `error_msg` has to reach the node.
 
 A send blocks on the peer's receive window, so a refusal nobody reads would
@@ -970,6 +1014,7 @@ class Service:
         *,
         params: Mapping[str, Spec] | None = None,
         required: Iterable[str] = (),
+        duration: int | None = None,
     ) -> None:
         """Mount an op **and** re-register it with the node after every reconnect.
 
@@ -998,7 +1043,7 @@ class Service:
         beside it.
         """
         self.mount(op, handler, params=params, required=required)
-        self._add_hook(op_hook(register_op))
+        self._add_hook(self._lease_hook(register_op, duration))
 
     def add_searcher(self, handler: OpHandler, **kw: Any) -> None:
         """Serve `objects.search` and register as a searcher. Design section 4.6.
@@ -1030,6 +1075,41 @@ class Service:
         The op reads `id` and streams `identity` objects followed by `eos`.
         """
         self.add_provider(OP_FIND, OP_REGISTER_FINDER, handler, params=_ID_PARAMS, **kw)
+
+    def _lease_hook(self, register_op: str, duration: int | None) -> RegistrationHook:
+        """A registration hook that registers under a lease and keeps it alive.
+
+        The node grants a lease rather than a permanent registration, so
+        something has to renew it; doing that here is what leaves an application
+        no renewal code to write. The hook registers on every (re)connect, as
+        every registration hook does, and the first run also starts one renewal
+        task.
+
+        The task runs under this service's `TaskGroup`, so it is cancelled with
+        the service and cannot outlive it. A renewal that fails is left to the
+        next tick: the registrar's own reconnect re-runs this hook, and until it
+        does there is no registration to renew.
+        """
+        state: dict[str, Any] = {"after": None, "running": False}
+
+        async def renew_forever(client: Client) -> None:
+            while True:
+                await asyncio.sleep(state["after"])
+                try:
+                    lease = await _register_lease(client, register_op, duration)
+                except AstralError as exc:
+                    self._record(exc)
+                    continue
+                state["after"] = _renew_after(lease)
+
+        async def hook(client: Client) -> None:
+            lease = await _register_lease(client, register_op, duration)
+            state["after"] = _renew_after(lease)
+            if not state["running"]:
+                state["running"] = True
+                self._spawn(renew_forever(client))
+
+        return hook
 
     def _add_hook(self, hook: RegistrationHook) -> None:
         """Record a post-connect hook, and hand it to the registrar when there is one."""
