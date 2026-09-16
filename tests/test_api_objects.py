@@ -1,4 +1,4 @@
-"""The `objects` module client: 25 ops, the `Writer` lifecycle, the grammar.
+"""The `objects` module client: 24 ops, the `Writer` lifecycle, the grammar.
 
 Three tiers in one file, on the pattern `test_api_dir.py` set, because the same
 claim is made at each and the three must agree:
@@ -10,7 +10,7 @@ claim is made at each and the three must agree:
   search grammar is pinned against astral-go's `SearchQuery.UnmarshalText` case
   by case, because a searcher registered through `objects.register_searcher` is
   handed the raw string and parses it with that function.
-- **Tier B** pins the 25 ops against `MockApphost`: the query string each one
+- **Tier B** pins the 24 ops against `MockApphost`: the query string each one
   builds, the answer each one accepts, the terminator each one sends, and the
   `Writer` lifecycle. It also pins the four astral-go client bugs this module
   does not reproduce (G-10 twice, the int64 size, the hardcoded `zone=dvn`).
@@ -51,7 +51,6 @@ from astral.api.objects import (
     OP_ECHO,
     OP_FIND,
     OP_GET_BLUEPRINT,
-    OP_GET_TYPE,
     OP_LOAD,
     OP_NEW,
     OP_NEW_MEM,
@@ -397,9 +396,10 @@ class ObjectsTypesTest(unittest.TestCase):
                 self.assertTrue(registry.has(name))
 
     def test_the_module_declares_one_constant_per_op(self):
-        """25 ops, and the inventory is the live `shell.spec` registry: verified
-        this session against `furry-bolt`, whose 118 op specs contain exactly
-        these 25 under the `objects.` prefix."""
+        """24 ops, and the inventory is the live `shell.spec` registry: verified
+        against `furry-bolt`, whose 118 op specs contain these 24 under the
+        `objects.` prefix plus `objects.get_type`, which astrald removes in favour
+        of `objects.probe`."""
         expected = {
             "objects.blueprints": "blueprints",
             "objects.contains": "contains",
@@ -409,7 +409,6 @@ class ObjectsTypesTest(unittest.TestCase):
             "objects.echo": "echo",
             "objects.find": "find",
             "objects.get_blueprint": "get_blueprint",
-            "objects.get_type": "get_type",
             "objects.load": "load",
             "objects.new": "new",
             "objects.new_mem": "new_mem",
@@ -427,7 +426,7 @@ class ObjectsTypesTest(unittest.TestCase):
             "objects.search": "search",
             "objects.store": "store",
         }
-        self.assertEqual(len(expected), 25)
+        self.assertEqual(len(expected), 24)
         constants = {
             value
             for name, value in vars(objects_module).items()
@@ -1109,29 +1108,6 @@ class ProbeOpTest(ObjectsCase):
             await self.finished(route)
         self.assertEqual(len(probes), 2)
         self.assertEqual(route.types, ["object_id.sha256", "object_id.sha256", "eos"])
-
-
-class GetTypeOpTest(ObjectsCase):
-    """`objects.get_type`: RR, deprecated in favour of `probe`."""
-
-    @bounded()
-    async def test_it_returns_the_type_name(self):
-        mock = MockApphost(
-            routes={OP_GET_TYPE: Accept(objects=[framed(String8("mod.crypto.private_key"))])}
-        )
-        async with mock:
-            o = await self.objects(mock)
-            self.assertEqual(await o.get_type(ID_A), "mod.crypto.private_key")
-        self.assertEqual(self.params(mock), (OP_GET_TYPE, {"id": str(ID_A)}))
-
-    @bounded()
-    async def test_an_untypeable_object_is_a_remote_error(self):
-        mock = MockApphost(routes={OP_GET_TYPE: Accept(objects=[error_frame("unknown type")])})
-        async with mock:
-            o = await self.objects(mock)
-            with self.assertRaises(RemoteError) as caught:
-                await o.get_type(ID_A)
-        self.assertEqual(caught.exception.message, "unknown type")
 
 
 class LoadOpTest(ObjectsCase):
@@ -2207,12 +2183,6 @@ class LiveObjectsTest(live_support.LiveCase):
         answers = await self.objects.contains_many(REPO_MAIN, ids, timeout=25)
         self.assertEqual(len(answers), len(ids))
         self.assertTrue(all(answers))
-
-    async def test_probe_and_get_type_agree(self):
-        object_id = await self.any_id()
-        probe = await self.objects.probe(object_id, timeout=20)
-        self.assertIsInstance(probe, Probe)
-        self.assertEqual(await self.objects.get_type(object_id, timeout=20), probe.type)
 
     async def test_probe_many_answers_one_probe_per_id(self):
         ids = await self.objects.scan(REPO_MAIN, timeout=20)

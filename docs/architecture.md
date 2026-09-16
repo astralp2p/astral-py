@@ -1398,7 +1398,7 @@ Only the anonymous-safe, read-only op set is targeted:
 apphost.whoami            dir.alias_map      objects.blueprints     tree.list
 apphost.list_tokens       dir.filters        objects.repositories   tree.get (follow=false)
 apphost.list_held_objects dir.resolve        objects.new            services.discover (follow=false)
-shell.spec                dir.get_alias      objects.get_type       ip.local_addrs
+shell.spec                dir.get_alias      objects.probe          ip.local_addrs
                           dir.apply_filters  objects.echo           ip.public_ip_candidates
                                              objects.scan (follow=false)  ip.default_gateway
                                              objects.search         nodes.links / sessions
