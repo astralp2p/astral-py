@@ -4,9 +4,8 @@
   the argument refusals, and the op-name constants.
 - **Tier B** pins the six ops against `MockApphost` -- the query string each one
   builds, where each one puts its input, the answer each one accepts, and the
-  two reference bugs neither may reproduce: astral-docs' capitalised `-Recursive`
-  and `-Type`/`-Value`, which the node drops silently (D-17), and astral-go
-  `5c18d9c`'s `Node.Create`, which never reads its response (G-11).
+  reference bug none may reproduce: astral-docs' capitalised `-Recursive` and
+  `-Type`/`-Value`, which the node drops silently (D-17).
 - **Tier C** runs the two read-only ops against a real node. Five of the six ops
   mutate and no live test calls one; the config tree is somebody's running
   configuration.
@@ -99,20 +98,20 @@ UNKNOWN_FRAME = ("mod.nearby.mode", b"\x00")
 
 
 def switch(*replies: tuple[str, bytes], mirror_eos: bool = False):  # type: ignore[no-untyped-def]
-    """astrald's batch `ch.Switch`: read one object, answer one, `BreakOnEOS`.
+    """astrald's batch: read one object, answer one, `BreakOnEOS`.
 
-    `tree.set` without a `value` argument has exactly this shape at astral-go
-    `5c18d9c` (`astral-go/api/tree/client/server.go:132` at `5c18d9c`), and a
-    canned `Accept` cannot model it: `MockApphost` writes an `Accept` body and
-    closes at once, while the op writes its input **after** the query has been
-    accepted, so the two race and the client's frames are dropped.
+    `tree.set` without a `value` argument is `channel.Batch`
+    (`astral-go/api/tree/client/server.go:132`), and a canned `Accept` cannot
+    model it: `MockApphost` writes an `Accept` body and closes at once, while
+    the op writes its input **after** the query has been accepted, so the two
+    race and the client's frames are dropped.
 
-    At the pin the op is `channel.Batch` (`astral-go/api/tree/client/server.go:132`),
-    which answers the same way and mirrors the terminator: "an explicit EOS
-    input is answered with a final EOS, while a stream ended by EOF is not"
-    (`astral-go/astral/channel/batch.go` at `6ea26c7`). The client always sends
+    `Batch` mirrors the terminator: "an explicit EOS input is answered with a
+    final EOS, while a stream ended by EOF is not"
+    (`astral-go/astral/channel/batch.go` at `5b1d282`). The client always sends
     an explicit `eos`, so a node at the pin always answers one. `mirror_eos`
-    selects that shape; it defaults off so the `5c18d9c` shape stays covered.
+    selects that shape; it defaults off so the EOF-terminated shape, which
+    design section 3.10 requires the client to accept, stays covered.
 
     Replies are consumed in order, one per input object. An input past the last
     reply is read and left unanswered, which is how a short-answering op is
@@ -631,7 +630,7 @@ class SetTest(TreeCase):
     async def test_a_mirrored_eos_after_the_acks_is_tolerated(self):
         """The shape a node at the pin actually answers with. `channel.Batch`
         ends an explicitly terminated input stream with an `EOS` of its own
-        (`astral-go/astral/channel/batch.go` at `6ea26c7`), and every mock here
+        (`astral-go/astral/channel/batch.go` at `5b1d282`), and every mock here
         omitted it, so nothing covered the client meeting one."""
         mock = MockApphost(
             routes={OP_SET: switch(ACK_FRAME, ACK_FRAME, mirror_eos=True)}
@@ -729,13 +728,13 @@ class SetTextTest(TreeCase):
 
 
 class CreateTest(TreeCase):
-    """`tree.set` with an empty body, and the astral-go bug it must not repeat."""
+    """`tree.set` with an empty body: the terminator, and the read after it."""
 
     @bounded()
     async def test_it_sends_the_eos_and_reads_the_stream_to_its_end(self):
-        """Bug G-11. At astral-go `5c18d9c`, `Node.Create` opens the query and
-        returns without reading, so a creation that failed reports success. The `eos` is
-        what lets the node finish, and the read is what surfaces the failure."""
+        """The `eos` is what lets the node finish, and the read is what
+        surfaces the failure: a creation whose path walk failed raises rather
+        than reporting success."""
         mock = MockApphost(routes={OP_SET: switch()})
         async with mock:
             t = await self.tree(mock)
@@ -1213,15 +1212,6 @@ class CitationTest(unittest.TestCase):
         "api/tree/err_no_value.go:15": 'return "mod.tree.err_no_value"',
     }
 
-    # Claims about astral-go `5c18d9c` that the pin no longer makes true: bug
-    # G-11 and the batch shape `switch` models. Each is read at the revision its
-    # prose names.
-    GO_HISTORY = {
-        "api/tree/client/server.go:132": ("5c18d9c", "return ch.Switch("),
-        "api/tree/client/node.go:151": ("5c18d9c", "calling set without sending any value"),
-        "api/tree/client/node.go:160": ("5c18d9c", "return &Node{client: node.client"),
-    }
-
     ASTRALD_CITATIONS = {
         "mod/tree/src/node.go:29": "root node cannot hold a value",
         "mod/tree/src/node.go:37": "object = &astral.Nil{}",
@@ -1230,6 +1220,7 @@ class CitationTest(unittest.TestCase):
         "mod/tree/src/module.go:118": "mount point does not exist",
         "mod/tree/src/module.go:131": "if len(remotePath) > 0 {",
         "mod/tree/src/module.go:222": "return tree.ErrNodeHasSubnodes",
+        "mod/tree/src/op_mount_remote.go:11": 'Identity string `query:"required"`',
         "mod/tree/src/loader.go:30": 'mod.mounts.Set("/", &Node{mod: mod})',
         "mod/dir/src/module.go:58": 'if s == "" || s == "anyone"',
         # The op that does have a separator, cited so the objection is scoped:
@@ -1238,13 +1229,8 @@ class CitationTest(unittest.TestCase):
         "mod/services/src/op_discover.go:33": "if update == nil {",
     }
 
-    def check(
-        self,
-        repo: str,
-        citations: dict[str, str],
-        rev: str | None = None,
-    ) -> None:
-        """Every citation, read at the revision the docstrings name.
+    def check(self, repo: str, citations: dict[str, str]) -> None:
+        """Every citation, read at the pin.
 
         The reference working tree is not consulted: a citation is a claim about
         a revision, and reading whatever a sibling checkout happens to hold
@@ -1252,19 +1238,15 @@ class CitationTest(unittest.TestCase):
         """
         for citation, expected in citations.items():
             path, _, number = citation.rpartition(":")
-            with self.subTest(citation=citation, rev=rev):
+            with self.subTest(citation=citation):
                 try:
-                    line = reference.cited_line(repo, path, int(number), rev)
+                    line = reference.cited_line(repo, path, int(number))
                 except reference.Unavailable as exc:  # pragma: no cover
                     self.skipTest(str(exc))
                 self.assertIn(expected, line)
 
     def test_every_astral_go_citation_lands_on_its_claim(self):
         self.check(self.GO, self.GO_CITATIONS)
-
-    def test_every_astral_go_history_citation_lands_at_its_revision(self):
-        for citation, (rev, expected) in self.GO_HISTORY.items():
-            self.check(self.GO, {citation: expected}, rev)
 
     def test_every_astrald_citation_lands_on_its_claim(self):
         self.check(self.ASTRALD, self.ASTRALD_CITATIONS)
@@ -1276,7 +1258,7 @@ class CitationTest(unittest.TestCase):
         prose += pathlib.Path(__file__).read_text(encoding="utf-8")
         self.assertEqual(
             set(re.findall(r"astral-go/(api/[\w/]+\.go:\d+)", prose)),
-            set(self.GO_CITATIONS) | set(self.GO_HISTORY),
+            set(self.GO_CITATIONS),
         )
         self.assertEqual(
             set(re.findall(r"astrald/(mod/[\w/]+\.go:\d+)", prose)),

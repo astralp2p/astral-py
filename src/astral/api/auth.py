@@ -21,21 +21,17 @@ Both are the whole of the module. `shell.spec` on `furry-bolt` lists exactly
 others, on astrald `26bb51d5`, verified.
 
 **`auth.index` takes its object ID in the query string or its object IDs on the
-body.** From astrald `fdbddccb`, `opIndexArgs.ID` is optional, and an omitted
-`id` makes the op read `object_id.sha256` objects off the channel until `eos` or
-EOF, answering one `ack` or `error_message` per input and carrying on past a
-failed one -- the RR/BD hybrid `objects.contains`, `objects.delete`,
-`objects.load` and `objects.probe` already have. The batch goes through astral-go's
-`channel.Batch`, which answers an explicit `eos` with a final `eos` and ends
-silently after EOF (`astral/channel/batch.go` at astral-go `6ea26c7`). `index()`
-is the single form and `index_many()` the batch. Verified on astrald `26bb51d5`:
-the spec flags `id` `"Required":false`, a bare `eos` on the body answers a bare
-`eos`, two IDs no repository holds answer two `object not found` and an `eos`,
-and the single form answers `object not found` and EOF.
-
-On a node that predates `fdbddccb`, `id` is `"Required":true` and an absent one
-is refused by the routing layer before the op runs, as `query_rejected_msg{1}`,
-verified against `furry-bolt`. `index_many()` meets that as `QueryRejected`.
+body.** `opIndexArgs.ID` is optional (`mod/auth/src/op_index.go` at astrald
+`d5bb0bbd`), and an omitted `id` makes the op read `object_id.sha256` objects
+off the channel until `eos` or EOF, answering one `ack` or `error_message` per
+input and carrying on past a failed one -- the RR/BD hybrid `objects.contains`,
+`objects.delete`, `objects.load` and `objects.probe` already have. The batch
+goes through astral-go's `channel.Batch`, which answers an explicit `eos` with a
+final `eos` and ends silently after EOF (`astral/channel/batch.go` at astral-go
+`5b1d282`). `index()` is the single form and `index_many()` the batch. Verified
+on astrald `26bb51d5`: the spec flags `id` `"Required":false`, a bare `eos` on
+the body answers a bare `eos`, two IDs no repository holds answer two `object
+not found` and an `eos`, and the single form answers `object not found` and EOF.
 
 **A contract is signed and indexed in two separate steps, and the op that signs
 does not store.** `auth.sign_contract` builds a fresh `SignedContract` around
@@ -87,24 +83,28 @@ name (`astral-go/astral/struct_value.go:163`). No action type declares
 promotes anonymous fields. The nesting is astral-go's rule; the flattening is
 Go's default showing through a gap.
 
-**No action type has a blueprint.** `objects.get_blueprint` answers
-`error_message` for every one of them -- verified live for
-`mod.auth.sudo_action` and `mod.objects.create_object_action` on `furry-bolt`,
-and for `mod.user.admin_swarm_action` on astrald `26bb51d5`, each with
-`BlueprintFromType <type>.Action: type auth.Action does not implement Object and
-is not a supported container`. `auth.Action` has no `ObjectType` method, so
-astral-go's blueprint derivation stops at the embedded field. A peer therefore
-cannot learn an action type over the wire, and `astral.blueprint.of()` on the
-SDK's own action records produces a schema astral-go cannot produce for itself.
+**`auth.Action` is a registered astral object at the pin.**
+`api/auth/action.go` at astral-go `5b1d282` declares
+`func (Action) ObjectType() string { return "mod.auth.action" }` (line 22) and
+registers it with `astral.MustAdd(&Action{})` (line 55).
 
-**`mod.auth.action` is not a type.** It is documented in astral-docs, absent
-from astral-go's registry, and the node answers `nil` to
-`objects.new?type=mod.auth.action` and `blueprint not found: mod.auth.action` to
-`objects.get_blueprint` -- both verified live. `Action` below is a plain
+That changes what astral-go can derive. `specFromType` probes `tryObjectType`
+ahead of its container dispatch (`astral/blueprint_reflect.go` at `5b1d282`), so
+an embedded `auth.Action` field now yields a `RefSpec` naming
+`mod.auth.action` rather than failing -- inferred from those two sources, with
+no run behind it.
+
+**What a node at the pin answers to `objects.get_blueprint` on an action type,
+and to `objects.new?type=mod.auth.action`, is unverified.** The recorded
+answers -- `error_message` carrying `BlueprintFromType <type>.Action: type
+auth.Action does not implement Object and is not a supported container`, `nil`
+to `objects.new`, and `blueprint not found: mod.auth.action` -- were observed on
+`furry-bolt` and on astrald `26bb51d5`, both of which predate the registration.
+`LiveAuthTest` still asserts them and is expected to need re-reading
+against a node at the pin. `Action` below is a plain
 dataclass carrying the two field declarations, inherited by a concrete action
 record so the fields flatten under their own names. Declaring it as a record
-would put a name in the registry that no node knows and would nest the two
-fields in JSON under a key no node sends.
+would nest the two fields in JSON under a key no node sends.
 
 **`mod.auth.sudo_action` exists.** astral-docs documents
 `protocols/auth/types/mod.auth.sudo_action.md`, the op survey records it as
@@ -203,9 +203,10 @@ class Action:
     nonce, two absent pointers and an empty `string8`. Verified against
     astral-go's own encoder at `456347b`.
 
-    Not decorated with `@record`: `mod.auth.action` is not registered on any
-    node, and a record would both invent a registry name and nest these two
-    fields in JSON under a key nothing sends.
+    Not decorated with `@record`: this SDK declares no `mod.auth.action`, and a
+    record would nest these two fields in JSON under a key nothing sends. The
+    name is astral-go's from `5b1d282` on; the SDK carries the fields inline, as
+    every concrete action inherits them.
 
     `Nonce` is a fresh 64-bit value per action, not a query correlator.
     `Nonce.random()` is what astral-go's `NewAction` calls; the zero value is a
@@ -435,8 +436,7 @@ class Auth(ModuleClient):
         contract already in the index, so re-sending the tail or indexing the
         IDs one at a time is safe.
 
-        An empty `ids` sends no query. A node that predates astrald `fdbddccb`
-        requires `id` and rejects the query, which arrives as `QueryRejected`.
+        An empty `ids` sends no query.
         """
         objects = [_object_id(i) for i in ids]
         if not objects:

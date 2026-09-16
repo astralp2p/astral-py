@@ -28,17 +28,6 @@ declaration stops anyone noticing.
 `PROBE_TYPES` remains, empty of records and parented on the default registry, for
 the next shape a node proves before a module claims it.
 
-**One live probe in this file's subject area must never be run again.**
-`objects.new?type=mod.nodes.node_info` **kills astrald** -- the registry's zero
-value has a nil `*astral.Identity`, `NodeInfo.WriteTo` hands it straight to
-`streams.WriteAllTo`, and `Identity.WriteTo` has a value receiver, so the call
-dereferences nil and panics on a goroutine `lib/routing.(*Op).RouteQuery`
-spawns without any recover. Observed this session: the node wrote
-`13 "mod.nodes.node_info"` -- the type tag `BinarySender.Send` writes before it
-serialises the payload -- and the process was gone before the length prefix.
-Any local process that can open the apphost socket can end the node with that
-one read-only query, authenticated or not. `FORBIDDEN_LIVE_QUERIES` names it and
-a test asserts nothing here sends it.
 """
 
 from __future__ import annotations
@@ -67,9 +56,6 @@ FURRY_BOLT = Identity.parse(
 FURRY_BOLT_HEX = (
     "03b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae1"
 )
-
-FORBIDDEN_LIVE_QUERIES = ("objects.new?type=mod.nodes.node_info",)
-"""Queries that crash astrald. Never sent, live tier or not (module docstring)."""
 
 
 # --- the shipped types these captures are decoded through -----------------
@@ -530,24 +516,6 @@ class R12IPAddress(unittest.TestCase):
                 self.assertEqual(r.remaining, 0)
 
 
-# --- the safety rail -----------------------------------------------------
-
-
-class CrashingQueryIsNeverSent(unittest.TestCase):
-    """No test in this repository may route a query that kills the node."""
-
-    def test_the_forbidden_query_appears_only_as_a_forbidden_query(self):
-        here = os.path.dirname(os.path.abspath(__file__))
-        for forbidden in FORBIDDEN_LIVE_QUERIES:
-            for name in sorted(os.listdir(here)):
-                if not name.endswith(".py"):
-                    continue
-                with open(os.path.join(here, name), encoding="utf-8") as fh:
-                    body = fh.read()
-                if forbidden in body and name != os.path.basename(__file__):
-                    self.fail(f"{name} names the crashing query {forbidden!r}")
-
-
 # --- Tier C: the same probes, against a node -----------------------------
 
 
@@ -559,9 +527,8 @@ class LiveRiskProbes(LiveCase):
     astrald is not running, which is the failure mode the whole register exists
     to end.
 
-    Read-only and anonymous throughout. `objects.new` is a pure registry read
-    -- it constructs a zero value and sends it, storing nothing -- with the one
-    exception this module's docstring names.
+    Read-only and anonymous throughout. `objects.new` is a pure registry read:
+    it constructs a zero value and sends it, storing nothing.
     """
 
     async def raw(self, qs: str) -> bytes:
@@ -571,7 +538,6 @@ class LiveRiskProbes(LiveCase):
         are about the framing itself and a decoder that agreed with the SDK
         would prove nothing about the node.
         """
-        self.assertNotIn(qs, FORBIDDEN_LIVE_QUERIES)
         async with await self.client() as client:
             async with client.stream(qs, raw=True) as s:
                 return await s.read_bytes(timeout=15.0)

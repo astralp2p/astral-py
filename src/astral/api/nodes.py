@@ -37,18 +37,13 @@ a per-op contract and is not discoverable from the wire):
 | `nodes.new_link` | RR (long) | `link_info` \\| `error_message` \\| reject 2-5 | **mutates** |
 | `nodes.migrate_session` | RR | `ack` \\| `error_message` | **mutates** |
 
-Parameter names follow astrald `bd98bbe8`: `nodes.resolve_endpoints`,
-`nodes.add_endpoint` and `nodes.new_link` name their identity argument
-`identity`, and `nodes.close_link` names its nonce `link_id`, as
-`nodes.migrate_session` does. The node ignores the earlier names, `id` and
-`target`. Which parameters the node enforces is read off the live `shell.spec`
-registry rather than off the docs, on a node that predates `bd98bbe8`:
-`nodes.migrate_session` marks `session_id` and `link_id` required and
-`nodes.new_link` marks its identity argument, `target` there, required; every
-other parameter of every other op is optional there, `out` included. astrald
-`26bb51d5` marks seven required in source: those three, `identity` on
-`nodes.resolve_endpoints` and `nodes.add_endpoint`, `endpoint` on
-`nodes.add_endpoint`, and `link_id` on `nodes.close_link`.
+`nodes.resolve_endpoints`, `nodes.add_endpoint` and `nodes.new_link` name their
+identity argument `identity`, and `nodes.close_link` names its nonce `link_id`,
+as `nodes.migrate_session` does. astrald `d5bb0bbd` marks seven parameters
+required in source: `identity` on `nodes.resolve_endpoints`,
+`nodes.add_endpoint` and `nodes.new_link`, `endpoint` on `nodes.add_endpoint`,
+`link_id` on `nodes.close_link`, and `session_id` and `link_id` on
+`nodes.migrate_session`. Every other parameter is optional, `out` included.
 
 **`nodes.migrate_session` ships only in its `start=true` form.** Design section
 4.5 drops the negotiated mode -- the `ready`/`switched`/`resume`/`done` signal
@@ -83,18 +78,11 @@ in those bytes and both are pinned by vectors generated from astral-go itself:
   astral-go limitation, recorded here and not worked around: inventing a tag
   would produce a blob no other implementation could read.
 
-**Never ask a node to construct a zero one.** `objects.new` on this type
-**panics astrald**, deterministically, on every build carrying astral-go
-`5c18d9c`: `WriteTo` hands `info.Identity`, a `*astral.Identity`, to
-`streams.WriteAllTo`, and `Identity.WriteTo` has a value receiver, so the nil
-pointer in the zero value the registry builds is dereferenced rather than
-erroring, on a goroutine with no recover. astral-go `0a15afb` substitutes the
-zero identity for a nil one, and astral-go `6ea26c7`, the revision astrald
-`26bb51d5` builds against, carries it. A client cannot see which astral-go a
-node was built with, so the rule stands for every node. Decoding a `node_info`
-is entirely safe -- it is what this module does -- and asking the node to build
-one is not. `NodeInfo()` here is that zero value, needs no node, and is
-byte-identical to what astral-go writes: the zero identity is 33 null bytes
+**A zero one is safe to ask the node for.** `WriteTo` substitutes the zero
+identity for the nil `*astral.Identity` the registry's zero value holds
+(`api/nodes/node_info.go`), so `objects.new` on this type answers rather than
+dereferencing nil. `NodeInfo()` here is that same zero value, needs no node, and
+is byte-identical to what astral-go writes: the zero identity is 33 null bytes
 either way.
 
 The text form is base62 of that blob (`jxskiss/base62`, alphabet `[A-Za-z0-9]`),
@@ -210,7 +198,7 @@ def require_experimental(op: str, opted_in: bool) -> None:
     `nodes.links` is read-only and answers on any node. What it is, is design
     section 0.1's Tier 3 in force. This surface is the least covered by the
     reference client -- 3 of 7 `nodes` ops have an astral-go client at
-    astral-go `6ea26c7`, and 2 at `5c18d9c` -- two of `nat`'s five ops are
+    astral-go `5b1d282` -- two of `nat`'s five ops are
     dropped outright (section 4.5), and four of these seven **mutate node
     state**: `close_link` drops a live link, `add_endpoint` writes a record that
     stands for 90 days. An SDK that let all of that be reached by a typo in an
@@ -670,7 +658,7 @@ class Nodes(ModuleClient):
 
         `name` travels under the wire key `identity` and is resolved by the
         node -- an alias, `localnode`, or a hex key -- because the op declares
-        `Identity string` (astrald `bd98bbe8`) and hands it to the directory. An
+        `Identity string` and hands it to the directory. An
         identity the node cannot resolve is **rejected with code 2**, which
         surfaces as `QueryRejected`, not as an `error_message`.
 
@@ -706,9 +694,9 @@ class Nodes(ModuleClient):
         only, so an IPv6 address needs its brackets. The TTL is astrald's, fixed
         at three 30-day months, and is not a parameter.
 
-        `identity` travels under the wire key `identity`. astrald `bd98bbe8`
-        resolves it through the node's directory and refuses the zero identity
-        with `missing identity`; this client parses it locally and refuses a
+        `identity` travels under the wire key `identity`. astrald resolves it
+        through the node's directory and refuses the zero identity with
+        `missing identity`; this client parses it locally and refuses a
         directory name, so resolve one first.
         """
         self._gate(OP_ADD_ENDPOINT, experimental)
@@ -771,16 +759,14 @@ class Nodes(ModuleClient):
         design risk R-17 declines to map them to meanings, because the table is
         source-only.
 
-        **`peer`, never `target`.** The wire argument is `identity=`; astrald
-        `bd98bbe8` renames it from `target=`, which the node ignores. `target`
+        **`peer`, never `target`.** The wire argument is `identity=`. `target`
         is the routing keyword every module-client method forwards to
         `Client.query` -- which node answers the query -- and here the two are
         different nodes: the query goes to one node and asks it to link to
         another. `Tree.mount_remote` names the same distinction the same way.
 
-        The identity argument is the one required parameter in this module
-        besides `migrate_session`'s two, per the live registry of a node that
-        predates `bd98bbe8`.
+        The identity argument is required, one of the seven the module marks
+        required in source.
         """
         self._gate(OP_NEW_LINK, experimental)
         params: dict[str, Any] = {
@@ -853,8 +839,8 @@ _param = ModuleClient._param
 def _identity(value: Identity | str, op: str) -> Identity:
     """An identity argument: 66 hex characters or `anyone`, never a name.
 
-    The node resolves a name here too (astrald `bd98bbe8`); this client parses
-    the argument locally and refuses one.
+    The node resolves a name here too; this client parses the argument locally
+    and refuses one.
     """
     if isinstance(value, Identity):
         return value

@@ -19,17 +19,10 @@ must agree:
   mutates: no `add_endpoint`, no `close_link`, no `new_link`, no
   `migrate_session`, per design section 7.3.
 
-**Asking a node to construct a zero `mod.nodes.node_info` kills it** on a build
-carrying astral-go `5c18d9c`, so no test here does. `NodeInfo.WriteTo` hands a
-`*astral.Identity` to `streams.WriteAllTo` and `Identity.WriteTo` has a value
-receiver, so the nil pointer in the zero value the registry builds is
-dereferenced on a goroutine with no recover. astral-go `0a15afb` guards it and
-astral-go `6ea26c7` carries the guard; a client cannot see which build a node
-runs.
-`tests/test_risk_register.py` names that query in `FORBIDDEN_LIVE_QUERIES` and
-asserts no other file in this directory so much as spells it -- which is why this
-file does not either. The zero value is asserted from the vector instead, and
-`ReferenceClaimTest` re-reads the source that makes the query fatal.
+**A zero `mod.nodes.node_info` is safe to ask the node for.** `WriteTo`
+substitutes the zero identity for the nil `*astral.Identity` the registry's zero
+value holds, so the query answers rather than dereferencing nil. The zero value
+is asserted from the vector, and `ReferenceClaimTest` re-reads the source.
 """
 
 from __future__ import annotations
@@ -839,9 +832,8 @@ class AddEndpointOpTest(NodesCase):
     @bounded()
     async def test_a_directory_name_is_refused_before_it_is_sent(self):
         """This client parses the argument as an identity and names the fix.
-        astrald `bd98bbe8` resolves a name here; a node that predates it parses
-        the argument as an identity, so a name reaches that node as a rejected
-        query rather than as an error message."""
+        astrald resolves a name here, so refusing locally is this client's
+        choice, not the node's limit."""
         async with MockApphost() as mock:
             n = await self.nodes(mock)
             with self.assertRaises(ParseError):
@@ -1102,45 +1094,23 @@ class ReferenceClaimTest(unittest.TestCase):
         self.assertIn("streams.WriteAllTo(w, info.Alias, id)", src)
         self.assertIn("streams.ReadAllFrom(r, &info.Alias, info.Identity)", src)
 
-    def test_astral_go_5c18d9c_panics_on_a_nil_identity(self):
-        """Why asking a node built on `5c18d9c` to construct a zero `node_info`
-        kills it.
-
-        At `5c18d9c`, `WriteTo` passes `info.Identity` -- a `*astral.Identity`
-        -- straight to `WriteAllTo`, and `Identity.WriteTo` has a **value**
-        receiver, so a nil pointer is dereferenced rather than erroring. The
-        zero value `objects.new` constructs holds exactly that nil, so the op
-        panics the node.
-        """
-        src = self.source(reference.ASTRAL_GO, "api/nodes/node_info.go", "5c18d9c")
-        self.assertNotIn("if id == nil", src)
-        self.assertIn("func (info NodeInfo) WriteTo", src)
-        self.assertIn("streams.WriteAllTo(w, info.Alias, info.Identity)", src)
-
     def test_the_pin_writes_a_zero_identity_for_a_nil_one(self):
-        """astral-go `0a15afb`'s guard, present at the pin:
+        """The guard at the pin:
         `id := info.Identity; if id == nil { id = &astral.Identity{} }`. The
         zero identity is 33 null bytes, so the guard leaves the wire form of
-        every value that did not panic unchanged."""
+        every value unchanged, and a zero `node_info` serialises rather than
+        dereferencing nil."""
         src = self.source(reference.ASTRAL_GO, "api/nodes/node_info.go")
         write_to = src.split("func (info NodeInfo) WriteTo")[1].split("func ")[0]
         self.assertIn("if id == nil {", write_to)
         self.assertIn("id = &astral.Identity{}", write_to)
 
-    def test_astral_go_5c18d9c_drops_the_read_error_before_the_endpoint_count(self):
-        """A second defect in the same function, and this one is silent.
-
-        At `5c18d9c`, `ReadFrom` assigns `n, err = streams.ReadAllFrom(...)` and
-        then reads the endpoint count **without checking `err`**, so a truncated
-        `node_info` carries on decoding with a zero-valued alias and identity.
-        astral-go `0a15afb` checks it, and the pin carries that check. This
-        SDK's reader raises on the short read, as the pin does.
+    def test_the_pin_checks_the_read_error_before_the_endpoint_count(self):
+        """`ReadFrom` assigns `n, err = streams.ReadAllFrom(...)` and checks
+        `err` before reading the endpoint count, so a truncated `node_info`
+        stops rather than decoding on with a zero-valued alias and identity.
+        This SDK's reader raises on the short read, as the pin does.
         """
-        old = self.source(reference.ASTRAL_GO, "api/nodes/node_info.go", "5c18d9c")
-        head = old.split("func (info *NodeInfo) ReadFrom")[1].split("var l astral.Uint8")[0]
-        self.assertIn("streams.ReadAllFrom(r, &info.Alias, info.Identity)", head)
-        self.assertNotIn("if err != nil", head)
-
         src = self.source(reference.ASTRAL_GO, "api/nodes/node_info.go")
         head = src.split("func (info *NodeInfo) ReadFrom")[1].split("var l astral.Uint8")[0]
         self.assertIn("streams.ReadAllFrom(r, &info.Alias, info.Identity)", head)
@@ -1162,29 +1132,13 @@ class ReferenceClaimTest(unittest.TestCase):
         self.assertIn("LinkCount      astral.Uint32", created)
         self.assertIn("LinkCount      astral.Uint8", closed)
 
-    def test_three_ops_have_an_astral_go_client_and_two_did(self):
-        """The count `require_experimental` states: three at the pin, two at
-        `5c18d9c`, the survey's revision. astral-go `bdf26f3` adds `links`."""
+    def test_three_ops_have_an_astral_go_client(self):
+        """The count `require_experimental` states: three at the pin."""
         src = self.source(reference.ASTRAL_GO, "api/nodes/module.go")
         self.assertIn('MethodLinks            = "nodes.links"', src)
         self.assertIn('MethodResolveEndpoints = "nodes.resolve_endpoints"', src)
         self.assertIn('MethodMigrateSession   = "nodes.migrate_session"', src)
         self.assertEqual(src.count('= "nodes.'), 3)
-
-        old = self.source(reference.ASTRAL_GO, "api/nodes/module.go", "5c18d9c")
-        self.assertNotIn("nodes.links", old)
-        self.assertEqual(old.count('= "nodes.'), 2)
-
-    def test_the_required_parameters_were_the_three_the_module_names(self):
-        """At astrald `074a852b`, a node that predates `bd98bbe8`."""
-        at = "074a852b"
-        new_link = self.source(reference.ASTRALD, "mod/nodes/src/op_new_link.go", at)
-        migrate = self.source(
-            reference.ASTRALD, "mod/nodes/src/op_migrate_session.go", at
-        )
-        self.assertIn('Target     string `query:"required"`', new_link)
-        self.assertIn('SessionID astral.Nonce `query:"required"`', migrate)
-        self.assertIn('LinkID    astral.Nonce `query:"required"`', migrate)
 
     def test_the_pin_requires_the_seven_parameters_the_module_names(self):
         required = {

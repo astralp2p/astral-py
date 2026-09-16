@@ -1038,9 +1038,9 @@ class ListSiblingsOpTest(UserCase):
     @bounded()
     async def test_a_zone_goes_to_the_op_argument_and_to_the_routing_zone(self):
         """One scope, two levers, as `Objects` does it. The op's own argument is
-        inert on astrald 26bb51d5 -- the context it builds is never used -- and
-        the routing zone is not, so sending only one of them is wrong whichever
-        one it is."""
+        inert on astrald `d5bb0bbd` -- the context it builds is never used --
+        and the routing zone is not, so sending only one of them is wrong
+        whichever one it is."""
         api = await self.serving(
             {f"{OP_LIST_SIBLINGS}?zone=dv": Accept(eos=True)}
         )
@@ -1187,9 +1187,9 @@ class AssetOpTest(UserCase):
         self.assertEqual(self.sent(), f"{OP_REMOVE_ASSET}?id={OID}")
 
     @bounded()
-    async def test_the_id_is_always_sent_because_an_absent_one_writes_a_null_row(self):
-        """astrald does not mark `ID` required, so an omitted argument reaches
-        the database as a null object ID. The argument is mandatory here."""
+    async def test_the_id_is_always_sent_because_the_op_requires_it(self):
+        """astrald tags `ID` required, so an omitted argument is refused before
+        the op runs. The argument is mandatory here and no query leaves."""
         api = await self.serving({OP_ADD_ASSET: Accept(objects=[ACK_FRAME])})
         with self.assertRaises(TypeError):
             await api.add_asset()  # type: ignore[call-arg]
@@ -1218,10 +1218,10 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_sends_the_identity_and_no_height_by_default(self):
-        """`start` is inert on astrald 074a852b and undeclared on 26bb51d5, and
-        the node reads the height out of its own tree. An implicit `start=0` is
-        identical on both and would mean "re-read the whole log" to a node that
-        reads it, which is not what a caller who named no height asked for."""
+        """`start` is undeclared on astrald `d5bb0bbd`, and the node reads the
+        height out of its own tree. An implicit `start=0` would mean "re-read
+        the whole log" to a node that reads it, which is not what a caller who
+        named no height asked for."""
         query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
         self.assertIsNone(await api.sync_with(FURRY_BOLT))
@@ -1247,10 +1247,9 @@ class SyncWithOpTest(UserCase):
     @bounded()
     async def test_a_directory_name_never_reaches_the_node(self):
         """This client parses the argument as an identity and names the fix.
-        astrald `bd98bbe8` resolves a name here and rejects one that does not
-        resolve with code 3; a node that predates it parses the argument as an
-        identity, so a name arrives as a rejected query rather than as an error
-        message."""
+        The op resolves a name here and rejects one that does not resolve with
+        code 3, so a directory name would travel; refusing it locally is this
+        client's choice and the error says to resolve it first."""
         api = await self.serving({OP_SYNC_WITH: Accept(objects=[ACK_FRAME])})
         with self.assertRaises(ParseError) as caught:
             await api.sync_with(FURRY_BOLT_ALIAS)
@@ -1787,14 +1786,14 @@ class LiveUserTest(live_support.LiveCase):
 
 
 class CitationTest(unittest.TestCase):
-    """Every source anchor this module cites, read back where it resolves.
+    """Every source anchor this module cites, read back at the pin.
 
     astrald and astral-go are moving targets and a drifted line number costs a
     reader more than an absent one: it makes them distrust the exact citations
     too. The anchors are read out of the module's own prose rather than
-    restated here, so a citation that stops landing names itself. An anchor
-    resolves at the pin unless the prose names its revision, and those are
-    `ASTRALD_HISTORY_LINES`.
+    restated here, so a citation that stops landing names itself. Every anchor
+    resolves at the pin: the SDK documents the node it supports and no older
+    one.
     """
 
     ASTRALD_LINES = {
@@ -1806,18 +1805,11 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/config.go", 12): "defaultContractValidity = 365 * 24 * time.Hour",
         ("mod/user/src/siblings.go", 25): "user.Notification{Event",
         ("mod/user/src/op_adopt.go", 32): "return q.RejectWithCode(4)",
-        ("mod/user/src/db.go", 60): "db.Save(&dbAsset{",
         ("mod/user/src/op_sync_with.go", 34): "mod.syncAssets(ctx.IncludeZone",
         ("mod/user/src/sync.go", 29): "tree.Get[*astral.Uint64](ctx, heightNode)",
         ("mod/dir/src/module.go", 58): 'if s == "" || s == "anyone"',
         ("mod/dir/src/module.go", 107): "return identity.Fingerprint()",
         ("mod/user/src/contracts.go", 171): "defaultContractValidity",
-    }
-
-    # The older-node half: each anchor the prose names with its own revision,
-    # keyed by that revision.
-    ASTRALD_HISTORY_LINES = {
-        ("mod/user/src/op_sync_with.go", 20, "074a852b"): "mod.syncAssets(ctx.IncludeZone",
     }
 
     ASTRAL_GO_LINES = {
@@ -1826,20 +1818,16 @@ class CitationTest(unittest.TestCase):
     }
 
     def assert_lands(self, repo: str, anchors: dict) -> None:
-        for key, expected in anchors.items():
-            path, number, *rev = key
-            with self.subTest(file=path, line=number, rev=rev):
+        for (path, number), expected in anchors.items():
+            with self.subTest(file=path, line=number):
                 try:
-                    line = reference.cited_line(repo, path, number, *rev)
+                    line = reference.cited_line(repo, path, number)
                 except reference.Unavailable as exc:  # pragma: no cover
                     self.skipTest(str(exc))
                 self.assertIn(expected, line)
 
     def test_every_astrald_anchor_lands_on_its_claim(self):
         self.assert_lands(reference.ASTRALD, self.ASTRALD_LINES)
-
-    def test_every_astrald_history_anchor_lands_at_its_revision(self):
-        self.assert_lands(reference.ASTRALD, self.ASTRALD_HISTORY_LINES)
 
     def test_every_astral_go_anchor_lands_on_its_claim(self):
         self.assert_lands(reference.ASTRAL_GO, self.ASTRAL_GO_LINES)
@@ -1850,53 +1838,19 @@ class CitationTest(unittest.TestCase):
         cited = set(re.findall(r"(mod/\w+/src/\w+\.go|api/user/\w+\.go):(\d+)", source))
         checked = {
             (path, str(number))
-            for path, number, *_ in list(self.ASTRALD_LINES)
-            + list(self.ASTRALD_HISTORY_LINES)
-            + list(self.ASTRAL_GO_LINES)
+            for path, number in list(self.ASTRALD_LINES) + list(self.ASTRAL_GO_LINES)
         }
         self.assertEqual(cited - checked, set())
 
-    def test_every_history_anchor_names_its_revision_in_the_prose(self):
-        """An anchor read at an older revision is history only while the prose
-        says so; unlabelled, it reads as a claim about the pin."""
-        source = " ".join(
-            pathlib.Path(user_module.__file__).read_text(encoding="utf-8").split()
-        )
-        for path, number, rev in self.ASTRALD_HISTORY_LINES:
-            with self.subTest(file=path, line=number):
-                labelled = source.count(f"{path}:{number}` at `{rev}`")
-                self.assertGreater(labelled, 0)
-                self.assertEqual(source.count(f"{path}:{number}`"), labelled)
-
-    def test_sync_with_declares_start_at_074a852b_and_not_at_the_pin(self):
-        """astrald `ac938c56` removed the argument the module calls inert on
-        `074a852b`, which is why that claim is history."""
-        path = "mod/user/src/op_sync_with.go"
+    def test_astrald_carries_the_op_and_astral_go_carries_its_client(self):
+        """`user.accept_contract` is astrald #357, and astral-go carries the
+        client whose frame order this method's docstring cites."""
         try:
-            old = reference.read(reference.ASTRALD, path, "074a852b")
-            pinned = reference.read(reference.ASTRALD, path)
-        except reference.Unavailable as exc:  # pragma: no cover
-            self.skipTest(str(exc))
-        declaration = "type opSyncWithArgs struct {"
-        self.assertIn("Start", old.split(declaration)[1].split("}")[0])
-        self.assertNotIn("Start", pinned.split(declaration)[1].split("}")[0])
-
-    def test_astrald_carries_the_op_and_astral_go_gained_its_client(self):
-        """`user.accept_contract` is astrald #357, present at `074a852b` and at
-        the pin. astral-go carries no client for it at `5c18d9c` and carries one
-        at the pin."""
-        try:
-            old_names = reference.listdir(reference.ASTRALD, "mod/user/src", "074a852b")
             names = reference.listdir(reference.ASTRALD, "mod/user/src")
-            old_clients = reference.listdir(
-                reference.ASTRAL_GO, "api/user/client", "5c18d9c"
-            )
             clients = reference.listdir(reference.ASTRAL_GO, "api/user/client")
         except reference.Unavailable as exc:  # pragma: no cover
             self.skipTest(str(exc))
-        self.assertIn("op_accept_contract.go", old_names)
         self.assertIn("op_accept_contract.go", names)
-        self.assertNotIn("accept_contract.go", old_clients)
         self.assertIn("accept_contract.go", clients)
 
     def test_every_op_file_astrald_carries_has_an_op_constant_here(self):

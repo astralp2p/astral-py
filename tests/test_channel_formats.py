@@ -264,8 +264,9 @@ class EmitterReadsBackTest(unittest.IsolatedAsyncioTestCase):
         and leaves the consumer with a clean, complete, wrong answer.
 
         astral-go writes `" " + text + "\\n"` with no escaping
-        (`astral/channel/text_sender.go` at `6ea26c7`), so escaping here would
-        leave the node behind; base64 is a spelling its `TextReceiver` reads.
+        (`astral/channel/text_sender.go` at astral-go `5b1d282`), so escaping
+        here would leave the node behind; base64 is a spelling its
+        `TextReceiver` reads.
         """
         forged = P.String16("xxx\n#[eos] ")
         out = MemTransport.solo()

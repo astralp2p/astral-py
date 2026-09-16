@@ -52,11 +52,8 @@ a property of astrald rather than an omission here:
 ## Authorization
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `26bb51d5` and astral-go `6ea26c7`,** except the census named as
-history below, which is read at astrald `074a852b`. The action guard merged in
-astrald `7c795f47` and the origin guard in `12f2ff54`, both after `074a852b`.
-astrald `bd98bbe8` names an identity argument `identity` and `apphost.cancel`'s
-nonce `query_id`, and ignores the old names.
+pins, astrald `d5bb0bbd` and astral-go `5b1d282`.** An identity argument travels
+under the key `identity` and `apphost.cancel`'s nonce under `query_id`.
 
 **`apphost.list_tokens` and `apphost.create_token` are administration, not
 introspection.** Each refuses a query whose origin is the network and then asks
@@ -73,7 +70,7 @@ the network origin too (`op_cancel.go:23`) and authorizes on ownership instead:
 a session cancels what it launched, and the action is the way past that
 (`op_cancel.go:58-68`).
 
-**The census, re-derived at `26bb51d5`.** Fourteen `op_*.go` files. Twelve
+**The census, re-derived at `d5bb0bbd`.** Fourteen `op_*.go` files. Twelve
 refuse a network origin; the two that do not are `whoami` and `register`. Six
 ask `mod.auth.admin_manage_apps_action` -- `create_token`, `delete_token`,
 `list_tokens`, `grant`, `list_grants`, `revoke`. One asks
@@ -86,29 +83,18 @@ allows the user identity and the node's own identity and nobody else; any other
 identity reaches the action through a node-local grant or a signed contract
 permit (`authorize_user_or_node.go:11-12`). A token-less guest session sends a
 nil `Caller` and `core/router.go:45-47` rewrites it to the node's identity.
-astrald marks such a session anonymous (`mod/apphost/src/guest.go:253-259`) and
+astrald marks such a session anonymous (`mod/apphost/src/guest.go:200-206`) and
 the mark cannot reach an op: `routing.Op` builds its `IncomingQuery` from the
 query and its origin alone and drops `Extra`
 (`mod/crypto/src/sign_guard.go:33-37`). Inferred from those four, with no live
 run behind it: **an unauthenticated local process still reads every access token
-on the node in plaintext, and still mints one for any identity it names.** What
-the two guards removed is the caller off a link, and the authenticated app that
-holds neither a grant nor a contract permit for the action.
+on the node in plaintext, and still mints one for any identity it names.** The
+two guards stop the caller off a link, and the authenticated app that holds
+neither a grant nor a contract permit for the action.
 
 An access token is a bearer credential: whoever reads one authenticates as the
 identity it was issued for. That is what makes reading the list administration,
 and it is why an SDK caller is told here that the value coming back is a secret.
-
-**The `074a852b` census stays, named as history.** At astrald `074a852b`, before
-both guards, the module held thirteen ops, no op asked an action at all, and six
-guarded on origin: `bind`, `hold_object`, `unhold_object`, `list_held_objects`,
-`register_handler` and `install_app`. The seven that did not were `whoami`,
-`list_tokens`, `create_token`, `register`, `new_app_contract`,
-`sign_app_contract` and `cancel`. Three of the thirteen are since retired:
-`install_app` (`b51743cd`) along with the `apphost__local_apps` table it was the
-only writer of, and `new_app_contract` and `sign_app_contract`, whose contract
-`apphost.register` mints in one call. The paragraph goes when the SDK stops
-supporting nodes that predate the two guards.
 """
 
 from __future__ import annotations
@@ -208,8 +194,8 @@ OP_UNHOLD_OBJECT: Final = "apphost.unhold_object"
 # Three specs name three different things on the node:
 # `apphost.hold_object`/`unhold_object` take an `object_id.sha256` under `id`,
 # the identity ops take a `string8` under `identity`, and `apphost.cancel` takes
-# a `nonce64` under `query_id` (astrald `bd98bbe8`, `opCreateTokenArgs.Identity`
-# and `opCancelArgs.QueryID`). The node resolves `identity` through its
+# a `nonce64` under `query_id` (`opCreateTokenArgs.Identity` and
+# `opCancelArgs.QueryID`). The node resolves `identity` through its
 # directory; `list_tokens` and `create_token` send the hex of an identity this
 # client has already resolved.
 
@@ -351,8 +337,7 @@ class Apphost(ModuleClient):
         returns every token it holds, with the token strings in plaintext, and an
         unauthenticated local process passes the gate as the node (see the module
         docstring). Passing `id` filters server-side, under the wire key
-        `identity`; it does not authorize anything. A node that predates astrald
-        `bd98bbe8` ignores that key and answers every token.
+        `identity`; it does not authorize anything.
 
         `id` accepts an `Identity`, 66 hex characters, `anyone`, or a directory
         name, which costs one `dir.resolve` before this query is sent; the query
@@ -492,7 +477,7 @@ class Apphost(ModuleClient):
         local process can attempt; whether it then receives the node's queries is
         astrald's business and is not asserted here. `register_service_msg` is
         the authenticated counterpart -- astrald refuses it outright from a
-        token-less guest (`mod/apphost/src/guest.go:321-323`).
+        token-less guest (`mod/apphost/src/guest.go:268-270`).
         """
         qs = querystring.build(
             OP_REGISTER_HANDLER,

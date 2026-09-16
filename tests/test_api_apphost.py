@@ -763,13 +763,11 @@ class LiveApphostTest(live_support.LiveCase):
         that they are a point on the curve: doing so would make the single most
         common decode in the protocol depend on a curve library. astral-go's
         `Identity.UnmarshalText` does check. So off-curve bytes are accepted
-        locally and travel. astrald `bd98bbe8` declares the argument `string8`
-        and resolves it (`opListTokensArgs.Identity`): an off-curve key fails
+        locally and travel. astrald declares the argument `string8` and resolves
+        it (`opListTokensArgs.Identity`): an off-curve key fails
         `astral.ParseIdentity`, names no alias, and answers `unknown identity`
         as an `error_message` in the accepted stream -- `RemoteError`, not an
-        empty result. A node that bound the argument as an `*astral.Identity`
-        refused it before the op ran, as `query_rejected_msg{1}`, verified live
-        before that revision.
+        empty result.
         """
         off_curve = Identity.parse("02" + "11" * 32)  # accepted here, refused there
         async with await self.client() as client:
@@ -858,40 +856,17 @@ class NameResolutionTest(ApphostCase):
 
 
 class SecurityNoteTest(unittest.TestCase):
-    """Both censuses this module's docstring states, counted at their revisions.
+    """The census this module's docstring states, counted at the pin.
 
     The note began by saying `list_tokens` was "alone among its neighbours" in
     carrying no network-origin guard, which understated the exposure. It was
     then corrected to a census of thirteen ops, and **that** went stale the
     other way: astrald guarded the token ops and the docstring kept telling a
-    caller they were open. A census is a claim with a shelf life, so each one
-    here names its revision and is read there.
-
-    The current census is read at the pin, so moving the pin re-counts it. The
-    census before both guards is read at `HISTORY`, which the docstring names.
+    caller they were open. A census is a claim with a shelf life, so it names
+    its revision and is read there: the pin, so moving the pin re-counts it.
     """
 
     SRC = "mod/apphost/src"
-    HISTORY = "074a852b"
-
-    # At `HISTORY`. Named as history, and the docstring says so.
-    HISTORIC_GUARDED = {
-        "bind",
-        "hold_object",
-        "unhold_object",
-        "list_held_objects",
-        "register_handler",
-        "install_app",
-    }
-    HISTORIC_UNGUARDED = {
-        "whoami",
-        "list_tokens",
-        "create_token",
-        "register",
-        "new_app_contract",
-        "sign_app_contract",
-        "cancel",
-    }
 
     # At the pin. The ops that ask an action before they touch what they guard.
     ADMIN_MANAGE_APPS = {
@@ -905,20 +880,18 @@ class SecurityNoteTest(unittest.TestCase):
     SERVE_APPS = {"register_handler"}
     CURRENT_UNGUARDED = {"whoami", "register"}
 
-    def ops(self, rev: str | None = None) -> dict[str, str]:
-        """Every `op_*.go` at `rev`, or at the pin, name to source.
+    def ops(self) -> dict[str, str]:
+        """Every `op_*.go` at the pin, name to source.
 
-        `_test.go` is excluded, and that is not cosmetic: astrald grew
-        `op_grants_test.go` beside the ops, and counting it made the census
-        fifteen. At the pin there was no such file, so the filter this helper
-        used to carry was right by accident and would have miscounted the first
-        census read at a newer revision.
+        `_test.go` is excluded, and that is not cosmetic: `op_grants_test.go`
+        sits beside the ops at the pin, and counting it makes the census
+        fifteen.
         """
         try:
-            names = reference.listdir(reference.ASTRALD, self.SRC, rev)
+            names = reference.listdir(reference.ASTRALD, self.SRC)
             return {
                 name[len("op_") : -len(".go")]: reference.read(
-                    reference.ASTRALD, f"{self.SRC}/{name}", rev
+                    reference.ASTRALD, f"{self.SRC}/{name}"
                 )
                 for name in names
                 if name.startswith("op_")
@@ -927,28 +900,6 @@ class SecurityNoteTest(unittest.TestCase):
             }
         except reference.Unavailable as exc:  # pragma: no cover -- may be absent
             self.skipTest(str(exc))
-
-    def test_the_historic_census_is_still_true_of_its_revision(self):
-        """Read at `HISTORY`, not at the pin and not out of the working tree.
-
-        Globbing the checkout is what made this test fail on a sibling
-        repository's pull: astrald moved to `3392926b`, gained a guarded
-        `op_delete_token.go`, and the census went to seven -- for an op the
-        running node did not serve and no SDK method drove. The census is a
-        statement about the revision it names, so it is read at that revision.
-        """
-        ops = self.ops(self.HISTORY)
-        guarded = {name for name, src in ops.items() if "OriginNetwork" in src}
-        self.assertEqual(guarded, self.HISTORIC_GUARDED)
-        self.assertEqual(set(ops) - guarded, self.HISTORIC_UNGUARDED)
-
-        doc = apphost_module.__doc__ or ""
-        self.assertNotIn("alone among its neighbours", doc)
-        self.assertIn(self.HISTORY, doc)
-        self.assertIn("named as history", doc)
-        for name in self.HISTORIC_UNGUARDED:
-            with self.subTest(op=name):
-                self.assertIn(name, doc)
 
     def test_the_current_census_matches_the_pin(self):
         """The census the docstring states at the pin, recounted from the source.
@@ -967,13 +918,14 @@ class SecurityNoteTest(unittest.TestCase):
         # Unwrapped, because a line break inside a sentence is a formatting
         # choice and the claim is the sentence.
         doc = " ".join((apphost_module.__doc__ or "").split())
+        self.assertNotIn("alone among its neighbours", doc)
         self.assertIn(f"re-derived at `{reference.PINS[reference.ASTRALD][1]}`", doc)
         self.assertIn("Fourteen `op_*.go` files.", doc)
         self.assertIn("Twelve refuse a network origin", doc)
         self.assertIn("the two that do not are `whoami` and `register`", doc)
 
     def test_the_token_ops_ask_admin_manage_apps_before_they_answer(self):
-        """The action guard astrald merged in `7c795f47`, per op.
+        """The action guard, per op.
 
         The order matters as much as the presence: the refusal has to come out
         before `AcceptRaw`, or a caller holding nothing has already been handed
@@ -1050,8 +1002,8 @@ class SecurityNoteTest(unittest.TestCase):
             (f"{self.SRC}/op_register_handler.go", 26, "authorizeServeApps"),
             (f"{self.SRC}/authorize_admin_manage_apps.go", 17, f"func (mod *Module) {admin}"),
             (f"{self.SRC}/authorize_admin_manage_apps.go", 18, "AdminManageAppsAction"),
-            (f"{self.SRC}/guest.go", 258, "ExtraAnonymous"),
-            (f"{self.SRC}/guest.go", 321, "isAuthenticated()"),
+            (f"{self.SRC}/guest.go", 205, "ExtraAnonymous"),
+            (f"{self.SRC}/guest.go", 268, "isAuthenticated()"),
             ("mod/user/src/authorize_user_or_node.go", 16, "authorizeUserOrNode"),
             ("mod/user/src/authorize_user_or_node.go", 20, "mod.node.Identity()"),
             ("mod/user/src/authorize_serve_apps.go", 15, "AuthorizeServeApps"),

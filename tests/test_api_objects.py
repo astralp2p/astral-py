@@ -36,7 +36,6 @@ from astral.api import objects as objects_module
 from astral.api.objects import (
     CHUNK_SIZE,
     CommitMsg,
-    CRASHES_ON_NEW,
     CreateObjectAction,
     Descriptor,
     FREE_UNKNOWN,
@@ -550,7 +549,7 @@ class SearchGrammarTest(unittest.TestCase):
         """A query built rather than parsed can hold what the grammar cannot
         spell, and the text channel loses it silently -- `bin`, `json` and
         `canonical` all carry it exactly. The loss is astral-go's
-        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 6ea26c7),
+        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 5b1d282),
         which a registered searcher parses the same query with, so the SDK
         matching it is what keeps the two agreeing about the question.
 
@@ -667,9 +666,6 @@ class ArgumentDisciplineTest(unittest.TestCase):
         params, kw = {}, {}
         objects_module._scope(None, params, kw)
         self.assertEqual((params, kw), ({}, {}))
-
-    def test_the_node_killing_type_is_named_and_refused(self):
-        self.assertEqual(CRASHES_ON_NEW, frozenset({"mod.nodes.node_info"}))
 
 
 # --- Tier B: the ops against the mock ------------------------------------
@@ -1473,7 +1469,7 @@ class LearnTest(ObjectsCase):
 
 
 class NewOpTest(ObjectsCase):
-    """`objects.new`: RR, and the one type that must never be sent."""
+    """`objects.new`: RR."""
 
     @bounded()
     async def test_it_returns_the_zero_value(self):
@@ -1495,18 +1491,15 @@ class NewOpTest(ObjectsCase):
             self.assertEqual(await o.new("no.such.type"), Nil())
 
     @bounded()
-    async def test_the_node_killing_type_is_refused_without_a_query(self):
-        """`mod.nodes.node_info`'s zero value holds a nil `*Identity` and, at
-        astral-go `5c18d9c`, its `WriteTo` has a value receiver, so serialising
-        it kills astrald. astral-go `0a15afb` fixes it; a node built before that
-        still crashes, and a client cannot tell which build it reached."""
-        mock = MockApphost()
+    async def test_the_node_info_type_is_sent(self):
+        """`mod.nodes.node_info`'s zero value holds a nil `*Identity`, and the
+        supported astral-go substitutes the zero identity for it in `WriteTo`
+        (`api/nodes/node_info.go`), so the name is sent like any other."""
+        mock = MockApphost(routes={OP_NEW: Accept(objects=[framed(Nil())])})
         async with mock:
             o = await self.objects(mock)
-            with self.assertRaises(BadArgument) as caught:
-                await o.new("mod.nodes.node_info")
-        self.assertIn("crashes the node", str(caught.exception))
-        self.assertEqual(mock.queries, [])
+            await o.new("mod.nodes.node_info")
+        self.assertEqual(self.params(mock), (OP_NEW, {"type": "mod.nodes.node_info"}))
 
     @bounded()
     async def test_an_empty_type_name_is_refused(self):
@@ -2387,7 +2380,7 @@ class CitationTest(unittest.TestCase):
         (
             reference.ASTRALD,
             "mod/apphost/src/guest.go",
-            224,
+            171,
             "ctx = ctx.WithZone(msg.Zone)",
         ),
     )

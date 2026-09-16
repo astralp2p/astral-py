@@ -16,12 +16,14 @@ this suite has an opinion about. Upstream drift becomes a deliberate act -- bump
 the pin here, re-read the module, update the prose -- instead of a surprise.
 
 `PINS` holds the revision a module reads by default, and a reader passes `rev`
-to read one claim somewhere else. The two are not the same act: the pin governs
-every `path:line` in `astral/api/*.py` at once, so moving it is a re-read of the
-whole package, while a module that documents one merged upstream change names
-that change's revision in its own prose and reads it there. Without `rev` such a
-claim is prose no test can check, which is how `api/apphost.py` carried a
-security note that had stopped being true.
+to read one claim somewhere else. The pin governs every `path:line` in
+`astral/api/*.py` at once, so moving it is a re-read of the whole package.
+
+**No module passes `rev` today.** The SDK supports the node at the pins and no
+older one, so a claim about another revision has nowhere to live: every citation
+resolves at a pin or it is deleted. `rev` stays because a claim named in prose
+and never read is prose no test can check, which is how `api/apphost.py` once
+carried a security note that had stopped being true.
 
 **Absent is a skip, wrong is a failure.** No clone, no git, or a revision that
 was never fetched: skip, because the reference is not part of this repository
@@ -41,13 +43,13 @@ ASTRALD: Final = "astrald"
 ASTRAL_GO: Final = "astral-go"
 
 PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
-    # The revisions the modules were read against: astrald `26bb51d5` and the
-    # astral-go its `go.mod` requires. Every `path:line` citation in
-    # `astral/api/*.py` resolves at one of these two unless its prose names
-    # another revision, so bumping one means re-reading the citations that name
-    # it.
-    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "26bb51d5"),
-    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "6ea26c7"),
+    # The revisions the modules were read against: astrald `d5bb0bbd` and the
+    # astral-go its `go.mod` requires. The SDK supports the current node and no
+    # older one, so every `path:line` citation in `astral/api/*.py` resolves at
+    # one of these two and none names another revision. Bumping one means
+    # re-reading the citations that name it.
+    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "d5bb0bbd"),
+    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "5b1d282"),
 }
 
 

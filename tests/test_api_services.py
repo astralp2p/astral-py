@@ -1159,10 +1159,10 @@ class LiveServicesTest(live_support.LiveCase):
     @bounded(30.0)
     async def test_only_sync_enforces_a_required_argument(self):
         """`Required` is set only by a `query:"required"` struct tag. astrald
-        `bd98bbe8` tags `opSyncArgs.Identity` and nothing in
-        `opDiscoverArgs`. The tag refuses an absent `identity` and passes an
-        empty one, which resolves to the zero identity. That is why `sync()`
-        refuses an empty id client-side rather than relying on the node.
+        tags `opSyncArgs.Identity` and nothing in `opDiscoverArgs`. The tag
+        refuses an absent `identity` and passes an empty one, which resolves to
+        the zero identity. That is why `sync()` refuses an empty id client-side
+        rather than relying on the node.
         `opAdvertiseArgs.Name` is untagged too, and the op answers
         `name is required` itself, verified on astrald `26bb51d5`; `advertise()`
         refuses an empty name before routing."""

@@ -84,53 +84,47 @@ form. Verified again on astrald `26bb51d5` for `mod.user.see_swarm_action` and
 `mod.user.adopt_action` and `mod.user.expel_action` with
 `mod.user.admin_swarm_action`, and `mod.user.info_action` with
 `mod.user.see_swarm_action` (`api/user/admin_swarm_action.go` and
-`api/user/see_swarm_action.go` at astral-go `6ea26c7`, the revision astrald
-`26bb51d5` pins). On `26bb51d5`, `objects.new` answers `nil` for the three old
+`api/user/see_swarm_action.go` at astral-go `5b1d282`, the revision astrald
+`d5bb0bbd` pins). On `26bb51d5`, `objects.new` answers `nil` for the three old
 names and `objects.get_blueprint` answers `blueprint not found`, both verified.
 A permit naming an old type matches no action the node authorizes, so it grants
 nothing, and this module no longer declares them.
 
 **The op's own target argument is `node`, never `target`.** `user.adopt` and
-`user.expel` declare `Identity string` at astrald `bd98bbe8`, resolved by the
-node's directory and sent as `identity=`; the node ignores the earlier name,
-`target`. `target` is the routing keyword every module-client method forwards to
+`user.expel` declare `Identity string`, resolved by the node's directory and
+sent as `identity=`; neither op declares `target`, and the binder drops the key.
+`target` is the routing keyword every module-client method forwards to
 `Client.query`, and on these two ops the routing target (the node running the op)
 and the op's target (the node being adopted or expelled) are different nodes.
 `Tree.mount_remote` met this collision first and renamed for it.
 
-**An empty target adopts or expels `anyone`.** At `074a852b` astrald declares
-`Target string` with no `query:"required"` tag, so an absent argument reaches
+**An empty target adopts or expels `anyone`.** `user.adopt` and `user.expel`
+tag `Identity string` with `query:"required"`, and the tag tests that the key is
+present, not that it holds a value (`lib/routing/op.go` `Op.invoke` at astral-go
+`5b1d282`). An `identity=` carrying no value therefore reaches
 `Dir.ResolveIdentity("")`, which maps the empty string to the zero identity
-(`astrald/mod/dir/src/module.go:58`) rather than failing. The op then signs a
-membership contract, or an irreversible ban, for `anyone`. The same hole is on
-`user.add_asset` and `user.remove_asset` -- `ID *astral.ObjectID`, untagged, and
-no nil guard between the op and the row it writes
-(`astrald/mod/user/src/db.go:60`) -- and on `user.sync_with`, whose `Node` is an
-identity the op never checks. Every one of those arguments is mandatory here and
-an empty name is refused client-side. Defect filed against astrald. At `bd98bbe8`
-the three node arguments are `Identity string` and tagged required, `ID` is
-tagged required, and `user.sync_with` resolves its argument and rejects the zero
-identity with code 3. The tag tests that the key is present, not that it holds a
-value (`lib/routing/op.go` `Op.invoke` at astral-go `6ea26c7`), and `user.adopt`
-and `user.expel` at `26bb51d5` do not test the identity they resolve. Inferred
-from those two, not run: `identity=` with no value still hands the zero identity
-to both ops there.
+(`astrald/mod/dir/src/module.go:58`) rather than failing, and neither op tests
+the identity it resolves. The op then signs a membership contract, or an
+irreversible ban, for `anyone`. `user.sync_with` declares the same argument and
+does test it, rejecting the zero identity with code 3, and `user.add_asset` and
+`user.remove_asset` tag `ID *astral.ObjectID` required. Every one of those
+arguments is mandatory here and an empty name is refused client-side. Defect
+filed against astrald. Inferred from `adopt`'s and `expel`'s source, not run:
+`identity=` with no value still hands the zero identity to both.
 
-**`user.list_siblings`'s `zone` is inert on astrald `26bb51d5`.** It builds a
+**`user.list_siblings`'s `zone` is inert on astrald `d5bb0bbd`.** It builds a
 context the op then never uses -- `mod.getSiblings()` takes none
 (`astrald/mod/user/src/op_list_siblings.go:22`). It is still sent when the caller
 names one, because a declared argument is the op's own statement of its
 interface, and the value is forwarded to the routing zone too, where it is not
 inert. Defect filed against astrald.
 
-**`user.sync_with`'s `start` is not an argument on astrald `26bb51d5`.** At
-`074a852b` the op declares it and never reads it
-(`astrald/mod/user/src/op_sync_with.go:20` at `074a852b`). astrald `ac938c56`
-removes it, and the argument binder skips a key the op does not declare
-(`lib/query/editor.go` `Editor.SetMany` at astral-go `6ea26c7`), so a `start`
-sent to `26bb51d5` is accepted and ignored. It is sent only when the caller names
-one, because an implicit zero would mean "re-read the whole log" to a node that
-reads it.
+**`user.sync_with` declares no `start` on astrald `d5bb0bbd`.** Its argument
+struct is an identity and an output format and nothing else, and the argument
+binder skips a key the op does not declare (`lib/query/editor.go`
+`Editor.SetMany` at astral-go `5b1d282`), so a `start` sent there is accepted and
+ignored. It is sent only when the caller names one, because an implicit zero
+would mean "re-read the whole log" to a node that reads it.
 
 **Reject codes are numeric and carry no message.** Code 2 is "no active
 contract" on `adopt`, `expel`, `info`, `list_expelled`, `request_membership` and
@@ -147,13 +141,13 @@ refusal it was. No code is mapped to a semantic exception here:
 more.
 
 **Every read authorizes `mod.user.see_swarm_action` and every write
-`mod.user.admin_swarm_action`.** From astrald `f0f162d0`, `info`, `assets`,
-`sync_assets`, `list_siblings`, `list_expelled` and `swarm_status` ask the first,
-and `adopt`, `expel`, `add_asset`, `remove_asset` and `sync_with` ask the second.
+`mod.user.admin_swarm_action`.** `info`, `assets`, `sync_assets`,
+`list_siblings`, `list_expelled` and `swarm_status` ask the first, and `adopt`,
+`expel`, `add_asset`, `remove_asset` and `sync_with` ask the second.
 The user and the swarm's members pass, and anyone else needs the permit.
 `new_node_contract`, `request_membership`, `accept_contract` and
 `accept_membership` authorize neither. Both authorizers refuse when the node has
-no active contract (`mod/user/src/op_accept_contract.go` at `26bb51d5`, the
+no active contract (`mod/user/src/op_accept_contract.go` at `d5bb0bbd`, the
 comment above `OpAcceptContract`), so the order of the checks decides which code
 an unclaimed node answers: `info`, `list_expelled`, `swarm_status`, `adopt` and
 `expel` test the contract first and reject with 2, while `assets`, `sync_assets`
@@ -192,7 +186,7 @@ two days out. Both carry the permits of a management node, which on astrald
 **`user` defaults to the node's user, and an unclaimed node has none.** The op
 substitutes the module's user identity for an absent `user` and answers
 `user id missing` when that identity is zero
-(`mod/user/src/op_new_node_contract.go` at `26bb51d5`). Verified on an unclaimed
+(`mod/user/src/op_new_node_contract.go` at `d5bb0bbd`). Verified on an unclaimed
 node: `user.new_node_contract` answers `user id missing`, and the same query with
 `user` named answers the contract.
 
@@ -217,10 +211,10 @@ them `users.`-prefixed. astral-go declares the type in `api/user`
 the type is decodable when a peer sends one, and for nothing else.
 
 Reached as `client.user`, a `functools.cached_property` on `Client` built on
-first use (design section 5.1). A source citation resolves at astrald `26bb51d5`
-and astral-go `6ea26c7`, the revisions `tests/reference.py` pins, unless it names
-its own revision; `tests/test_api_user.py` reads every `path:line` back at the
-revision it resolves at and fails when it stops landing.
+first use (design section 5.1). Every source citation resolves at astrald
+`d5bb0bbd` and astral-go `5b1d282`, the revisions `tests/reference.py` pins;
+`tests/test_api_user.py` reads every `path:line` back there and fails when it
+stops landing.
 """
 
 from __future__ import annotations
@@ -554,7 +548,7 @@ class AdminSwarmAction(Action):
     `remove_asset` and `sync_with`. `subject` names the node an op adopts,
     expels or syncs with, and `object_id` the asset it adds or removes; an op
     leaves unset the one it does not name, and the node evaluates neither yet
-    (`api/user/admin_swarm_action.go` at astral-go `6ea26c7`).
+    (`api/user/admin_swarm_action.go` at astral-go `5b1d282`).
 
     Granted with `Delegation: 1` on a management node's contract, so the node
     can contract it out one hop to an app it hosts. The zero payload is eleven
@@ -725,7 +719,7 @@ class User(ModuleClient):
 
         `zone` is sent as the op's argument **and** as the routing zone, the
         way `Objects` sends its one scope to both levers. The op's own
-        argument is inert on astrald `26bb51d5` -- the context built from it is
+        argument is inert on astrald `d5bb0bbd` -- the context built from it is
         never used (`mod/user/src/op_list_siblings.go:22`) -- and the routing
         zone is not.
 
@@ -842,8 +836,9 @@ class User(ModuleClient):
         Rejects with code 4 before anything is written when the caller may not
         administer the swarm.
 
-        `id` is mandatory here. astrald does not mark it required, so an absent
-        one reaches the database as a null object ID.
+        `id` is mandatory here, and astrald tags it required, so an absent one
+        is refused before the op runs rather than reaching the database as a
+        null object ID.
         """
         qs = querystring.build(
             OP_ADD_ASSET,
@@ -882,25 +877,22 @@ class User(ModuleClient):
         `ERR_NO_ACTIVE_CONTRACT` included -- is an `error_message` rather than
         a rejection.
 
-        `node` travels under the wire key `identity`. astrald `bd98bbe8`
-        resolves it through the node's directory and rejects a name that does
-        not resolve, or the zero identity, with code 3 before it authorizes.
-        This client parses `node` locally as an identity and refuses a directory
-        name -- unlike `adopt`, `expel` and `new_node_contract`, whose names it
-        sends for the node to resolve. `node` is mandatory here because at
-        `074a852b` the op's argument is not marked required and an absent one
-        syncs with the zero identity.
+        `node` travels under the wire key `identity`. The op resolves it
+        through the node's directory and rejects a name that does not resolve,
+        or the zero identity, with code 3 before it authorizes. This client
+        parses `node` locally as an identity and refuses a directory name --
+        unlike `adopt`, `expel` and `new_node_contract`, whose names it sends
+        for the node to resolve. `node` is mandatory here, and the op tags the
+        argument required.
 
-        **`start` reaches no code on astrald `26bb51d5`.** `syncAssets` takes
+        **`start` reaches no code on astrald `d5bb0bbd`.** `syncAssets` takes
         the node and reads the height out of the tree itself
         (`mod/user/src/op_sync_with.go:34`, `mod/user/src/sync.go:29`), and the
-        op no longer declares `start`: astrald `ac938c56` removes it, and the
-        binder skips an undeclared key. At `074a852b` the op declares it and
-        never reads it (`mod/user/src/op_sync_with.go:20` at `074a852b`). It is
+        op declares no `start` at all, so the binder drops the key. It is
         therefore sent only when the caller names it, never by default -- an
-        implicit `start=0` is identical to an absent one on both revisions and
-        would mean "re-read the whole log from zero" to a node that reads it,
-        which is not what a caller who named no height asked for.
+        implicit `start=0` is identical to an absent one and would mean
+        "re-read the whole log from zero" to a node that reads it, which is not
+        what a caller who named no height asked for.
         """
         params: dict[str, Any] = {
             "identity": _identity(node, OP_SYNC_WITH).text()
@@ -931,9 +923,9 @@ class User(ModuleClient):
         node's resolver reads it as the zero identity and the op would sign a
         membership contract for `anyone`.
 
-        **`node`, not `target`.** The op's wire argument is `identity=`, renamed
-        from `target=` at astrald `bd98bbe8`; `target` in `**kw` keeps meaning
-        the node this query is routed to, which on this op is a different node.
+        **`node`, not `target`.** The op's wire argument is `identity=`;
+        `target` in `**kw` keeps meaning the node this query is routed to,
+        which on this op is a different node.
         """
         return self._expect(
             await self._c.call_one(_targeted(OP_ADOPT, node), **kw),
@@ -1051,11 +1043,10 @@ class User(ModuleClient):
         claiming a node is a one-time transition. Every validation failure is
         an `error_message` and arrives as `RemoteError`.
 
-        astrald carries the op from `074a852b` on (`op_accept_contract.go`,
-        astrald #357). astral-go `5c18d9c` carries no client for it; astral-go
-        `6ea26c7` does (`api/user/client/accept_contract.go`), and that client
-        sends the contract with no `eos` and expects an `ack`, as this method
-        does.
+        astrald carries the op as `op_accept_contract.go` (astrald #357) and
+        astral-go carries the client for it
+        (`api/user/client/accept_contract.go`), which sends the contract with no
+        `eos` and expects an `ack`, as this method does.
         """
         if not isinstance(signed, SignedContract):
             raise BadArgumentType(
@@ -1088,7 +1079,7 @@ def new_node_contract_local(
     The same object `user.new_node_contract` answers with, constructed here:
     one `mod.user.swarm_membership_action` permit, plus admin-swarm and
     see-swarm permits with `Delegation: 1` for a management node, in that
-    order (`api/user/contract.go` at astral-go `6ea26c7`, `NewNodeContract`).
+    order (`api/user/contract.go` at astral-go `5b1d282`, `NewNodeContract`).
 
     The op passes `managementNode=true` unconditionally, so its answer always
     carries three permits; this helper defaults to `False`, which is the shape
@@ -1136,10 +1127,9 @@ def _object_id(value: ObjectID | str, op: str) -> ObjectID:
 def _identity(value: Identity | str, op: str) -> Identity:
     """An identity argument. 66 hex characters or `anyone`, never a name.
 
-    At `074a852b` the op parses this argument with `astral.ParseIdentity`, so a
-    name reaches it as a rejected query rather than as an error message. astrald
-    `bd98bbe8` resolves a name there instead; this client still parses the
-    argument locally and refuses one, which names the fix.
+    `user.sync_with` resolves this argument through the node's directory, so a
+    directory name would reach it. This client parses it locally as an identity
+    and refuses a name, whose error names the fix: resolve it first.
     """
     if isinstance(value, Identity):
         return value
