@@ -27,9 +27,12 @@ reason: a module client is a bound set of ops and this file has none.
     mod.tor.endpoint      Digest RefSpec(mod.tor.digest)  Port PrimitiveSpec(uint16)
     mod.gateway.endpoint  GatewayID PtrSpec(identity)     TargetID PtrSpec(identity)
 
-and `objects.new?type=<name>` gives each zero value's bytes: `000000` for tcp
-and kcp, `0000` for tor and for gateway, and an empty payload for
-`mod.tor.digest`. Both sets are pinned as vectors in `tests/test_api_endpoints.py`.
+and `objects.new?type=<name>` gives each zero value's bytes. Three of the five
+are untouched by any upstream change and are `furry-bolt`'s own answers:
+`000000` for tcp and kcp, `0000` for gateway. The two tor types changed width
+when astral-go `eeb31e3` landed -- 37 null bytes for `mod.tor.endpoint` and 35
+for `mod.tor.digest` -- and carry their own provenance beside the vectors. Both
+sets are pinned in `tests/test_api_endpoints.py`.
 
 **`mod.tor.digest` is the type that cannot be declared, not `mod.tor.endpoint`.**
 Design section 2.5 lists `mod.tor.endpoint` among the four types that carry a
@@ -43,23 +46,40 @@ want struct or *struct, got tor.Digest`, verified live -- so a hand-rolled
 the node can describe. The count of hand-written codecs is unchanged; the name
 in the table is not. Filed as a design objection.
 
-**A digest's length rule is one-directional, and astral-go's is too.**
-`Digest.WriteTo` writes whatever bytes it holds and `Digest.ReadFrom` demands
-exactly 35 (`api/tor/digest.go`, astral-go `6ea26c7`), so the zero value encodes
-to nothing and cannot be read back. The node proves it:
-`objects.new?type=mod.tor.digest` answers a **zero-byte** frame, and
-`objects.new?type=mod.tor.endpoint` answers `0000`, which is a two-byte payload
-where the reader wants 37. This SDK reproduces both halves rather than repairing
-one: the encoder writes what the node wrote, the decoder fails where the node
-fails, and `TorDigest.SIZE` names the number. Filed against astral-go.
+**A digest's wire width does not depend on its value, and astral-go's no longer
+does either.** `Digest.WriteTo` used to write whatever bytes it held while
+`Digest.ReadFrom` demanded exactly 35, so the zero value encoded to nothing and
+no conforming reader could consume it -- and inside a `mod.nodes.link_info` it
+moved every field after it by 35 bytes. astral-go `eeb31e3` (PR #90, in `main`
+at `5b1d282`, the revision astrald `114a40de` requires) makes the width
+unconditional: `WriteTo` writes `DigestSize` bytes for every digest it accepts,
+the zero value as `DigestSize` nulls, and refuses any other length with
+`ErrInvalidDigestLength` rather than putting a short frame on the wire;
+`ReadFrom` maps all-null back to the zero value, which is the convention
+`Identity` already uses and is sound because a v3 onion address carries a
+checksum over its key and no key checksums to zero. This SDK carries both
+halves -- `TorDigest.write_payload` is fixed-width and refuses any other length,
+`TorDigest.read_payload` reads 35 nulls back as the zero digest -- so a zero
+`mod.tor.endpoint` is 37 bytes that decode to the zero endpoint.
 
-**Two text forms per type, and they are not always the same string.**
+**`Address()` and `MarshalText` are two names and, today, one string.**
 `Address()` is the address alone; `MarshalText` is what the text channel emits.
-They agree for tcp, kcp and gateway and differ for tor's zero value, which is
-`unknown` as an address and `.onion:0` as text. `text()` here is `MarshalText`
-so a text-channel decode reads what the node wrote; `address()` is `Address()`;
-`json()` is `MarshalJSON`, which every one of the four defines as
-`json.Marshal(e.Address())`.
+They agreed for tcp, kcp and gateway and differed for tor's zero value, which
+was `unknown` as an address and `.onion:0` as text -- a string astral-go's own
+`UnmarshalText` refused on digest length. astral-go `54f55b0` (PR #91, same
+merge) makes `Endpoint.MarshalText` delegate to `Address()` as `MarshalJSON`
+already did, so all four endpoint types now render one string per value.
+`text()` here is `MarshalText`, `address()` is `Address()`, and `json()` is
+`MarshalJSON`, which every one of the four defines as
+`json.Marshal(e.Address())`. The three stay separate methods because they are
+separate upstream, not because any of them currently disagrees.
+
+**`mod.tor.digest` is the one tor spelling that still cannot read its own
+text.** `Digest.MarshalText` renders the zero digest as the bare `.onion` and
+`Digest.UnmarshalText` refuses that on length; `54f55b0` repaired the endpoint
+and left the digest. Reproduced rather than repaired, and named as a divergence
+in `tests/test_channel_formats.py`, because the binary form is the one a node
+sends and it round-trips.
 
 **Three astral-go parser defects, none of them ported** (design section 5.1
 rule 7):
@@ -81,7 +101,9 @@ fields, because a `@record` owns its schema. `nat.endpoint` is a third of the
 same shape -- `IP` ref, `Port` uint16, `Network()` of `kcp` -- and Tier 3 can
 reuse `IPEndpoint` rather than restate it.
 
-Source citations are pinned to astral-go `6ea26c7` and astrald `26bb51d5`.
+Source citations are pinned to astral-go `6ea26c7` and astrald `26bb51d5`,
+except the tor paragraphs above: they document changes merged after that pin
+and name their own revisions, which `tests/reference.py` reads there.
 """
 
 from __future__ import annotations
@@ -90,7 +112,7 @@ import base64
 import re
 from typing import Any, Final, Mapping, Sequence
 
-from ..errors import BadArgumentType, ParseError, StreamCorrupted
+from ..errors import BadArgumentType, ParseError, RangeError, StreamCorrupted
 from ..record import record, wire
 from ..registry import default_blueprints
 from ..spec import Primitive, Ptr, Ref
@@ -340,9 +362,18 @@ class TorDigest:
     Parsing accepts either case and the suffix is optional, which is astral-go's
     `UnmarshalText` exactly.
 
-    A digest of any other length is constructible and encodable -- astral-go's
-    writer has no check and the node's zero value is empty -- and is not
-    decodable, because the reader has to commit to a length before it reads.
+    A digest of any other length is constructible and **not** encodable.
+    astral-go `eeb31e3` refuses any length but 0 and `DigestSize` with
+    `ErrInvalidDigestLength` rather than putting a short frame on the wire, and
+    `write_payload` raises `RangeError` in the same place for the same reason.
+    `Identity` and `bip137sig.seed` enforce their widths at construction
+    instead, and the difference is that each has exactly one legal width; a
+    digest has two, because the zero value is a digest of length zero.
+
+    The zero digest and a digest of 35 null bytes are different values that
+    encode to the same 35 bytes, and both decode to the zero one. astral-go has
+    exactly that shape -- `IsZero` is `len(Digest) == 0`, which a
+    `make([]byte, DigestSize)` fails -- and neither side invents a third state.
     """
 
     __slots__ = ("value",)
@@ -427,14 +458,34 @@ class TorDigest:
 
     @classmethod
     def read_payload(cls, r: Any) -> "TorDigest":
-        """Exactly `SIZE` raw bytes. A shorter payload is a short read, which is
-        what astral-go's `io.ReadFull` reports."""
-        return cls(r.raw(cls.SIZE))
+        """Exactly `SIZE` raw bytes, with all-null read back as the zero value.
+
+        astral-go `eeb31e3`'s `ReadFrom`. `SIZE` null bytes are the zero value's
+        wire form and not an onion service, so mapping them back is what makes
+        `TorEndpoint.is_zero` and `address()` survive the round trip: a node with
+        no onion to report says "endpoint not known" and this reads it as
+        unknown rather than as `aaaa...aaaa.onion:0`. A shorter payload is a
+        short read, which is what astral-go's `io.ReadFull` reports.
+        """
+        data = r.raw(cls.SIZE)
+        return cls() if not any(data) else cls(data)
 
     def write_payload(self, w: Any) -> None:
-        """The bytes, bare. No length check: astral-go has none either, and the
-        node's own zero value is a digest of length zero."""
-        w.raw(self.value)
+        """`SIZE` raw bytes for any digest, the zero value as `SIZE` nulls.
+
+        astral-go `eeb31e3`'s `WriteTo`. The width cannot depend on the value,
+        because the reader commits to `SIZE` before it reads: a shorter write
+        moves every field after it in the enclosing object, which is how a zero
+        tor endpoint made a whole `mod.nodes.link_info` unreadable. A digest of
+        any other length is not a digest and does not reach the wire -- padding
+        or truncating it would put a different address there.
+        """
+        if len(self.value) not in (0, self.SIZE):
+            raise RangeError(
+                f"{self.ASTRAL_TYPE}: {len(self.value)} bytes is not a digest; "
+                f"a Tor v3 digest is {self.SIZE} bytes"
+            )
+        w.raw(self.value if self.value else bytes(self.SIZE))
 
 
 # Registered before the record below is ever constructed: `TorEndpoint()` builds
@@ -447,8 +498,9 @@ class TorEndpoint(Endpoint):
     """A Tor endpoint: a v3 service digest and a port.
 
     Numeric tag `1` inside `mod.nodes.node_info`. The payload is the digest's 35
-    raw bytes and then a `uint16`, so a zero value encodes to two bytes and
-    cannot be decoded -- see `TorDigest`.
+    raw bytes and then a `uint16`, so **every** value is 37 bytes wide -- the
+    zero one included, which decodes back to the zero endpoint. See `TorDigest`
+    for the width rule and the revision that made it unconditional.
     """
 
     digest: TorDigest = wire("Digest", Ref("mod.tor.digest"))
@@ -469,12 +521,16 @@ class TorEndpoint(Endpoint):
         return f"{self.digest.text()}:{self.port}"
 
     def text(self) -> str:
-        """astral-go's `MarshalText`, which is **not** `Address()`: it renders a
-        zero value as `.onion:0` rather than `unknown`, and its own `parse`
-        refuses that string. Reproduced rather than repaired -- the text channel
-        emits it and a decoder that invented a third spelling would be reading
-        something the node never wrote."""
-        return f"{self.digest.text()}:{self.port}"
+        """astral-go's `MarshalText`, which is `Address()`.
+
+        It formatted the digest and port unconditionally until astral-go
+        `54f55b0`, so a zero value rendered as `.onion:0` -- a string
+        `UnmarshalText` then refused on digest length, the type's own encoder
+        emitting text its own parser would not read. Delegating to `Address()`,
+        as `MarshalJSON` already did, makes `unknown` the one text form of the
+        zero endpoint and the one its parser accepts.
+        """
+        return self.address()
 
     @classmethod
     def parse(cls, text: str) -> "TorEndpoint":
@@ -501,8 +557,9 @@ class TorEndpoint(Endpoint):
 
     def json(self) -> str:
         """astral-go's `MarshalJSON`, which is `json.Marshal(e.Address())` and
-        so renders a zero value as `unknown`. The one round-trippable spelling
-        of the zero endpoint: `text()` is not."""
+        so renders a zero value as `unknown`. `text()` renders it the same way
+        since astral-go `54f55b0`; before that this was the zero endpoint's one
+        round-trippable spelling."""
         return self.address()
 
     @classmethod
