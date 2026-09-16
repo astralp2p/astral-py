@@ -207,9 +207,12 @@ is worth exactly its reach. Tier C is unaffected: its opt-ins are
   purpose, so a wrong layout in the SDK cannot agree with a wrong layout in the
   harness.
 - **Tier C — live node.** Every case subclasses `live_support.LiveCase`, which
-  builds one client per test at `max_concurrency=4` and counts descriptors. The
-  tier skips whole, once, with a reason, unless `ASTRAL_TEST_ENDPOINT` names a
-  node that greets one shared precheck bounded at `CONNECT_TIMEOUT * 3`.
+  builds one client per test at `max_concurrency=4` and counts descriptors. One
+  shared precheck, bounded at `CONNECT_TIMEOUT * 3`, decides the tier through
+  `live_support.gate()`: with `ASTRAL_TEST_ENDPOINT` unset the tier skips whole,
+  and with it set a node that does not greet **fails** every live test on the
+  cached reason. An opted-in run that skipped the tier would still end `OK`, so
+  opting in buys a verdict (design 11.6).
 
 ```bash
 ASTRAL_TEST_ENDPOINT=unix:/home/intern0/.apphost.sock \

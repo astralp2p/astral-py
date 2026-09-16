@@ -33,6 +33,7 @@ import unittest
 
 import astral
 from astral.api.services import (
+    OP_ADVERTISE,
     OP_DISCOVER,
     OP_SYNC,
     SERVICES_TYPES,
@@ -41,7 +42,13 @@ from astral.api.services import (
 )
 from astral.client import connect
 from astral.codec.binary import object_reader, payload_bytes
-from astral.errors import BadArgument, ProtocolError, RemoteError
+from astral.errors import (
+    BadArgument,
+    BadArgumentType,
+    ProtocolError,
+    QueryRejected,
+    RemoteError,
+)
 from astral.object import Ack, Bundle, UnparsedObject
 from astral.primitives import String8, Uint64
 from astral.querystring import parse
@@ -61,6 +68,7 @@ from mock_apphost import (
     MockApphost,
     QUERY_ACCEPTED,
     ROUTE_QUERY,
+    Reject,
     bounded,
     frame,
     socket_fds,
@@ -241,25 +249,33 @@ class ServicesTypesTest(unittest.TestCase):
 
     def test_the_op_names_carry_no_mod_prefix(self):
         """`mod.` is never part of an op name (design section 5.1 rule 6)."""
+        self.assertEqual(OP_ADVERTISE, "services.advertise")
         self.assertEqual(OP_DISCOVER, "services.discover")
         self.assertEqual(OP_SYNC, "services.sync")
 
     def test_the_module_declares_the_whole_live_op_surface(self):
-        """Two ops, which is the whole of `services` in the node's registry.
-        Pinned here so a module that grows a third op without a client fails
-        rather than silently offering half a surface; `LiveServicesTest` asserts
-        the same set against the node itself."""
+        """Three ops, which is the whole of `services` in the registry of
+        astrald `26bb51d5`. Pinned here so a module that grows a fourth op
+        without a client fails rather than silently offering part of a surface;
+        `LiveServicesTest` asserts the same set against the node itself."""
         ops = {
             value
             for name, value in vars(services_module).items()
             if name.startswith("OP_") and isinstance(value, str)
         }
-        self.assertEqual(ops, {OP_DISCOVER, OP_SYNC})
+        self.assertEqual(ops, {OP_ADVERTISE, OP_DISCOVER, OP_SYNC})
 
     def test_every_op_has_a_method(self):
         """A module that implements half its ops is worse than an absent one,
         because a caller cannot tell which half works."""
-        for name in ("discover", "discover_follow", "updates", "sync", "sync_follow"):
+        for name in (
+            "advertise",
+            "discover",
+            "discover_follow",
+            "updates",
+            "sync",
+            "sync_follow",
+        ):
             with self.subTest(method=name):
                 self.assertTrue(callable(getattr(Services, name)))
 
@@ -410,6 +426,151 @@ class ServicesCase(unittest.IsolatedAsyncioTestCase):
 
     def assert_no_faults(self, mock: MockApphost) -> None:
         self.assertEqual(mock.errors, [])
+
+
+class AdvertisingNode:
+    """`services.advertise` as astrald serves it: accept, `ack`, then read
+    bundles until the caller closes.
+
+    `answer` replaces the `ack` to model a refusal after accept. `received` is
+    every body frame the client sent and `closed` is set once the client's
+    close reached this side, which is the withdrawal.
+    """
+
+    def __init__(self, answer: tuple[str, bytes] | None = ACK_FRAME) -> None:
+        self.answer = answer
+        self.received: list[tuple[str, bytes]] = []
+        self.closed = asyncio.Event()
+
+    async def __call__(self, conn, query) -> None:  # type: ignore[no-untyped-def]
+        conn.send_frame(QUERY_ACCEPTED)
+        if self.answer is None:
+            await conn.flush()
+            await conn.aclose()
+            return
+        conn.send_frame(*self.answer)
+        await conn.flush()
+        if self.answer[0] != "ack":
+            await conn.aclose()
+            return
+        while True:
+            got = await conn.recv_frame_or_none()
+            if got is None:
+                break
+            self.received.append(got)
+        self.closed.set()
+
+    @property
+    def types(self) -> list[str]:
+        return [name for name, _ in self.received]
+
+
+class AdvertiseOpTest(ServicesCase):
+    """`services.advertise`: an `ack`, then the info on the body until closed."""
+
+    @bounded()
+    async def test_it_names_the_service_reads_the_ack_and_sends_the_info(self):
+        route = AdvertisingNode()
+        info = Bundle([String8("hello")])
+        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+            s = await self.services(mock)
+            async with s.advertise("contacts", info) as ad:
+                self.assertEqual(ad.name, "contacts")
+                self.assertEqual(s.client.live_streams, 1)
+                await ad.set_info(Bundle([Uint64(7)]))
+            await asyncio.wait_for(route.closed.wait(), 5.0)
+            self.assertEqual(s.client.live_streams, 0)
+        self.assertEqual(self.sent(mock), "services.advertise?name=contacts")
+        self.assertEqual(route.types, ["bundle", "bundle"])
+        self.assertEqual(route.received[0][1], payload_bytes(info))
+        self.assert_no_faults(mock)
+
+    @bounded()
+    async def test_no_info_sends_nothing_after_the_ack(self):
+        route = AdvertisingNode()
+        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+            s = await self.services(mock)
+            async with s.advertise("contacts"):
+                pass
+            await asyncio.wait_for(route.closed.wait(), 5.0)
+        self.assertEqual(route.received, [])
+
+    @bounded()
+    async def test_it_holds_the_persistent_lane(self):
+        """The channel is the advertisement, so it never returns its permit on
+        its own; the query lane would be spent by the services an app stands."""
+        route = AdvertisingNode()
+        routes = {OP_ADVERTISE: route, OP_DISCOVER: Accept(objects=[], eos=True)}
+        async with MockApphost(routes=routes) as mock:
+            s = await self.services(mock, max_concurrency=1)
+            async with s.advertise("contacts"):
+                self.assertEqual(await s.discover(), [])
+        self.assertEqual(
+            [q.query for q in mock.queries],
+            ["services.advertise?name=contacts", "services.discover?follow=false"],
+        )
+
+    @bounded()
+    async def test_an_error_message_raises_and_leaves_nothing_open(self):
+        text = b"the node cannot advertise to itself"
+        route = AdvertisingNode(("error_message", len(text).to_bytes(2, "big") + text))
+        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+            s = await self.services(mock)
+            with self.assertRaises(RemoteError) as caught:
+                async with s.advertise("contacts"):
+                    self.fail("the body ran without an ack")
+            self.assertEqual(caught.exception.message, "the node cannot advertise to itself")
+            self.assertEqual(s.client.live_streams, 0)
+
+    @bounded()
+    async def test_a_rejection_raises_and_leaves_nothing_open(self):
+        async with MockApphost(routes={OP_ADVERTISE: Reject(1)}) as mock:
+            s = await self.services(mock)
+            with self.assertRaises(QueryRejected):
+                async with s.advertise("contacts"):
+                    self.fail("the body ran on a rejected query")
+            self.assertEqual(s.client.live_streams, 0)
+
+    @bounded()
+    async def test_a_stream_that_ends_before_the_ack_is_a_protocol_error(self):
+        route = AdvertisingNode(None)
+        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+            s = await self.services(mock)
+            with self.assertRaises(ProtocolError) as caught:
+                async with s.advertise("contacts"):
+                    self.fail("the body ran without an ack")
+            self.assertIn("acknowledged", str(caught.exception))
+            self.assertEqual(s.client.live_streams, 0)
+
+    @bounded()
+    async def test_an_answer_that_is_not_an_ack_is_a_protocol_error(self):
+        route = AdvertisingNode(("eos", b""))
+        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+            s = await self.services(mock)
+            with self.assertRaises(ProtocolError):
+                async with s.advertise("contacts"):
+                    self.fail("the body ran without an ack")
+            self.assertEqual(s.client.live_streams, 0)
+
+    @bounded()
+    async def test_bad_arguments_are_refused_before_anything_is_routed(self):
+        async with MockApphost(routes={OP_ADVERTISE: AdvertisingNode()}) as mock:
+            s = await self.services(mock)
+            with self.assertRaises(BadArgument):
+                s.advertise("")
+            with self.assertRaises(BadArgumentType):
+                s.advertise("contacts", String8("not a bundle"))  # type: ignore[arg-type]
+            async with s.advertise("contacts") as ad:
+                with self.assertRaises(BadArgumentType):
+                    await ad.set_info(String8("not a bundle"))  # type: ignore[arg-type]
+        self.assertEqual(len(mock.queries), 1)
+
+    @bounded()
+    async def test_constructing_one_routes_nothing(self):
+        async with MockApphost(routes={OP_ADVERTISE: AdvertisingNode()}) as mock:
+            s = await self.services(mock)
+            s.advertise("contacts")
+        self.assertEqual(mock.queries, [])
 
 
 class DiscoverOpTest(ServicesCase):
@@ -922,7 +1083,7 @@ class LiveServicesTest(live_support.LiveCase):
     """
 
     @bounded(30.0)
-    async def test_the_module_s_op_surface_is_exactly_these_two(self):
+    async def test_the_module_s_op_surface_is_exactly_these_three(self):
         """`shell.spec` is the node's own op registry, so this is the inventory
         rather than a copy of it."""
         async with await self.client() as client:
@@ -934,8 +1095,22 @@ class LiveServicesTest(live_support.LiveCase):
         }
         self.assertEqual(
             {name for name in names if name.startswith("services.")},
-            {OP_DISCOVER, OP_SYNC},
+            {OP_ADVERTISE, OP_DISCOVER, OP_SYNC},
         )
+        await self.assert_no_open_sockets()
+
+    @bounded(30.0)
+    async def test_an_anonymous_caller_is_the_node_and_cannot_advertise(self):
+        """The node stands in for an anonymous IPC caller and passes the
+        ServeApps check, and the op refuses the node as a provider before it
+        publishes anything. The one advertisement path a read-only tier may
+        take, because it ends before `advertise` runs."""
+        async with await self.client() as client:
+            with self.assertRaises(RemoteError) as caught:
+                async with client.services.advertise("astral-py-live-tier"):
+                    self.fail("the node acknowledged an advertisement by itself")
+            self.assertEqual(caught.exception.message, "the node cannot advertise to itself")
+            self.assertEqual(await client.services.discover(), [])
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
@@ -944,10 +1119,13 @@ class LiveServicesTest(live_support.LiveCase):
         `bd98bbe8` tags `opSyncArgs.Identity` and nothing in
         `opDiscoverArgs`. The tag refuses an absent `identity` and passes an
         empty one, which resolves to the zero identity. That is why `sync()`
-        refuses an empty id client-side rather than relying on the node."""
+        refuses an empty id client-side rather than relying on the node.
+        `opAdvertiseArgs.Name` is untagged too, and the op answers
+        `name is required` itself, verified on astrald `26bb51d5`; `advertise()`
+        refuses an empty name before routing."""
         async with await self.client() as client:
             params = {}
-            for op in (OP_DISCOVER, OP_SYNC):
+            for op in (OP_ADVERTISE, OP_DISCOVER, OP_SYNC):
                 body = await client.call_raw(
                     f"shell.spec?op={op}&out=json", timeout=20.0
                 )
@@ -955,6 +1133,14 @@ class LiveServicesTest(live_support.LiveCase):
                 params[op] = [
                     (p["Name"], p["Type"], p["Required"]) for p in spec["Parameters"]
                 ]
+        self.assertEqual(
+            params[OP_ADVERTISE],
+            [
+                ("name", "string8", False),
+                ("in", "string8", False),
+                ("out", "string8", False),
+            ],
+        )
         self.assertEqual(
             params[OP_DISCOVER],
             [

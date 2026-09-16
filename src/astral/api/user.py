@@ -1,6 +1,6 @@
 """`user.*` -- the swarm a node belongs to: membership, siblings, assets, bans.
 
-Tier 2 and the largest module of it: fifteen ops, eleven wire types, and the one
+Tier 2 and the largest module of it: fifteen ops, ten wire types, and the one
 op in the SDK whose stream ends with a **value** instead of a terminator. Every
 op below is on the live node's `shell.spec` registry, verified this session
 against `furry-bolt` -- fifteen entries, the argument names and types read out of
@@ -60,7 +60,7 @@ three empty on this node) and for `new_node_contract` and `sync_assets`
 **Type names are singular for `mod.user.*` and plural for two of them.**
 `mod.users.swarm_member` and `mod.users.created_user_info` carry the plural
 segment and `mod.user.info`, `mod.user.op_update`, `mod.user.expulsion`,
-`mod.user.signed_expulsion`, `mod.user.notification` and the four action types do
+`mod.user.signed_expulsion`, `mod.user.notification` and the three action types do
 not. The names are spelled literally, as design section 5.1 rule 6 requires; both
 spellings are on the live registry, verified this session through
 `objects.blueprints`.
@@ -74,10 +74,21 @@ that package's `init`. The field order below is the node's own, read from
 `mod.user.info`, `mod.user.expulsion`, `mod.user.signed_expulsion`,
 `mod.user.notification`, `mod.users.swarm_member` and
 `mod.users.created_user_info`, and every field order below is that answer. The
-four action types are **refused** by that op -- `BlueprintFromType …Action: type
+action types are **refused** by that op -- `BlueprintFromType …Action: type
 auth.Action does not implement Object and is not a supported container` -- which
 is the same refusal `mod.objects.*_action` gets and says nothing about their wire
-form.
+form. Verified again on astrald `26bb51d5` for `mod.user.see_swarm_action` and
+`mod.user.admin_swarm_action`.
+
+**The three action types are the ones the node registers.** astral-go replaced
+`mod.user.adopt_action` and `mod.user.expel_action` with
+`mod.user.admin_swarm_action`, and `mod.user.info_action` with
+`mod.user.see_swarm_action` (`api/user/admin_swarm_action.go` and
+`api/user/see_swarm_action.go` at astral-go `6ea26c7`, the revision astrald
+`26bb51d5` pins). On `26bb51d5`, `objects.new` answers `nil` for the three old
+names and `objects.get_blueprint` answers `blueprint not found`, both verified.
+A permit naming an old type matches no action the node authorizes, so it grants
+nothing, and this module no longer declares them.
 
 **The op's own target argument is `node`, never `target`.** `user.adopt` and
 `user.expel` declare `Identity string` at astrald `bd98bbe8`, resolved by the
@@ -115,13 +126,31 @@ whole log" the moment the argument is wired up. Defect filed against astrald.
 contract" on `adopt`, `expel`, `info`, `list_expelled`, `request_membership` and
 `swarm_status`, and "an active contract already exists" on `accept_contract` and
 `accept_membership` -- the same number for opposite states, because the state a
-node has is not the state either op wants. On `adopt` and `expel` code 3 is an
-unresolvable target and code 4 is an unauthorized caller
-(`astrald/mod/user/src/op_adopt.go:34`). `sync_assets` rejects with 2 on a
-database fault. `add_asset` and `remove_asset` reject with
-`astral.CodeInternalError`, which is 4 (`astral-go/astral/codes.go`).
-No code is mapped to a semantic exception here: `QueryRejected.code` carries the
-number, and design risk R-17 declines to claim more.
+node has is not the state either op wants. On `adopt`, `expel` and `sync_with`
+code 3 is an unresolvable target. Code 4 is an unauthorized caller on every op
+that authorizes (`astrald/mod/user/src/op_adopt.go:34`). `sync_assets` rejects
+with 2 on a database fault. `add_asset` and `remove_asset` reject with
+`astral.CodeInternalError` on one, which is 4 as well
+(`astral-go/astral/codes.go`), so on those two a 4 alone does not say which
+refusal it was. No code is mapped to a semantic exception here:
+`QueryRejected.code` carries the number, and design risk R-17 declines to claim
+more.
+
+**Every read authorizes `mod.user.see_swarm_action` and every write
+`mod.user.admin_swarm_action`.** From astrald `f0f162d0`, `info`, `assets`,
+`sync_assets`, `list_siblings`, `list_expelled` and `swarm_status` ask the first,
+and `adopt`, `expel`, `add_asset`, `remove_asset` and `sync_with` ask the second.
+The user and the swarm's members pass, and anyone else needs the permit.
+`new_node_contract`, `request_membership`, `accept_contract` and
+`accept_membership` authorize neither. Both authorizers refuse when the node has
+no active contract (`mod/user/src/op_accept_contract.go` at `26bb51d5`, the
+comment above `OpAcceptContract`), so the order of the checks decides which code
+an unclaimed node answers: `info`, `list_expelled`, `swarm_status`, `adopt` and
+`expel` test the contract first and reject with 2, while `assets`, `sync_assets`
+and `list_siblings` authorize first and reject with 4. Verified on astrald
+`26bb51d5` with an anonymous caller on an unclaimed node: 2 from `info`,
+`list_expelled` and `swarm_status`, 4 from `assets`, `sync_assets` and
+`list_siblings`.
 
 **Two ops read their input off the channel body and neither takes an `eos`.**
 `accept_contract` reads one `mod.auth.signed_contract`; `accept_membership` reads
@@ -145,8 +174,17 @@ nothing.** Its `duration` is Go's duration syntax and the node parses it with
 year expressed as 365 x 24h (`astrald/mod/user/src/config.go:12`), applied
 server-side when the argument is absent. `Duration.parse` accepts exactly Go's
 unit table, so a bad spelling is refused here rather than travelling. Verified
-live: no argument expires 365 days out, `duration=48h` two days out, and both
-carry the four permits of a management node.
+live against `furry-bolt`: no argument expires 365 days out and `duration=48h`
+two days out. Both carry the permits of a management node, which on astrald
+`26bb51d5` are three: membership, then `mod.user.admin_swarm_action` and
+`mod.user.see_swarm_action`, each delegable one hop, verified there.
+
+**`user` defaults to the node's user, and an unclaimed node has none.** The op
+substitutes the module's user identity for an absent `user` and answers
+`user id missing` when that identity is zero
+(`mod/user/src/op_new_node_contract.go` at `26bb51d5`). Verified on an unclaimed
+node: `user.new_node_contract` answers `user id missing`, and the same query with
+`user` named answers the contract.
 
 **A contract shorter than one hour is refused by `accept_membership`**
 (`astrald/mod/user/src/config.go:11`, `minimalContractLength`). The check is the
@@ -192,7 +230,7 @@ from .base import ModuleClient
 from .crypto import Signature
 
 __all__ = [
-    "AdoptAction",
+    "AdminSwarmAction",
     "AssetSync",
     "CreatedUserInfo",
     "DEFAULT_CONTRACT_VALIDITY",
@@ -201,10 +239,8 @@ __all__ = [
     "ERR_NO_ACTIVE_CONTRACT",
     "ERR_REQUEST_DECLINED",
     "EVENT_ASSETS",
-    "ExpelAction",
     "Expulsion",
     "Info",
-    "InfoAction",
     "MINIMAL_CONTRACT_LENGTH",
     "Notification",
     "OP_ACCEPT_CONTRACT",
@@ -223,6 +259,7 @@ __all__ = [
     "OP_SYNC_ASSETS",
     "OP_SYNC_WITH",
     "OpUpdate",
+    "SeeSwarmAction",
     "SignedExpulsion",
     "SwarmMember",
     "SwarmMembershipAction",
@@ -499,15 +536,24 @@ class OpUpdate:
 # objects any op here exchanges: `Permit.action` matches on the type name.
 
 
-@record("mod.user.adopt_action")
-class AdoptAction(Action):
-    """Permission for the actor to adopt `subject` into the user's swarm.
+@record("mod.user.admin_swarm_action")
+class AdminSwarmAction(Action):
+    """Permission for the actor to change what the swarm is.
+
+    One action for every write in this module: `adopt`, `expel`, `add_asset`,
+    `remove_asset` and `sync_with`. `subject` names the node an op adopts,
+    expels or syncs with, and `object_id` the asset it adds or removes; an op
+    leaves unset the one it does not name, and the node evaluates neither yet
+    (`api/user/admin_swarm_action.go` at astral-go `6ea26c7`).
 
     Granted with `Delegation: 1` on a management node's contract, so the node
-    can contract it out one hop to an app it hosts.
+    can contract it out one hop to an app it hosts. The zero payload is eleven
+    bytes, a nonce and three nil flags, verified against
+    `objects.new?type=mod.user.admin_swarm_action` on astrald `26bb51d5`.
     """
 
     subject: Identity | None = wire("Subject", Ptr("identity"))
+    object_id: ObjectID | None = wire("ObjectID", Ptr("object_id.sha256"))
 
     def apply_constraints(self, constraints: Any) -> bool:
         """astral-go's `ApplyConstraints`: any constraint at all refuses.
@@ -519,26 +565,17 @@ class AdoptAction(Action):
         return _unconstrained(constraints)
 
 
-@record("mod.user.expel_action")
-class ExpelAction(Action):
-    """Permission for the actor to expel `subject` from the user's swarm.
+@record("mod.user.see_swarm_action")
+class SeeSwarmAction(Action):
+    """Permission for the actor to read what the swarm is.
 
-    Delegable one hop on a management node's contract, exactly as
-    `AdoptAction` is, and constrained the same way: any constraint refuses.
-    """
-
-    subject: Identity | None = wire("Subject", Ptr("identity"))
-
-    def apply_constraints(self, constraints: Any) -> bool:
-        return _unconstrained(constraints)
-
-
-@record("mod.user.info_action")
-class InfoAction(Action):
-    """Permission for the actor to read `user.info`.
-
-    Carries `auth.Action`'s two fields and nothing else. The user and every
-    swarm sibling hold it implicitly; another identity needs the permit.
+    One action for every read in this module: `info`, `assets`, `sync_assets`,
+    `list_siblings`, `list_expelled` and `swarm_status`. Carries `auth.Action`'s
+    two fields and nothing else, so the zero payload is nine bytes, verified
+    against `objects.new?type=mod.user.see_swarm_action` on astrald `26bb51d5`.
+    The user and every swarm sibling hold it implicitly; another identity needs
+    the permit. Delegable one hop on a management node's contract, and
+    constrained as `AdminSwarmAction` is: any constraint refuses.
     """
 
     def apply_constraints(self, constraints: Any) -> bool:
@@ -598,7 +635,7 @@ class User(ModuleClient):
 
         Rejects with code 2 when the node has no active contract, which is the
         setup-mode probe, and with code 4 when the caller holds no
-        `mod.user.info_action` permit. The user and every swarm sibling are
+        `mod.user.see_swarm_action` permit. The user and every swarm sibling are
         authorized implicitly.
 
         Verified live against `furry-bolt`, which is claimed: the answer
@@ -614,8 +651,10 @@ class User(ModuleClient):
         this node's repository: an asset is a claim about what the swarm keeps,
         and `objects.contains` is what answers whether the bytes are here.
 
-        No active contract is needed. Verified live: an `eos` and nothing else
-        on a node with no assets.
+        Rejects with code 4 when the caller may not see the swarm, which on a
+        node with no active contract is every caller. Verified live on
+        `furry-bolt`, claimed: an `eos` and nothing else on a node with no
+        assets. Verified on astrald `26bb51d5`, unclaimed: rejected with 4.
         """
         return [
             self._expect(obj, ObjectID, OP_ASSETS)
@@ -639,7 +678,9 @@ class User(ModuleClient):
         a node that streams without ever sending the height costs the deadline
         and not the rest of the process's life.
 
-        Rejects with code 2 on a database fault. No active contract is needed.
+        Rejects with code 4 when the caller may not see the swarm, which on a
+        node with no active contract is every caller, and with 2 on a database
+        fault.
         """
         qs = querystring.build(
             OP_SYNC_ASSETS,
@@ -678,8 +719,11 @@ class User(ModuleClient):
         never used (`mod/user/src/op_list_siblings.go:17`) -- and the routing
         zone is not.
 
-        The op has no active-contract guard, so it answers on any node.
-        Verified live on a claimed node with no linked sibling: a bare `eos`.
+        The op has no active-contract guard of its own, but it authorizes the
+        caller first, and the authorizer refuses on a node with no active
+        contract, so an unclaimed node rejects it with code 4. Verified on
+        astrald `26bb51d5`. Verified live on a claimed node with no linked
+        sibling: a bare `eos`.
         """
         params: dict[str, Any] = {}
         if zone is not None:
@@ -703,8 +747,8 @@ class User(ModuleClient):
         never in `list_siblings` -- verified live, where `swarm_status` answered
         one member, the node itself, with `linked=False`.
 
-        Rejects with code 2 when the node has no active contract. Readable by
-        any caller.
+        Rejects with code 2 when the node has no active contract, and with 4
+        when the caller may not see the swarm.
         """
         return [
             self._expect(obj, SwarmMember, OP_SWARM_STATUS)
@@ -715,8 +759,8 @@ class User(ModuleClient):
         """Every ban the active user has issued. ST, ends at `eos`.
 
         Scoped to the active contract's issuer, so it is the swarm's ban list
-        and not this node's. Rejects with code 2 without an active contract.
-        Readable by any caller.
+        and not this node's. Rejects with code 2 without an active contract,
+        and with 4 when the caller may not see the swarm.
         """
         return [
             self._expect(obj, SignedExpulsion, OP_LIST_EXPELLED)
@@ -739,7 +783,9 @@ class User(ModuleClient):
         at all.
 
         `user` defaults to the node's user identity and `node` to the node
-        itself. Both are resolved by the node's directory, so an alias,
+        itself. A node no user has claimed has no user identity, and there an
+        absent `user` answers `user id missing`. Both are resolved by the
+        node's directory, so an alias,
         `localnode` or 66 hex characters all reach it; an unknown name answers
         `unknown identity: <name>`, verified live.
 
@@ -749,10 +795,11 @@ class User(ModuleClient):
         `Duration.parse`, whose unit table is Go's, so a typo is refused here.
         The node's default is one year (`DEFAULT_CONTRACT_VALIDITY`).
 
-        The contract carries the four permits of a management node --
-        membership, and expel, adopt and info each delegable one hop -- because
-        astrald passes `managementNode=true` unconditionally
-        (`mod/user/src/op_new_node_contract.go`). Verified live.
+        The contract carries the three permits of a management node --
+        membership, then admin-swarm and see-swarm, each delegable one hop --
+        because astrald passes `managementNode=true` unconditionally
+        (`mod/user/src/op_new_node_contract.go`). Verified live on astrald
+        `26bb51d5`.
         """
         params: dict[str, Any] = {}
         if user is not None:
@@ -782,6 +829,9 @@ class User(ModuleClient):
         accepts, so the failure arrives as `QueryRejected` and never as an
         object.
 
+        Rejects with code 4 before anything is written when the caller may not
+        administer the swarm.
+
         `id` is mandatory here. astrald does not mark it required, so an absent
         one reaches the database as a null object ID.
         """
@@ -799,8 +849,8 @@ class User(ModuleClient):
         `mod.user.op_update` with `removed=True` rather than a gap. The stored
         bytes are untouched: this is the user's asset set, not a repository.
 
-        A database failure rejects with `internal_error` (4), as `add_asset`
-        does.
+        An unauthorized caller and a database failure both reject with 4, as
+        on `add_asset`.
         """
         qs = querystring.build(
             OP_REMOVE_ASSET,
@@ -861,7 +911,7 @@ class User(ModuleClient):
         contract.
 
         Rejects with 2 without an active contract, 3 when `node` does not
-        resolve, and 4 when the caller holds no `mod.user.adopt_action` permit
+        resolve, and 4 when the caller holds no `mod.user.admin_swarm_action` permit
         (`astrald/mod/user/src/op_adopt.go:34`). The user always holds it.
 
         `node` is resolved by the node's directory: an alias, `localnode` or 66
@@ -888,8 +938,8 @@ class User(ModuleClient):
         that receives it stops treating the subject as a member.
 
         Reject codes are `adopt`'s: 2 without an active contract, 3 for an
-        unresolvable target, 4 for a caller with no `mod.user.expel_action`
-        permit.
+        unresolvable target, 4 for a caller with no
+        `mod.user.admin_swarm_action` permit.
 
         `node` is a directory name or an identity, and an empty one is refused:
         the zero identity resolves and the ban would name `anyone`.
@@ -1022,12 +1072,12 @@ def new_node_contract_local(
     """Build a node contract with no query. astral-go's `NewNodeContract`.
 
     The same object `user.new_node_contract` answers with, constructed here:
-    one `mod.user.swarm_membership_action` permit, plus expel, adopt and info
-    permits with `Delegation: 1` for a management node
-    (`astral-go/api/user/contract.go:20-26`).
+    one `mod.user.swarm_membership_action` permit, plus admin-swarm and
+    see-swarm permits with `Delegation: 1` for a management node, in that
+    order (`api/user/contract.go` at astral-go `6ea26c7`, `NewNodeContract`).
 
     The op passes `managementNode=true` unconditionally, so its answer always
-    carries four permits; this helper defaults to `False`, which is the shape
+    carries three permits; this helper defaults to `False`, which is the shape
     astrald uses for an ordinary member (`mod/user/src/contracts.go:171`).
 
     `expires_at` is now plus `duration`, resolved at call time.
@@ -1035,9 +1085,8 @@ def new_node_contract_local(
     permits = [Permit(action=SwarmMembershipAction.ASTRAL_TYPE, delegation=0)]
     if management_node:
         permits += [
-            Permit(action=ExpelAction.ASTRAL_TYPE, delegation=1),
-            Permit(action=AdoptAction.ASTRAL_TYPE, delegation=1),
-            Permit(action=InfoAction.ASTRAL_TYPE, delegation=1),
+            Permit(action=AdminSwarmAction.ASTRAL_TYPE, delegation=1),
+            Permit(action=SeeSwarmAction.ASTRAL_TYPE, delegation=1),
         ]
     return Contract(
         issuer=issuer,
@@ -1167,7 +1216,7 @@ def _identity_text(value: Identity | None) -> str:
 
 
 def _unconstrained(constraints: Any) -> bool:
-    """astral-go's `ApplyConstraints` for the three constrained action types.
+    """astral-go's `ApplyConstraints` for the two constrained action types.
 
     `cs == nil || len(cs.Objects()) == 0`: an absent or empty bundle permits,
     and any constraint at all denies.
@@ -1176,14 +1225,13 @@ def _unconstrained(constraints: Any) -> bool:
 
 
 USER_TYPES: Final[Sequence[type]] = (
-    AdoptAction,
+    AdminSwarmAction,
     CreatedUserInfo,
-    ExpelAction,
     Expulsion,
     Info,
-    InfoAction,
     Notification,
     OpUpdate,
+    SeeSwarmAction,
     SignedExpulsion,
     SwarmMember,
     SwarmMembershipAction,

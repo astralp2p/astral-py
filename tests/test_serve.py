@@ -1627,11 +1627,9 @@ class LiveServeTest(unittest.IsolatedAsyncioTestCase):
     """
 
     async def asyncSetUp(self) -> None:
-        from live_support import endpoint, verdict
+        from live_support import endpoint, gate
 
-        reason = await verdict()
-        if reason:
-            self.skipTest(reason)
+        await gate(self)
         self.token = os.environ.get("ASTRAL_TEST_TOKEN") or None
         if self.token is None:
             self.skipTest(

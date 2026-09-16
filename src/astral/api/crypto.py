@@ -84,6 +84,23 @@ streamed key, which is what makes this an oversight rather than a design. This
 SDK sends `key` as a query argument on every sign and verify op, which is
 parsed before the switch and therefore works on both -- so nothing here depends
 on the broken path, and nothing here can be repaired into depending on it.
+astrald `341fcdd5` builds the text signer per signature inside `signAndSend`,
+so from that commit a streamed key is honoured too; the rule stands because it
+works on nodes on either side of it.
+
+**A caller signs as itself, and an anonymous caller cannot sign at all.** From
+astrald `341fcdd5` every signature passes `authorizeSigner`
+(`mod/crypto/src/sign_guard.go` at `26bb51d5`): the key must be the caller's
+own identity, or one the caller holds a `mod.auth.sudo_action` for, and the
+node's own key is refused on the self branch. The core router substitutes the
+node's identity for an anonymous caller, so an anonymous IPC guest is refused
+whatever it asks for: `cannot sign with the node's key` with no `key`, and
+`cannot sign with another identity's key` naming any other key. Both sign ops
+also reject a network-origin query. An app signs under its own token. Verified
+on astrald `26bb51d5`: both refusals from an anonymous caller, and with a token
+from `apphost.register`, a `sign_hash` and a `sign_text` signature the node
+verified, and a tampered text it did not. The same authenticated caller naming
+the node's key was answered `cannot sign with another identity's key`.
 
 **A failed verification is an `error_message`, not a failure.** Both verify ops
 answer `ack` on success and `astral.Err(err)` on anything else, so an exception
@@ -742,11 +759,15 @@ class Crypto(ModuleClient):
         """Sign one digest with a node-held key. RR, digest in the query string.
 
         **Privileged.** The node signs with the private key it holds for `key`,
-        so this is a signing oracle and not a computation: what it can sign is
-        what that node's crypto module has indexed. `key` defaults to the
-        query's caller, which for an anonymous IPC guest is **the node's own
-        identity** -- astrald's core router substitutes it for a nil caller --
-        so an omitted `key` here asks the node to sign as itself.
+        and from astrald `341fcdd5` only when `key` is the caller's own identity
+        or one the caller may sudo to. `key` defaults to the query's caller. For
+        an anonymous IPC guest that is **the node's own identity** -- astrald's
+        core router substitutes it for a nil caller -- and the node's key is
+        never signable through this op, so an anonymous call answers
+        `cannot sign with the node's key` without `key` and
+        `cannot sign with another identity's key` with one. Verified on
+        `26bb51d5`. On a node that predates `341fcdd5`, the anonymous form signs
+        as the node.
 
         The digest goes in the query string because that is the op's own
         request/response path: with `hash` present `OpSignHash` answers one
@@ -780,9 +801,13 @@ class Crypto(ModuleClient):
         ignore the body.
 
         The key travels as a query argument even though this op does honour one
-        streamed on the body -- unlike `crypto.sign_text`, which acks a streamed
-        key and then signs with the caller's anyway. One path that works on both
-        ops is worth more than the one this op alone would allow.
+        streamed on the body -- unlike `crypto.sign_text` before astrald
+        `341fcdd5`, which acked a streamed key and then signed with the caller's
+        anyway. One path that works on both ops, and on nodes either side of
+        that commit, is worth more than the one this op alone would allow.
+
+        The authorization is per digest, after it is read, so a refused key
+        raises `RemoteError` on the first digest.
         """
         digests = [Hash(_hash_bytes(h, OP_SIGN_HASH)) for h in hashes]
         if not digests:
@@ -804,8 +829,9 @@ class Crypto(ModuleClient):
     ) -> Signature:
         """Sign one text with a node-held key. WA, text on the body.
 
-        **Privileged**, and with the same caller default `sign_hash` has: no
-        `key` means the node signs as itself for an anonymous guest.
+        **Privileged**, and with the same caller default and the same refusals
+        `sign_hash` has: no `key` means the caller's own key, and an anonymous
+        guest is answered `cannot sign with the node's key`.
 
         The text goes on the body and not in the query string, although the op
         accepts either. Two reasons, and both are about the text rather than
@@ -818,15 +844,22 @@ class Crypto(ModuleClient):
         `scheme` omitted leaves astrald's `bip137`, the only text scheme any
         stock engine implements.
 
-        **A key or scheme the node cannot serve resets the connection here.**
-        `OpSignText` builds its signer *before* entering `ch.Switch`, so it
-        answers `unsupported` and closes with the body still unread, and a close
-        with unread data is a TCP reset that destroys the message the node just
-        wrote. Verified live against `furry-bolt`: the same call with the text in
-        the query string answers a clean `error_message`, the body form does not.
-        The reset is reported as a `ProtocolError` naming this, rather than as
-        the bare `ConnectionResetError` the socket raises. `sign_hash` builds its
-        signer inside the switch and does not share the defect.
+        **On a node that predates astrald `341fcdd5`, a key or scheme the node
+        cannot serve resets the connection here.** `OpSignText` there builds its
+        signer *before* entering `ch.Switch`, so it answers `unsupported` and
+        closes with the body still unread, and a close with unread data is a TCP
+        reset that destroys the message the node just wrote. Verified live
+        against `furry-bolt`: the same call with the text in the query string
+        answers a clean `error_message`, the body form does not. The reset is
+        reported as a `ProtocolError` naming this, rather than as the bare
+        `ConnectionResetError` the socket raises. `sign_hash` builds its signer
+        inside the switch and does not share the defect.
+
+        From `341fcdd5` the text signer is built per signature, after the text
+        is read, so the same call reads the node's `error_message` as
+        `RemoteError`. Verified on `26bb51d5`: five sequential calls with a key
+        the node does not hold each answered
+        `cannot sign with another identity's key`, and none reset.
         """
         return (await self.sign_text_many([text], key=key, scheme=scheme, **kw))[0]
 
@@ -843,8 +876,10 @@ class Crypto(ModuleClient):
         **Privileged.** One signature per text, in order. Each text is a
         `string16`; the op has a `string8` branch too and this SDK never uses
         it, so one length rule covers every call. `sign_text` documents the
-        reset a key the node cannot serve produces; it applies to a batch too,
-        and to the whole batch, because the op fails before reading any of it.
+        reset a key the node cannot serve produces on a node that predates
+        astrald `341fcdd5`; there it applies to the whole batch, because the op
+        fails before reading any of it. From that commit the first refused text
+        raises `RemoteError`.
         """
         values = _texts(texts, OP_SIGN_TEXT)
         qs = _params(
@@ -1038,8 +1073,9 @@ class Crypto(ModuleClient):
 def _reset(op: str, exc: BaseException) -> ProtocolError:
     """The connection reset an op produces by closing without draining its body.
 
-    astrald's `OpSignText` answers and closes before it reads anything when it
-    cannot build a signer, so the caller's body sits unread in the node's
+    astrald's `OpSignText`, before `341fcdd5`, answers and closes before it
+    reads anything when it cannot build a signer, so the caller's body sits
+    unread in the node's
     receive buffer; a close with unread data is a reset, and a reset discards
     whatever the node had already written -- including the `error_message` that
     would have said *why*. Verified live: the same call with the text as a query
@@ -1056,8 +1092,9 @@ def _reset(op: str, exc: BaseException) -> ProtocolError:
         f"{op}: the node closed the stream without reading the body it asked "
         f"for, which reset the connection and destroyed its own error message "
         f"({type(exc).__name__}: {exc}). The usual cause is a key or scheme no "
-        f"engine on that node serves; astrald builds the signer before reading "
-        f"and cannot report it. The node may also simply have gone."
+        f"engine on that node serves, on an astrald older than 341fcdd5, which "
+        f"builds the signer before reading and cannot report it. The node may "
+        f"also simply have gone."
     )
 
 

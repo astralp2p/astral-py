@@ -4,8 +4,10 @@
         PYTHONPATH=src python3 -m unittest discover -s tests
 
 **Skipped entirely unless `ASTRAL_TEST_ENDPOINT` is set** (design section 7.3),
-so the suite is green on a machine with no node, and skipped again -- once, with
-the reason -- if the node named there does not greet. The precheck lives in
+so the suite is green on a machine with no node, and **failed** -- every test,
+on one cached reason -- if the node named there does not greet, because a run
+that asked for the live tier and skipped it would still end `OK`. The precheck
+lives in
 `live_support.py` and is shared with every other Tier-C file; it is not
 ceremony, because a saturated apphost worker pool accepts the socket and never
 speaks, so without it every test here would fail on a different-looking deadline

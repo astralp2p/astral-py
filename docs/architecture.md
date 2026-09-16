@@ -141,7 +141,7 @@ src/astral/
     crypto.py            Tier 1. crypto.* ops + secp256k1.new + the four pure helpers.
     auth.py              Tier 1. auth.* ops, contract/permit/action types.
     objects.py           Tier 1, largest. 25 ops, the Writer protocol, the search grammar.
-    services.py          Tier 1. services.discover/sync, services.update.
+    services.py          Tier 1. services.advertise/discover/sync, services.update.
     user.py              Tier 2. 15 ops incl. the non-EOS sync_assets stream.
     bip137sig.py         Tier 2. Four ops; local mnemonic/seed via bip39.py.
     ip.py                Tier 2. Three ops, mod.ip.ip_address.
@@ -1390,6 +1390,7 @@ Specific invariant tests that exist because a survey found a hazard:
 Gated on `ASTRAL_TEST_ENDPOINT` being set; skipped entirely otherwise, with a message. Before
 any test runs, a **health precheck** dials with a 5 s timeout and skips the whole tier if
 `host_info_msg` does not arrive — which is exactly the state the node is in right now.
+**Amended by 11.6:** with the gate variable set, a node that does not greet fails the tier.
 
 Only the anonymous-safe, read-only op set is targeted:
 
@@ -1685,3 +1686,24 @@ content of its data. That is section 3.7's forgery, one layer below where sectio
 with no channel above it — an accepted query's raw byte stream — is protected too. A read
 abandoned *at* a boundary strands nothing and latches nothing, which is what keeps an idle follow
 stream's deadline harmless over this carrier as much as over a socket.
+
+## 11.6 Section 7.3 — an opted-in live tier fails when its node does not greet (AMENDED, implemented)
+
+Section 7.3 skips the whole tier when the precheck gets no `host_info_msg`, and it does so whether
+or not `ASTRAL_TEST_ENDPOINT` is set. With the variable set, that makes a run that never touched the
+node indistinguishable from one that passed against it: both end `OK`, and the skip count, the only
+difference, is not on the line anyone reads. Verified on `263c792`: with the variable naming a
+socket no node listens on, the whole suite ends `OK (skipped=157, expected failures=2)` without
+having tested anything live.
+
+**Amendment: the gate variable decides between skip and fail.** Unset, the tier skips, which keeps
+the no-node invariant. Set, a node that does not greet fails every live test on the precheck's
+cached reason, so a dead node still costs one dial and no per-test deadline. `live_support.gate()`
+is the one place the rule lives. `SharedPrecheckTest` refuses a test module that reads the verdict
+and skips on its own, and `LiveGateTest` pins both halves with no node.
+
+Narrower skips keep their meaning. The HTTP and WebSocket tests still skip when their listener does
+not answer, because `bind_http` is configurable and the gate variable names the apphost endpoint,
+not that one. The serving tests still skip without `ASTRAL_TEST_TOKEN`, and so do the signing round
+trips in `test_api_crypto.LiveSigningTest`: from astrald `341fcdd5` an anonymous caller is the node,
+and the node's key is not signable through the op surface.

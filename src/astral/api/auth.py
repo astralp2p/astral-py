@@ -12,29 +12,30 @@ a per-op contract and is not discoverable from the wire):
 
 | Op | Mode | Answer | Effect |
 |---|---|---|---|
-| `auth.index` | RR | `ack` \\| `error_message` | **mutates** the local contract index |
+| `auth.index` | RR, BD with no `id` | `ack` \\| `error_message`, one per input | **mutates** the local contract index |
 | `auth.sign_contract` | WA | `mod.auth.signed_contract` \\| `error_message` | privileged, no state written |
 
 Both are the whole of the module. `shell.spec` on `furry-bolt` lists exactly
 `auth.index` and `auth.sign_contract`, verified this session, and astral-go's
-`api/auth/module.go` declares the same two constants.
+`api/auth/module.go` declares the same two constants. The same two, and no
+others, on astrald `26bb51d5`, verified.
 
-**`auth.index` requires its object ID on the running node.** The live spec flags
-`id` `"Required":true` and the routing layer refuses the query before the op
-runs: `auth.index` with no `id` answers `query_rejected_msg{1}`, both verified
-against `furry-bolt` this session. So an absent id is a `QueryRejected` and
-never an `error_message`.
+**`auth.index` takes its object ID in the query string or its object IDs on the
+body.** From astrald `fdbddccb`, `opIndexArgs.ID` is optional, and an omitted
+`id` makes the op read `object_id.sha256` objects off the channel until `eos` or
+EOF, answering one `ack` or `error_message` per input and carrying on past a
+failed one -- the RR/BD hybrid `objects.contains`, `objects.delete`,
+`objects.load` and `objects.probe` already have. The batch goes through astral-go's
+`channel.Batch`, which answers an explicit `eos` with a final `eos` and ends
+silently after EOF (`astral/channel/batch.go` at astral-go `6ea26c7`). `index()`
+is the single form and `index_many()` the batch. Verified on astrald `26bb51d5`:
+the spec flags `id` `"Required":false`, a bare `eos` on the body answers a bare
+`eos`, two IDs no repository holds answer two `object not found` and an `eos`,
+and the single form answers `object not found` and EOF.
 
-**astrald has since grown a batch mode for it, and the running node does not
-carry one.** At astrald `fdbddccb`, `opIndexArgs.ID` becomes
-`query:"optional"` and an omitted `id` makes the op read `object_id.sha256`
-objects off the channel until `eos`, answering one `ack` or `error_message` per
-input -- the RR/BD hybrid `objects.contains`, `objects.delete`, `objects.load`
-and `objects.probe` already have. The single form is unchanged in both. This
-module implements the single form only, because it is what the op inventory
-lists and what any reachable node answers; `LiveAuthTest` asserts the node's own
-`"Required"` flag, so a node upgraded past that commit fails there rather than
-somewhere subtler.
+On a node that predates `fdbddccb`, `id` is `"Required":true` and an absent one
+is refused by the routing layer before the op runs, as `query_rejected_msg{1}`,
+verified against `furry-bolt`. `index_many()` meets that as `QueryRejected`.
 
 **A contract is signed and indexed in two separate steps, and the op that signs
 does not store.** `auth.sign_contract` builds a fresh `SignedContract` around
@@ -88,8 +89,8 @@ Go's default showing through a gap.
 
 **No action type has a blueprint.** `objects.get_blueprint` answers
 `error_message` for every one of them -- verified live for
-`mod.auth.sudo_action`, `mod.objects.create_object_action` and
-`mod.user.adopt_action`, each with
+`mod.auth.sudo_action` and `mod.objects.create_object_action` on `furry-bolt`,
+and for `mod.user.admin_swarm_action` on astrald `26bb51d5`, each with
 `BlueprintFromType <type>.Action: type auth.Action does not implement Object and
 is not a supported container`. `auth.Action` has no `ObjectType` method, so
 astral-go's blueprint derivation stops at the embedded field. A peer therefore
@@ -148,7 +149,7 @@ what `Client` actually carries, so the two cannot drift apart.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Final, Sequence
+from typing import Any, Final, Iterable, Sequence
 
 from .. import querystring
 from ..errors import BadArgumentType, ProtocolError
@@ -228,7 +229,7 @@ class Permit:
     """One grant: an action type, its constraints, and how far it delegates.
 
     `action` is the **object type name** of an action, not a verb:
-    `mod.auth.see_objects_action`, `mod.user.adopt_action`. A permit whose
+    `mod.auth.see_objects_action`, `mod.user.admin_swarm_action`. A permit whose
     action names a type the node does not know grants nothing, because
     authorization matches on the string the concrete action reports.
 
@@ -408,19 +409,48 @@ class Auth(ModuleClient):
         ID, and `astral.objectid.object_id(signed)` computes the same value
         locally.
 
-        Every failure past the required-argument check arrives as an
-        `error_message`, which surfaces as `RemoteError`: object not found,
-        invalid contract, a signature that does not verify, a database fault.
-        An absent `id` is refused before the op runs and arrives as
-        `QueryRejected` instead.
+        Every failure arrives as an `error_message`, which surfaces as
+        `RemoteError`: object not found, invalid contract, a signature that does
+        not verify, a database fault.
 
-        One ID per call. The batch form the module docstring records is not
-        implemented, because no reachable node answers it.
+        One ID per call; `index_many()` sends several over one query.
         """
         qs = querystring.build(
             OP_INDEX, querystring.encode_params(_INDEX, {"id": _object_id(id)})
         )
         self._expect(await self._c.call_one(qs, **kw), Ack, OP_INDEX)
+
+    async def index_many(self, ids: Iterable[ObjectID | str], **kw: Any) -> None:
+        """Index several stored signed contracts over one query. BD. **Mutates.**
+
+        The IDs travel on the **channel body**, one `object_id.sha256` each,
+        with no `id` in the query string: its absence is what selects the
+        batch. The node answers one `ack` or `error_message` per ID, in order,
+        and each one is `index()`'s answer for that ID.
+
+        One send, then one read, and an `eos` after the last ID, which the node
+        mirrors. The first `error_message` raises `RemoteError` and ends the
+        exchange: every ID before it was indexed, and no ID after it was sent.
+        The error does not name its position. `index()` is idempotent on a
+        contract already in the index, so re-sending the tail or indexing the
+        IDs one at a time is safe.
+
+        An empty `ids` sends no query. A node that predates astrald `fdbddccb`
+        requires `id` and rejects the query, which arrives as `QueryRejected`.
+        """
+        objects = [_object_id(i) for i in ids]
+        if not objects:
+            return
+        answers = await self._c.call_with(
+            OP_INDEX, *objects, eos=True, expect=len(objects), **kw
+        )
+        if len(answers) != len(objects):
+            raise ProtocolError(
+                f"{OP_INDEX}: sent {len(objects)} object ID(s) and got "
+                f"{len(answers)} answer(s)"
+            )
+        for answer in answers:
+            self._expect(answer, Ack, OP_INDEX)
 
     async def sign_contract(self, contract: Contract, **kw: Any) -> SignedContract:
         """Sign a contract as both issuer and subject. WA. **Privileged.**

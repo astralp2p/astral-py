@@ -1,15 +1,17 @@
-"""The `user` module client: fifteen ops, eleven types, one non-`eos` stream.
+"""The `user` module client: fifteen ops, ten types, one non-`eos` stream.
 
 Three tiers in one file, because the same claim is made at each and the three
 must agree:
 
 - **Tier A** pins the wire on bytes `furry-bolt` sent this session, captured
   through `Client.call_raw`, which hands back the response body unframed and so
-  records exactly what the node wrote. Four captures: a `mod.user.info` carrying
+  records exactly what the node wrote. Five captures: a `mod.user.info` carrying
   a fully signed four-permit contract, a `mod.users.swarm_member` followed by an
   `eos`, `user.assets`'s bare `eos`, and `user.sync_assets`'s single `uint64`
   frame with **no** `eos` after it. The last is the whole reason design section
-  3.10 names a third streaming shape.
+  3.10 names a third streaming shape. The fifth is from an unclaimed node at
+  astrald `26bb51d5`: `user.new_node_contract` answering the three-permit
+  contract that replaced the four-permit one.
 - **Tier B** pins the fifteen ops against `MockApphost`: the query string each
   one builds, the answer each one accepts, the two body-input ops' frame order
   and their absent terminator, and the guards that keep an empty target from
@@ -20,14 +22,18 @@ must agree:
   against the mock alone.
 
 `furry-bolt` is **claimed** -- it holds an active contract issued by
-`03a40290…941d` -- so `user.info` and `user.swarm_status` answer here rather than
+`03a40290…941d` -- so `user.info` and `user.swarm_status` answer there rather than
 rejecting with code 2. Both states are legal and neither is this SDK's to
-choose, so every live assertion accepts the rejection as well and asserts on the
-decoded object only when one arrives.
+choose, so the live tier probes which one it faces and asserts the refusal an
+unclaimed node gives, or the decoded object a claimed one does. Verified
+unclaimed on astrald `26bb51d5`; the claimed path was last verified on
+`furry-bolt`, before astrald `f0f162d0` put an authorizer in front of every swarm
+read.
 """
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import unittest
@@ -35,15 +41,13 @@ import unittest
 import astral
 from astral.api.auth import Contract, Permit, SignedContract
 from astral.api.user import (
-    AdoptAction,
+    AdminSwarmAction,
     AssetSync,
     CreatedUserInfo,
     DEFAULT_CONTRACT_VALIDITY,
     EVENT_ASSETS,
-    ExpelAction,
     Expulsion,
     Info,
-    InfoAction,
     MINIMAL_CONTRACT_LENGTH,
     Notification,
     OP_ACCEPT_CONTRACT,
@@ -62,6 +66,7 @@ from astral.api.user import (
     OP_SYNC_ASSETS,
     OP_SYNC_WITH,
     OpUpdate,
+    SeeSwarmAction,
     SignedExpulsion,
     SwarmMember,
     SwarmMembershipAction,
@@ -71,6 +76,7 @@ from astral.api.user import (
     new_node_contract_local,
 )
 from astral.client import connect
+from astral.codec import jsoncodec
 from astral.codec.binary import object_reader, payload_bytes
 from astral.errors import (
     BadArgument,
@@ -141,6 +147,30 @@ LIVE_INFO_BODY = bytes.fromhex(
     "665ffb56d2db76cf0a240221008f061c31de5c022eac244054b76ccfbebf70ccc6eb"
     "f28cb9fd940e622f7893a9"                        # SubjectSig, asn1, 71 B
 )
+
+LIVE_INFO_OLD_PERMITS = [
+    "mod.user.swarm_membership_action",
+    "mod.user.expel_action",
+    "mod.user.adopt_action",
+    "mod.user.info_action",
+]
+"""The permits in the captured contract, by name. `furry-bolt` signed it before
+astral-go replaced the three management permits with two, so these names are
+history: no node at astrald `26bb51d5` registers the last three."""
+
+LIVE_NEW_NODE_CONTRACT_BODY = bytes.fromhex(
+    "116d6f642e617574682e636f6e7472616374000000b0"  # frame: mod.auth.contract, 176 B
+    "0103e36d19acbf320a4ff82313521ce23f78334ad435e6a9bb64ab8cf309a76a675b"  # Issuer
+    "0103e36d19acbf320a4ff82313521ce23f78334ad435e6a9bb64ab8cf309a76a675b"  # Subject
+    "00000003"                                      # three permits
+    "01206d6f642e757365722e737761726d5f6d656d626572736869705f616374696f6e0000"
+    "011b6d6f642e757365722e61646d696e5f737761726d5f616374696f6e0001"
+    "01196d6f642e757365722e7365655f737761726d5f616374696f6e0001"
+    "1945d65912793c2a"                              # ExpiresAt
+)
+"""`user.new_node_contract?user=<node>` on an unclaimed node at astrald
+`26bb51d5`, captured the same way. `user` is named because an unclaimed node has
+no user to default to; the node named itself, so issuer and subject are one."""
 
 LIVE_SWARM_STATUS_BODY = bytes.fromhex(
     "166d6f642e75736572732e737761726d5f6d656d6265720000002e"   # frame, 46 B
@@ -269,16 +299,26 @@ class LiveCaptureTest(unittest.TestCase):
         self.assertTrue(is_node_contract(info.contract.contract))
         self.assertEqual(
             [p.action for p in info.contract.contract.permits],
-            [
-                SwarmMembershipAction.ASTRAL_TYPE,
-                ExpelAction.ASTRAL_TYPE,
-                AdoptAction.ASTRAL_TYPE,
-                InfoAction.ASTRAL_TYPE,
-            ],
+            LIVE_INFO_OLD_PERMITS,
         )
         self.assertEqual(
             [p.delegation for p in info.contract.contract.permits], [0, 1, 1, 1]
         )
+
+    def test_the_new_node_contract_frame_is_three_permits_and_re_encodes(self):
+        (type_name, payload), = frames_of(LIVE_NEW_NODE_CONTRACT_BODY)
+        self.assertEqual(type_name, Contract.ASTRAL_TYPE)
+        contract = Contract.read_payload(object_reader(payload))
+        self.assertEqual(
+            [(p.action, p.delegation) for p in contract.permits],
+            [
+                (SwarmMembershipAction.ASTRAL_TYPE, 0),
+                (AdminSwarmAction.ASTRAL_TYPE, 1),
+                (SeeSwarmAction.ASTRAL_TYPE, 1),
+            ],
+        )
+        self.assertEqual(contract.issuer, contract.subject)
+        self.assertEqual(payload_bytes(contract), payload)
 
     def test_the_swarm_status_capture_is_one_member_then_an_eos(self):
         got = frames_of(LIVE_SWARM_STATUS_BODY)
@@ -385,7 +425,7 @@ class BlueprintParityTest(unittest.TestCase):
     """Every declaration equals the node's own blueprint for that type.
 
     The field orders below were read from `objects.get_blueprint?type=…` on
-    `furry-bolt` this session, one query per type. The four action types are
+    `furry-bolt` this session, one query per type. The action types are
     absent: that op refuses them -- `BlueprintFromType …Action: type auth.Action
     does not implement Object and is not a supported container` -- which is the
     same refusal `mod.objects.*_action` gets and says nothing about their wire
@@ -447,12 +487,30 @@ class BlueprintParityTest(unittest.TestCase):
     def test_the_action_types_carry_the_embedded_fields_first(self):
         """Go promotes an embedded struct's fields, so `auth.Action`'s two come
         before the concrete type's own and the payload flattens."""
-        for kind in (AdoptAction, ExpelAction, InfoAction, SwarmMembershipAction):
+        for kind in (AdminSwarmAction, SeeSwarmAction, SwarmMembershipAction):
             with self.subTest(type=kind.ASTRAL_TYPE):
                 names = [f.wire_name for f in kind.FIELDS]
                 self.assertEqual(names[:2], ["Nonce", "ActorID"])
-        self.assertEqual([f.wire_name for f in AdoptAction.FIELDS][2:], ["Subject"])
-        self.assertEqual([f.wire_name for f in InfoAction.FIELDS][2:], [])
+        self.assertEqual(
+            [f.wire_name for f in AdminSwarmAction.FIELDS][2:], ["Subject", "ObjectID"]
+        )
+        self.assertEqual([f.wire_name for f in SeeSwarmAction.FIELDS][2:], [])
+
+    def test_the_swarm_action_zero_values_are_the_node_s_bytes(self):
+        """`objects.new` on astrald `26bb51d5`: a nonce and one nil flag per
+        pointer, in binary, and the promoted keys in JSON."""
+        node_binary = {
+            AdminSwarmAction: "0000000000000000000000",
+            SeeSwarmAction: "000000000000000000",
+        }
+        node_json = {
+            AdminSwarmAction: '{"Nonce":"0","ActorID":null,"Subject":null,"ObjectID":null}',
+            SeeSwarmAction: '{"Nonce":"0","ActorID":null}',
+        }
+        for kind, hex_payload in node_binary.items():
+            with self.subTest(type=kind.ASTRAL_TYPE):
+                self.assertEqual(payload_bytes(kind()).hex(), hex_payload)
+                self.assertEqual(jsoncodec.marshal(kind()), json.loads(node_json[kind]))
 
 
 class TypeRegistrationTest(unittest.TestCase):
@@ -572,24 +630,24 @@ class NodeContractHelperTest(unittest.TestCase):
         )
         self.assertEqual(contract.permits[0].delegation, 0)
 
-    def test_a_management_node_gets_four_permits_three_of_them_delegable(self):
+    def test_a_management_node_gets_three_permits_two_of_them_delegable(self):
         contract = new_node_contract_local(USER_ID, FURRY_BOLT, management_node=True)
         self.assertEqual(
             [(p.action, p.delegation) for p in contract.permits],
             [
                 (SwarmMembershipAction.ASTRAL_TYPE, 0),
-                (ExpelAction.ASTRAL_TYPE, 1),
-                (AdoptAction.ASTRAL_TYPE, 1),
-                (InfoAction.ASTRAL_TYPE, 1),
+                (AdminSwarmAction.ASTRAL_TYPE, 1),
+                (SeeSwarmAction.ASTRAL_TYPE, 1),
             ],
         )
 
     def test_the_management_shape_is_the_one_the_node_answered_with(self):
         """The op passes `managementNode=true` unconditionally, so its answer
-        and this helper's four-permit form must be the same object but for the
-        parties and the expiry. Compared against the captured contract."""
-        (_, payload), = frames_of(LIVE_INFO_BODY)
-        live = Info.read_payload(object_reader(payload)).contract.contract
+        and this helper's three-permit form must be the same object but for
+        the parties and the expiry. Compared against the contract astrald
+        `26bb51d5` built."""
+        (_, payload), = frames_of(LIVE_NEW_NODE_CONTRACT_BODY)
+        live = Contract.read_payload(object_reader(payload))
         local = new_node_contract_local(
             live.issuer, live.subject, management_node=True
         )
@@ -623,7 +681,7 @@ class NodeContractHelperTest(unittest.TestCase):
                 Contract(
                     issuer=USER_ID,
                     subject=FURRY_BOLT,
-                    permits=[Permit(action=InfoAction.ASTRAL_TYPE)],
+                    permits=[Permit(action=SeeSwarmAction.ASTRAL_TYPE)],
                 )
             )
         )
@@ -679,21 +737,21 @@ class ActionConstraintTest(unittest.TestCase):
     """`ApplyConstraints`, ported: any constraint at all refuses."""
 
     def test_an_absent_or_empty_bundle_permits(self):
-        for kind in (AdoptAction, ExpelAction, InfoAction):
+        for kind in (AdminSwarmAction, SeeSwarmAction):
             with self.subTest(type=kind.ASTRAL_TYPE):
                 self.assertTrue(kind().apply_constraints(None))
                 self.assertTrue(kind().apply_constraints(Bundle()))
 
     def test_any_constraint_denies(self):
         bundle = Bundle([Uint64(1)])
-        for kind in (AdoptAction, ExpelAction, InfoAction):
+        for kind in (AdminSwarmAction, SeeSwarmAction):
             with self.subTest(type=kind.ASTRAL_TYPE):
                 self.assertFalse(kind().apply_constraints(bundle))
 
     def test_a_permit_allows_only_its_own_action_type(self):
-        permit = Permit(action=AdoptAction.ASTRAL_TYPE)
-        self.assertTrue(permit.allows(AdoptAction()))
-        self.assertFalse(permit.allows(ExpelAction()))
+        permit = Permit(action=AdminSwarmAction.ASTRAL_TYPE)
+        self.assertTrue(permit.allows(AdminSwarmAction()))
+        self.assertFalse(permit.allows(SeeSwarmAction()))
 
     def test_swarm_membership_declares_no_constraint_method_and_so_is_allowed(self):
         """astral-go declares none for this one type, and `Permit.allows`
@@ -1547,35 +1605,65 @@ class LiveUserTest(live_support.LiveCase):
     signing or storing. The other eight change who a node belongs to or what it
     holds and are exercised against the mock alone.
 
-    Every assertion accepts `QueryRejected(2)` where the op declares it, because
-    whether the node under test is claimed is not this SDK's to decide.
+    Whether the node under test is claimed is not this SDK's to decide, so the
+    tier asks: `user.info` rejecting with code 2 is the setup-mode probe. On an
+    unclaimed node every swarm read is refused, because both of astrald's swarm
+    authorizers refuse without an active contract, and the assertions there
+    are the refusal codes rather than the answers.
     """
+
+    async def unclaimed(self, client: astral.Client) -> bool:
+        """Whether the node has no active contract, by the setup-mode probe."""
+        try:
+            await client.user.info()
+        except QueryRejected as exc:
+            if exc.code == 2:
+                return True
+            if exc.code == 4:
+                return False
+            raise
+        return False
 
     @bounded(30.0)
     async def test_the_empty_shapes_all_end_at_an_eos(self):
         async with await self.client() as client:
             api = client.user
-            self.assertIsInstance(await api.assets(), list)
-            self.assertIsInstance(await api.list_siblings(), list)
-            try:
+            if await self.unclaimed(client):
+                for read, code in (
+                    (api.assets, 4),
+                    (api.list_siblings, 4),
+                    (api.list_expelled, 2),
+                ):
+                    with self.subTest(op=read.__name__):
+                        with self.assertRaises(QueryRejected) as caught:
+                            await read()
+                        self.assertEqual(caught.exception.code, code)
+            else:
+                self.assertIsInstance(await api.assets(), list)
+                self.assertIsInstance(await api.list_siblings(), list)
                 self.assertIsInstance(await api.list_expelled(), list)
-            except QueryRejected as exc:
-                self.assertEqual(exc.code, 2)
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
     async def test_sync_assets_returns_a_height_and_never_waits_for_an_eos(self):
         """The gate of design step 13. The op sends no `eos` at all, so a
-        client that waits for one hangs; this returns."""
+        client that waits for one hangs; this returns. An unclaimed node
+        refuses it before the stream opens, and that refusal is asserted
+        instead."""
         async with await self.client() as client:
-            answer = await client.user.sync_assets()
-            self.assertIsInstance(answer, AssetSync)
-            self.assertIsInstance(answer.next_height, int)
-            self.assertGreaterEqual(answer.next_height, 0)
-            # An empty answer echoes `start`, so re-polling is safe and empty.
-            again = await client.user.sync_assets(start=answer.next_height)
-            self.assertEqual(again.next_height, answer.next_height)
-            self.assertEqual(again.updates, [])
+            if await self.unclaimed(client):
+                with self.assertRaises(QueryRejected) as caught:
+                    await client.user.sync_assets()
+                self.assertEqual(caught.exception.code, 4)
+            else:
+                answer = await client.user.sync_assets()
+                self.assertIsInstance(answer, AssetSync)
+                self.assertIsInstance(answer.next_height, int)
+                self.assertGreaterEqual(answer.next_height, 0)
+                # An empty answer echoes `start`, so re-polling is safe and empty.
+                again = await client.user.sync_assets(start=answer.next_height)
+                self.assertEqual(again.next_height, answer.next_height)
+                self.assertEqual(again.updates, [])
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
@@ -1612,29 +1700,46 @@ class LiveUserTest(live_support.LiveCase):
     async def test_new_node_contract_builds_a_management_contract(self):
         """Construction only: the answer is unsigned, unstored and authorizes
         nothing. astrald passes `managementNode=true` unconditionally, so the
-        four permits are the shape every answer has."""
+        three permits are the shape every answer has.
+
+        `user` is named -- the node's own identity stands in -- because the
+        op's default is the node's user, and an unclaimed node has none."""
         async with await self.client() as client:
-            contract = await client.user.new_node_contract()
+            contract = await client.user.new_node_contract(user=client.host_id)
             self.assertIsInstance(contract, Contract)
             self.assertTrue(is_node_contract(contract))
             self.assertEqual(
                 [p.action for p in contract.permits],
                 [
                     SwarmMembershipAction.ASTRAL_TYPE,
-                    ExpelAction.ASTRAL_TYPE,
-                    AdoptAction.ASTRAL_TYPE,
-                    InfoAction.ASTRAL_TYPE,
+                    AdminSwarmAction.ASTRAL_TYPE,
+                    SeeSwarmAction.ASTRAL_TYPE,
                 ],
             )
+            self.assertEqual(contract.issuer, client.host_id)
             self.assertFalse(contract.expired)
+        await self.assert_no_open_sockets()
+
+    @bounded(30.0)
+    async def test_an_unclaimed_node_has_no_user_to_default_to(self):
+        """`user id missing` is the op's answer when the module's user identity
+        is zero, which is what an unclaimed node holds. A claimed node answers
+        the contract instead."""
+        async with await self.client() as client:
+            if not await self.unclaimed(client):
+                self.assertIsInstance(await client.user.new_node_contract(), Contract)
+                return
+            with self.assertRaises(RemoteError) as caught:
+                await client.user.new_node_contract()
+            self.assertIn("user id missing", str(caught.exception))
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
     async def test_a_duration_shortens_the_contract_the_node_builds(self):
         async with await self.client() as client:
             api = client.user
-            default = await api.new_node_contract()
-            short = await api.new_node_contract(duration="48h")
+            default = await api.new_node_contract(user=client.host_id)
+            short = await api.new_node_contract(user=client.host_id, duration="48h")
             self.assertLess(int(short.expires_at), int(default.expires_at))
         await self.assert_no_open_sockets()
 
@@ -1642,12 +1747,15 @@ class LiveUserTest(live_support.LiveCase):
     async def test_a_year_unit_is_refused_here_and_by_the_node(self):
         """`Duration.parse` carries Go's unit table, so `1y` never travels.
         The node's own answer for it is
-        `time: unknown unit "y" in duration "1y"`, verified this session."""
+        `time: unknown unit "y" in duration "1y"`, verified on astrald
+        `26bb51d5`. `user` is named so the op reaches the duration: it checks
+        the user first."""
         async with await self.client() as client:
             with self.assertRaises(ParseError):
                 await client.user.new_node_contract(duration="1y")
+            user = client.host_id.text()
             with self.assertRaises(RemoteError) as caught:
-                await client.call_one(f"{OP_NEW_NODE_CONTRACT}?duration=1y")
+                await client.call_one(f"{OP_NEW_NODE_CONTRACT}?duration=1y&user={user}")
             self.assertIn("unknown unit", str(caught.exception))
         await self.assert_no_open_sockets()
 
@@ -1706,8 +1814,6 @@ class CitationTest(unittest.TestCase):
 
     ASTRAL_GO_LINES = {
         ("api/user/contract.go", 12): "SwarmMembershipAction{}.ObjectType()",
-        ("api/user/contract.go", 20): "SwarmMembershipAction{}.ObjectType()",
-        ("api/user/contract.go", 26): "InfoAction{}.ObjectType()",
         ("api/user/expulsion.go", 39): "expels %s from the swarm",
     }
 
