@@ -2249,13 +2249,18 @@ class LiveObjectsTest(live_support.LiveCase):
             await self.objects.get_blueprint("uint8", timeout=20)
 
     @bounded(600.0)
-    async def test_the_census_in_the_docstrings_matches_the_node(self):
-        """The two docstrings state one live census and both had it off by one:
-        "96 of the 133 non-primitive names" where the node answers 97 of 134.
-        The pair was internally consistent -- 96 + 37 = 133 -- so the error was
-        one classification and nothing failed. A stale sentence in a module that
-        cites live measurement everywhere costs a reader the rest of the file's
-        credibility, so the numbers are read off the node instead.
+    async def test_a_registered_type_is_not_necessarily_a_describable_one(self):
+        """The claim the census in the two docstrings supports, held against
+        whatever node this is.
+
+        The census itself is not asserted. It pinned exact counts to "this
+        session", and every type astrald registers moves them: 97 of 134 on
+        `furry-bolt`, 102 of 152 on astrald `26bb51d5`. A pin like that fails on
+        the next upstream commit and says nothing about this SDK. So the
+        docstrings name the revision they measured, and this test holds what is
+        true on any build: the node describes some names and refuses others, the
+        refusal the docstring names is among them, and every name it describes
+        comes back as a blueprint for that name.
 
         Serial, one query at a time, and the whole sweep is one session: this is
         somebody's node and its worker pool is 32 wide for every app on the
@@ -2263,30 +2268,24 @@ class LiveObjectsTest(live_support.LiveCase):
         """
         names = [str(n) for n in await self.objects.blueprints(timeout=30)]
         non_primitive = [n for n in names if n not in PRIMITIVE_TYPES]
-        answered = refused = 0
+        answered: list[str] = []
+        refused: list[str] = []
         for name in non_primitive:
             try:
                 blueprint = await self.objects.get_blueprint(name, timeout=20)
             except RemoteError:
-                refused += 1
+                refused.append(name)
                 continue
-            answered += 1
+            answered.append(name)
             # The SDK's own assertion, over every name the node will describe.
             self.assertEqual(blueprint.type, name)
 
+        self.assertTrue(answered, "the node described no registered type")
+        self.assertTrue(refused, "the node described every registered type")
+        self.assertIn("mod.objects.create_object_action", refused)
         doc = objects_module.Objects.get_blueprint.__doc__ or ""
-        doc += objects_module.Objects.blueprints.__doc__ or ""
-        self.assertIn(
-            f"{answered} of the {len(non_primitive)}",
-            doc,
-            f"the docstrings state a census the node does not: it answered "
-            f"{answered} of {len(non_primitive)} non-primitive names and "
-            f"refused {refused}",
-        )
-        self.assertIn(f"refused {refused}", doc)
-        self.assertIn(f"{len(names)} names on `furry-bolt`", doc + (
-            objects_module.Objects.blueprints.__doc__ or ""
-        ))
+        self.assertIn("`mod.objects.create_object_action`", doc)
+        self.assertIn("astrald `26bb51d5`", doc)
 
     async def test_learn_registers_a_types_closure(self):
         """The wiring `RuntimeRecord` needed: a node's type, learned into a child

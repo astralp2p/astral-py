@@ -1476,14 +1476,14 @@ class Objects(ModuleClient):
     async def blueprints(self, **kw: Any) -> list[str]:
         """Every type name the node can decode, in dependency order. ST.
 
-        153 names on `furry-bolt` this session, more than this SDK declares.
-        Names only: `get_blueprint` fetches one type's schema and `learn`
-        fetches a schema's closure.
+        More names than this SDK declares: 171 on astrald `26bb51d5`, measured
+        there, and the count moves with every type astrald registers. Names
+        only: `get_blueprint` fetches one type's schema and `learn` fetches a
+        schema's closure.
 
-        **`get_blueprint` cannot describe every name here.** astral-go's
-        reflector answered 97 of the 134 non-primitive names and refused 37 --
-        see `get_blueprint`. So this list is what the node can *decode*, not what
-        it can *describe*, and the two are different sets.
+        **`get_blueprint` cannot describe every name here** -- see
+        `get_blueprint`. So this list is what the node can *decode*, not what it
+        can *describe*, and the two are different sets.
         """
         return [
             str(self._expect(obj, String8, OP_BLUEPRINTS))
@@ -1505,10 +1505,12 @@ class Objects(ModuleClient):
         **A registered type is not necessarily a describable one.** astral-go's
         `BlueprintFromType` refuses any struct holding a plain Go scalar, a
         value-embedded non-`Object` struct, or a primitive newtype that does not
-        implement `PrimitiveAlias`. Swept live over `furry-bolt`: 97 of the 134
-        non-primitive registered names answered and 37 refused, including this
-        this module's own `mod.objects.create_object_action`, which embeds
-        `auth.Action`.
+        implement `PrimitiveAlias`. Swept over astrald `26bb51d5`, one name at a
+        time: 102 of the 152 non-primitive registered names answered and 50
+        refused, including this module's own `mod.objects.create_object_action`,
+        which embeds `auth.Action`. The counts are that revision's: every type
+        astrald registers moves them, so `LiveObjectsTest` holds the claim and
+        not the numbers.
         The refusal is an `error_message`, so it arrives as `RemoteError` and
         never as a wrong schema.
 
