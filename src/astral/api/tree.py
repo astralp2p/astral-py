@@ -87,15 +87,19 @@ shellsession examples is a no-op that reports success. The real names are
 `tree.get?path=/mod/tcp/settings/listen&recursive=true` is accepted and answers
 exactly what the same query without the key answers.
 
-**G-11: astral-go's `tree.Node.Create` issues `tree.set` and never reads the
-response** (`astral-go/api/tree/client/node.go:151` opens the query,
-`astral-go/api/tree/client/node.go:160` returns without a read). The consequence
-is worse than the unread `ack` the survey records: batch mode answers one object
-per object received, so a `Create` that sent none leaves **nothing** on the wire
-when it succeeds and an `error_message` when the path walk failed -- the one
-case a caller needs. `create()` sends the `eos` and reads to the end of the
-stream, so a failed creation raises `RemoteError` instead of returning a handle
-for a node that does not exist.
+**G-11: at astral-go `5c18d9c`, `tree.Node.Create` issues `tree.set` and never
+reads the response** (`astral-go/api/tree/client/node.go:151` opens the query,
+`astral-go/api/tree/client/node.go:160` returns without a read, both at
+`5c18d9c`). The consequence is worse than the unread `ack` the survey records:
+batch mode answers one object per object received, so a `Create` that sent none
+leaves **nothing** on the wire when it succeeds and an `error_message` when the
+path walk failed -- the one case a caller needs. `create()` sends the `eos` and
+reads to the end of the stream, so a failed creation raises `RemoteError`
+instead of returning a handle for a node that does not exist. At the pin,
+`Create` sends the `eos` (`astral-go/api/tree/client/node.go:165`) and reads to
+it with errors passed through (`astral-go/api/tree/client/node.go:168`), and
+batch mode mirrors the `eos` back on success
+(`astral-go/api/tree/client/server.go:132`, `channel.Batch`).
 
 **`client.tree` is the surface design section 5.1 specifies**, a cached property
 in `client.py`; `Tree(client)` constructs the same object and is what the tests
@@ -106,7 +110,8 @@ Source citations name a single line each, and every one of them is read back by
 `tests/test_api_tree.py`. astrald and astral-go are moving targets, and a
 citation that has drifted by two lines costs a reader more than an absent one:
 it makes them distrust the exact ones. Line numbers are pinned to astral-go
-`5c18d9c` and astrald `074a852b`.
+`6ea26c7` and astrald `26bb51d5`, the revisions `tests/reference.py` pins; a
+citation that names another revision is read at that revision.
 """
 
 from __future__ import annotations
@@ -147,7 +152,7 @@ ROOT: Final = "/"
 """The root path, and `tree.list`'s default.
 
 The node reads an absent `path` as the root
-(`astral-go/api/tree/client/server.go:202`), and the path walk strips one
+(`astral-go/api/tree/client/server.go:197`), and the path walk strips one
 leading slash and skips empty segments
 (`astral-go/api/tree/node.go:33`, `astral-go/api/tree/node.go:41`). An empty
 path and `/` therefore address the root alike. Verified live: a missing leading
@@ -278,7 +283,7 @@ class Tree(ModuleClient):
         """The names of a path's immediate subnodes. ST, ends at `eos`.
 
         Sorted by the node, so a caller redrawing a list does not reshuffle it
-        (`astral-go/api/tree/client/server.go:222`). A node with no subnodes
+        (`astral-go/api/tree/client/server.go:217`). A node with no subnodes
         answers a bare `eos`; a missing path answers an `error_message`. Names
         are path segments, not paths: join one onto `path` to address a child.
         """
@@ -392,10 +397,11 @@ class Tree(ModuleClient):
         the `eos` and answers one per object -- none, here.
 
         The `eos` is sent and the stream is read to its end, which is what
-        astral-go's `Node.Create` omits (bug G-11): on success the node answers
-        nothing, and on a failed walk it answers an `error_message` that the Go
-        client discards, so a creation that failed is reported as one that
-        worked. Here it raises `RemoteError`.
+        astral-go `5c18d9c`'s `Node.Create` omits (bug G-11): on success a node
+        at that revision answers nothing, and on a failed walk it answers an
+        `error_message` that the Go client discards, so a creation that failed
+        is reported as one that worked. Here it raises `RemoteError`. At the
+        pin, success answers the mirrored `eos` and no object.
 
         An `ack` is tolerated and not required, because zero objects earn zero
         answers on this node and a node that acknowledged the empty batch would
@@ -409,9 +415,9 @@ class Tree(ModuleClient):
         """Delete the node at a path. RR, one `ack`. **Mutates.**
 
         A node with subnodes cannot be deleted on its own: astrald answers `node
-        has subnodes` (`astrald/mod/tree/src/module.go:215`). `recursive=True`
+        has subnodes` (`astrald/mod/tree/src/module.go:222`). `recursive=True`
         descends the subtree depth-first and deletes from the leaves up
-        (`astral-go/api/tree/client/server.go:178`), and it descends **through
+        (`astral-go/api/tree/client/server.go:173`), and it descends **through
         remote mounts**, where every step is a query to the mounted node.
 
         The argument is `recursive` and is sent only when true. astral-docs
@@ -436,8 +442,8 @@ class Tree(ModuleClient):
         **Mutates.**
 
         `path` must be absolute and must not already be a mount point; astrald
-        answers `path must be absolute` (`astrald/mod/tree/src/module.go:92`) or
-        `mount point already exists` (`astrald/mod/tree/src/module.go:99`).
+        answers `path must be absolute` (`astrald/mod/tree/src/module.go:94`) or
+        `mount point already exists` (`astrald/mod/tree/src/module.go:101`).
         `node` is resolved by the node's own directory, so an alias,
         `localnode`, or 66 hex characters all reach it; an empty one is refused
         here, because the node's resolver reads it as the zero identity and
@@ -459,7 +465,7 @@ class Tree(ModuleClient):
 
         `root` is the path on the remote node, and is sent only when given. An
         absent `root` mounts the remote root, which is what `/` addresses too
-        (`astrald/mod/tree/src/module.go:126`).
+        (`astrald/mod/tree/src/module.go:131`).
 
         Every read under the mount point becomes a query to the remote node, so
         a `list` or a recursive `delete` below it leaves the local process.
@@ -479,7 +485,7 @@ class Tree(ModuleClient):
         The mount point only, never the nodes under it: unmounting drops the
         entry that overlaid the path and leaves whatever the local subtree held
         before. A path that is not a mount point answers `mount point does not
-        exist` (`astrald/mod/tree/src/module.go:116`), and a relative one
+        exist` (`astrald/mod/tree/src/module.go:118`), and a relative one
         answers `path must be absolute`.
 
         `/` is a mount point on every node -- astrald mounts the database store
@@ -527,7 +533,7 @@ def _target(value: Identity | str, op: str) -> str:
     """A target the node resolves: an alias, `localnode`, or a hex key.
 
     An empty string is refused: astrald's resolver maps `""` and `"anyone"` to
-    the zero identity (`astrald/mod/dir/src/module.go:56`), so an accidental
+    the zero identity (`astrald/mod/dir/src/module.go:58`), so an accidental
     empty target mounts a subtree of `anyone`.
     """
     if isinstance(value, Identity):

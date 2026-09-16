@@ -51,22 +51,20 @@ a property of astrald rather than an omission here:
 
 ## Authorization
 
-**Every `path:line` in this section is read at astrald `cc1cd3b7`.** Every other
-astrald citation in this module resolves at the pin `tests/reference.py` holds,
-and the two revisions disagree about this module: the action guard merged in
-`7c795f47` and the origin guard in `12f2ff54`, both after the pin. The op
-argument names are a third revision's: astrald `bd98bbe8` names an identity
-argument `identity` and `apphost.cancel`'s nonce `query_id`, and ignores the old
-names.
+**Every `path:line` in this module is read at the revisions `tests/reference.py`
+pins, astrald `26bb51d5` and astral-go `6ea26c7`,** except the census named as
+history below, which is read at astrald `074a852b`. The action guard merged in
+astrald `7c795f47` and the origin guard in `12f2ff54`, both after `074a852b`.
+astrald `bd98bbe8` names an identity argument `identity` and `apphost.cancel`'s
+nonce `query_id`, and ignores the old names.
 
 **`apphost.list_tokens` and `apphost.create_token` are administration, not
 introspection.** Each refuses a query whose origin is the network and then asks
 `mod.auth.admin_manage_apps_action`, in that order, before it accepts the
-connection or reads a token -- `op_list_tokens.go:19,23` and
+connection or reads a token -- `op_list_tokens.go:20,24` and
 `op_create_token.go:20,24`, over the one question at
 `authorize_admin_manage_apps.go:17-21`. The action's name is astral-go's
-`AdminManageAppsAction.ObjectType()`, `api/auth/admin_manage_apps_action.go:19`
-at astral-go `cd234be`; the astral-go pin predates the file.
+`AdminManageAppsAction.ObjectType()`, `api/auth/admin_manage_apps_action.go:19`.
 
 `apphost.delete_token` carries the same pair (`op_delete_token.go:19,23`) and so
 does the grant surface beside it -- `apphost.grant`, `apphost.list_grants`,
@@ -75,7 +73,7 @@ the network origin too (`op_cancel.go:23`) and authorizes on ownership instead:
 a session cancels what it launched, and the action is the way past that
 (`op_cancel.go:58-68`).
 
-**The census, re-derived at `cc1cd3b7`.** Fourteen `op_*.go` files. Twelve
+**The census, re-derived at `26bb51d5`.** Fourteen `op_*.go` files. Twelve
 refuse a network origin; the two that do not are `whoami` and `register`. Six
 ask `mod.auth.admin_manage_apps_action` -- `create_token`, `delete_token`,
 `list_tokens`, `grant`, `list_grants`, `revoke`. One asks
@@ -101,20 +99,16 @@ An access token is a bearer credential: whoever reads one authenticates as the
 identity it was issued for. That is what makes reading the list administration,
 and it is why an SDK caller is told here that the value coming back is a secret.
 
-**The pin-era census stays, named as history.** At astrald `074a852b` -- the
-revision `tests/reference.py` pins, and the one every other astrald `path:line`
-in this module resolves at -- the module held thirteen ops, no op asked an
-action at all, and six guarded on origin: `bind`, `hold_object`,
-`unhold_object`, `list_held_objects`, `register_handler` and `install_app`. The
-seven that did not were `whoami`, `list_tokens`, `create_token`, `register`,
-`new_app_contract`, `sign_app_contract` and `cancel`. Three of the thirteen are
-since retired: `install_app` (`b51743cd`) along with the `apphost__local_apps`
-table it was the only writer of, and `new_app_contract` and `sign_app_contract`,
-whose contract `apphost.register` mints in one call. Moving the pin is what
-retires this paragraph, and it is a re-read of every astrald `path:line` in the
-package: bumping it to `cc1cd3b7` and running the suite turns 21 tests red, 19
-of them in the `crypto`, `dir`, `nat`, `tree` and `user` citation checks. That
-is a different change from this one.
+**The `074a852b` census stays, named as history.** At astrald `074a852b`, before
+both guards, the module held thirteen ops, no op asked an action at all, and six
+guarded on origin: `bind`, `hold_object`, `unhold_object`, `list_held_objects`,
+`register_handler` and `install_app`. The seven that did not were `whoami`,
+`list_tokens`, `create_token`, `register`, `new_app_contract`,
+`sign_app_contract` and `cancel`. Three of the thirteen are since retired:
+`install_app` (`b51743cd`) along with the `apphost__local_apps` table it was the
+only writer of, and `new_app_contract` and `sign_app_contract`, whose contract
+`apphost.register` mints in one call. The paragraph goes when the SDK stops
+supporting nodes that predate the two guards.
 """
 
 from __future__ import annotations
@@ -489,7 +483,7 @@ class Apphost(ModuleClient):
         the process (astral-docs bug D-13 is the claim that closing unregisters).
 
         Local-only, then `mod.auth.serve_apps_action` for the identity the
-        handler answers for (`op_register_handler.go:26` at astrald `cc1cd3b7`).
+        handler answers for (`op_register_handler.go:26`).
         That second check does not make the op an authenticated one. It registers
         under `q.Caller()`, which for an anonymous guest is the node's own
         identity because the core router substitutes it for a nil caller, and

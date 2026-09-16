@@ -109,8 +109,8 @@ read, so the divergence is unreachable from here.
 node's service list over `ZoneNetwork` and writes it into the local cache. The
 write is destructive first: `syncServices` calls `deleteAllProviderServices`
 before the first update arrives and never opens a transaction
-(`astrald/mod/services/src/module.go` `syncServices`, lines 41-60 at astrald
-`3392926b`), so a sync that dies mid-stream leaves the local registry **empty**
+(`astrald/mod/services/src/module.go` `syncServices`, lines 42-61 at astrald
+`26bb51d5`), so a sync that dies mid-stream leaves the local registry **empty**
 for that provider rather than unchanged. astrald ships `DB.InTx` and documents
 it as "the only transaction API"; this path does not use it. The defect is
 reported against astrald and carries no number in the design's register.
@@ -119,7 +119,7 @@ reported against astrald and carries no number in the design's register.
 only after `syncServices` returns, and with `follow` that call runs until its
 context is cancelled. astrald cancels it on **any inbound channel object**:
 `OpSync` parks a goroutine on `ch.Receive()` and cancels on the first thing it
-reads (`op_sync.go:31-34`). So the shape is BD, not RR -- the caller must send
+reads (`op_sync.go:35-38`). So the shape is BD, not RR -- the caller must send
 something to end it -- and `sync_follow()` is that method. `sync()` is the RR
 form and never sets `follow`.
 
@@ -130,7 +130,7 @@ form and never sets `follow`.
 `opSyncArgs.ID string` with no `query` tag, so `Op.invoke`'s required check does
 not fire and an absent argument reaches the op as the empty string, which
 `dir.ResolveIdentity` maps to the **zero identity**
-(`astrald/mod/dir/src/module.go:56`). A sync of `anyone` wipes the cache for the
+(`astrald/mod/dir/src/module.go:58`). A sync of `anyone` wipes the cache for the
 zero identity and then routes a query to it. `sync()` therefore refuses an empty
 id rather than sending one, the same rule `dir.resolve` applies for the same
 reason. astrald `bd98bbe8` tags `opSyncArgs.Identity` `query:"required"`; an
@@ -148,8 +148,8 @@ Registration does not wait on it either way: `astral/__init__.py` imports the
 whole `api` package eagerly, so whether `services.update` decodes never depends
 on which property a caller happened to touch.
 
-Line numbers cite astrald `3392926b` and astral-go `0a15afb`, the reference
-heads this module was read against.
+Line numbers cite astrald `26bb51d5` and astral-go `6ea26c7`, the revisions
+`tests/reference.py` pins, and `tests/test_api_services.py` reads each one back.
 """
 
 from __future__ import annotations
@@ -216,7 +216,7 @@ class Update:
     An update is a **delta**, not a listing: `available` false names a service
     that is gone and carries no `info`. astrald's own consumer reads it that way
     -- `syncServices` creates a cache row when `Available` is set and deletes one
-    otherwise (`astrald/mod/services/src/module.go` `syncServices`, lines 48-55).
+    otherwise (`astrald/mod/services/src/module.go` `syncServices`, lines 49-56).
 
     `provider_id` is `None` when the node wrote `0x00`, and `info` likewise. Both
     are nil on every update the two shipped discoverers produce, because neither
@@ -542,7 +542,7 @@ def _name(value: str | Identity) -> str:
     """A name argument the node resolves: an alias, `localnode`, or a hex key.
 
     An empty string is refused: the node's resolver maps it to the zero identity
-    (`astrald/mod/dir/src/module.go:56`), so an accidental empty id syncs
+    (`astrald/mod/dir/src/module.go:58`), so an accidental empty id syncs
     `anyone` -- and `services.sync` mutates, so the accident costs the cached
     services of the zero identity rather than one wasted query.
     """

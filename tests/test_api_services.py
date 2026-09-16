@@ -58,6 +58,7 @@ from astral.spec import Primitive, Ptr
 from astral.types import Identity
 
 import live_support
+import reference
 from astral.api import services as services_module
 from mock_apphost import (
     ACK,
@@ -1062,6 +1063,48 @@ class ModulePlumbingTest(ServicesCase):
         self.assertIn("astral.api.services", sys.modules)
         self.assertIs(astral.api.services, services_module)
         self.assertIs(astral.api.Services, Services)
+
+
+class CitationTest(unittest.TestCase):
+    """Every line number `astral.api.services` cites lands on its claim.
+
+    Read at the pins `tests/reference.py` holds, so upstream drift is a
+    deliberate bump rather than a surprise failure. Absent reference: skip.
+    """
+
+    CITES = (
+        (reference.ASTRAL_GO, "api/services/update.go", 19, 'return "services.update"'),
+        (reference.ASTRAL_GO, "lib/query/field_editor.go", 143, "case reflect.Bool:"),
+        (reference.ASTRALD, "mod/services/src/module.go", 42, "deleteAllProviderServices"),
+        (reference.ASTRALD, "mod/services/src/module.go", 49, "switch {"),
+        (reference.ASTRALD, "mod/services/src/module.go", 53, "createProviderService"),
+        (reference.ASTRALD, "mod/services/src/module.go", 55, "deleteProviderService"),
+        (reference.ASTRALD, "mod/services/src/op_sync.go", 36, "ch.Receive()"),
+        (reference.ASTRALD, "mod/services/src/op_sync.go", 37, "cancel()"),
+        (reference.ASTRALD, "mod/dir/src/module.go", 58, 'if s == "" || s == "anyone"'),
+    )
+
+    def test_every_cited_line_lands_on_its_claim(self):
+        for repo, path, number, expected in self.CITES:
+            with self.subTest(citation=f"{path}:{number}"):
+                try:
+                    line = reference.cited_line(repo, path, number)
+                except reference.Unavailable as exc:  # pragma: no cover
+                    self.skipTest(str(exc))
+                self.assertIn(expected, line)
+
+    def test_the_cache_is_cleared_and_refilled_outside_a_transaction(self):
+        """`syncServices`, lines 42-61: the delete and every write, no `InTx`."""
+        try:
+            lines = reference.read(
+                reference.ASTRALD, "mod/services/src/module.go"
+            ).splitlines()[41:61]
+        except reference.Unavailable as exc:  # pragma: no cover
+            self.skipTest(str(exc))
+        body = "\n".join(lines)
+        self.assertIn("deleteAllProviderServices", lines[0])
+        self.assertNotIn("InTx", body)
+        self.assertEqual(lines[-1].strip(), "}")
 
 
 # --- Tier C: the read-only half against a real node ----------------------

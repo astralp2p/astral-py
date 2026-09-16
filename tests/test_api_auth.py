@@ -669,7 +669,7 @@ class DivergenceTest(unittest.TestCase):
     """
 
     def test_an_empty_permit_list_marshals_to_null_where_the_node_sends_an_array(self):
-        """`astral-go/astral/slice_value.go:90` allocates a non-nil array so an
+        """`astral-go/astral/slice_value.go:119` allocates a non-nil array so an
         empty slice marshals to `[]`, and the node's zero contract carries
         `"Permits":[]`. The SDK's JSON codec maps an empty container to `null`,
         which astral-go reads back as a nil slice, so the divergence is in the
@@ -1198,10 +1198,10 @@ class CitationTest(unittest.TestCase):
 
     CITATIONS = {
         "astral/channel/switch.go:101": "NewErrUnexpectedObject",
-        "astral/struct_value.go:149": "s.Type().Field(i).Name",
+        "astral/struct_value.go:163": "s.Type().Field(i).Name",
         "astral/time.go:16": "func (t Time) WriteTo",
         "astral/identity.go:87": "func (id *Identity) String()",
-        "astral/slice_value.go:90": "make([]json.RawMessage",
+        "astral/slice_value.go:119": "make([]json.RawMessage",
     }
 
     def test_every_cited_line_lands_on_its_claim(self):

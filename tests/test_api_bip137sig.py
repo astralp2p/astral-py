@@ -8,8 +8,8 @@ Three tiers, each making a claim the tier above it cannot:
   derivation-path grammar against the node's own answers, element for element.
 - **Tier B** pins every op against `MockApphost`: which value reaches the query
   string, which reaches the channel body, and that **no `eos` is ever sent**.
-  That last one is the trap here. Every `crypto` op ends its `ch.Switch` with
-  `BreakOnEOS` and needs a terminator; not one op in this module reads a second
+  That last one is the trap here. Every `crypto` op leaves its `ch.Switch` on an
+  `eos` and needs a terminator; not one op in this module reads a second
   object, so a terminator would sit unread in the node's receive buffer and the
   close would reset the connection, discarding the answer the node had already
   written. A test asserts on the frames the mock received, so an implementation

@@ -1024,7 +1024,7 @@ DEFAULT_WS_ENDPOINT = "ws://127.0.0.1:8624/.ws"
 
 class LiveWebSocketTest(unittest.IsolatedAsyncioTestCase):
     """Tier C. Skips unless the live tier is on **and** the node's HTTP listener
-    answers: `bind_http` defaults to `tcp:0.0.0.0:8624` but is configurable, so
+    answers: `bind_http` defaults to `tcp:127.0.0.1:8624` but is configurable, so
     an unreachable WebSocket is a skip and never a failure."""
 
     async def asyncSetUp(self) -> None:

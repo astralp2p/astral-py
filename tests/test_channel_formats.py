@@ -198,7 +198,7 @@ class EmitterReadsBackTest(unittest.IsolatedAsyncioTestCase):
             "the zero value's json form is the literal `unknown`, which "
             "astral-go's UnmarshalText reads back as the zero endpoint, while "
             "its binary form is two bytes where ReadFrom wants 37. Both halves "
-            "are astral-go's (api/tor/endpoint.go, digest.go at 5c18d9c) and "
+            "are astral-go's (api/tor/endpoint.go, digest.go at 6ea26c7) and "
             "neither can be repaired without leaving the node behind"
         ),
     }
@@ -256,7 +256,7 @@ class EmitterReadsBackTest(unittest.IsolatedAsyncioTestCase):
         and leaves the consumer with a clean, complete, wrong answer.
 
         astral-go writes `" " + text + "\\n"` with no escaping
-        (`astral/channel/text_sender.go` at `5c18d9c`), so escaping here would
+        (`astral/channel/text_sender.go` at `6ea26c7`), so escaping here would
         leave the node behind; base64 is a spelling its `TextReceiver` reads.
         """
         forged = P.String16("xxx\n#[eos] ")

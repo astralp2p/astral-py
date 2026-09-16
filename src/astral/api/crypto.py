@@ -14,12 +14,16 @@ and four pure local helpers that need no node at all.
 | `crypto.verify_text_signature` | WA | `string16` then `mod.crypto.signature` | `ack` \\| `error_message` | read-only |
 | `secp256k1.new` | RR | -- | `mod.crypto.private_key` | generates, stores nothing |
 
-**Not one of these ops sends `eos`.** astral-go's `Channel.Close` closes the
-transport and writes no terminator (`astral/channel/channel.go` `Close`), and
-every crypto op ends in `defer ch.Close()`, so each one terminates at EOF. The
-SDK sends `eos` on the ops that read a body, because every one of them ends its
-`ch.Switch` with `channel.BreakOnEOS` and so leaves its read loop on the
-terminator rather than on a read error.
+**No op here sends `eos` unless the caller sent one.** astral-go's
+`Channel.Close` closes the transport and writes no terminator
+(`astral/channel/channel.go` `Close`), and every crypto op ends in
+`defer ch.Close()`, so each one terminates at EOF. The SDK sends `eos` on the
+ops that read a body, because every one of them leaves its `ch.Switch` on the
+terminator rather than on a read error: `channel.BreakOnEOS` at astrald
+`074a852b`, `channel.MarkEOS` from `dc89aa71`. From `dc89aa71` the five body ops
+answer that `eos` with a final `eos` of their own; at `074a852b` none does.
+`secp256k1.new` and the query-argument form of `crypto.sign_hash` read no body
+and send no `eos` at either revision.
 
 **The input shape is the trap this module is famous for.** astral-js and
 astral-py once shared a bug in which `crypto.public_key`,
@@ -30,7 +34,7 @@ on the channel body (`mod/crypto/src/op_verify_hash_signature.go`,
 `op_verify_text_signature.go`), so an implementation that never streams one
 gets an accepted query, no answer, EOF -- and, if it reports that as success,
 **silently never verifies**. Every shape below was read out of astrald's
-`mod/crypto/src` at `074a852b`, never out of a sibling SDK.
+`mod/crypto/src` at `26bb51d5`, never out of a sibling SDK.
 
 **One rule decides where each value travels**, and it is stated once here so no
 method has to argue it again:
@@ -49,38 +53,48 @@ every routed query to its log at the default verbosity** --
 `Infov(0, "%v routed in %v", q.Query, d)`, and `astral.Query` has no `String()`,
 so `%v` renders the struct with `QueryString` in it.
 
-**`crypto.public_key` crashes the node when the key type is not `secp256k1`.**
-`OpPublicKey` sends `secp256k1.PublicKey(key)` straight onto the channel, and
-that function returns a **nil** `*crypto.PublicKey` for any other key type
+**`crypto.public_key` crashes a node on astrald `074a852b` and astral-go
+`5c18d9c` when the key type is not `secp256k1`.** `OpPublicKey` there sends
+`secp256k1.PublicKey(key)` straight onto the channel, and that function returns
+a **nil** `*crypto.PublicKey` for any other key type
 (`astral-go/api/secp256k1/module.go` `PublicKey`, line 31). Every sender starts
 with `object.ObjectType()`, `ObjectType` is declared on the value receiver, and
-calling it through a nil pointer dereferences nil. Nothing recovers: the op runs
-in a bare `go func()` (`astral-go/lib/routing/op.go` `RouteQuery`, line 90) and
-there is exactly one `recover()` in either repository, in `astrald/debug`, which
-re-panics anyway.
+calling it through a nil pointer dereferences nil. Nothing recovers at those
+revisions: the op runs in a bare `go func()` (`astral-go/lib/routing/op.go`
+`RouteQuery`, line 91 at `5c18d9c`) and there is exactly one `recover()` outside
+tests in either repository, in `astrald/debug`, which re-panics anyway.
+
+**The pins do not crash, for two independent reasons.** astral-go `f86be1a`
+recovers a panicking op into `ErrPanic` (`lib/routing/op.go` `invoke`), and
+`8391b20` closes the connection such an op abandons. astrald `640fbc12` answers
+a foreign key type in band with `unsupported key type: <type>` before any nil
+reaches the channel (`mod/crypto/src/op_public_key.go`). A node carrying either
+`f86be1a` or `640fbc12` survives the call; a node carrying neither dies.
 
 **No authentication stands between a caller and it.** An IPC guest is never
 gated -- `blocksAnonymousWeb` returns false for an empty web origin, so a local
 process needs no token at all -- and an unauthenticated *browser* guest reaches
 it too while the node is unclaimed, because `crypto.public_key` is on the
-`anonymous_web_allowlist.Unclaimed` list (`mod/apphost/src/config.go`, line 70).
-**`public_key()` refuses a foreign key type before it sends anything**; that
-guard is the most load-bearing line in this file.
+`anonymous_web_allowlist.Unclaimed` list (`mod/apphost/src/config.go`, line 82).
+**`public_key()` refuses a foreign key type before it sends anything**, because
+a caller cannot tell which side of those two commits a node is on; that guard is
+the most load-bearing line in this file.
 
-It is the same defect class as `objects.new?type=mod.nodes.node_info`, and that
-one has been fixed -- astral-go `0a15afb`, "stop NodeInfo.WriteTo panicking on a
-nil Identity", substitutes the zero identity for a nil pointer. This one has
-not, and is the sharper of the two: `NodeInfo` needed a nil field *inside* a
-value, where `OpPublicKey` hands the channel a nil *object* and the panic lands
-in `ObjectType()` before any field is read.
+It is the same defect class as `objects.new?type=mod.nodes.node_info`, which
+astral-go `0a15afb`, "stop NodeInfo.WriteTo panicking on a nil Identity", fixes
+by substituting the zero identity for a nil pointer. This one is fixed by
+astrald `640fbc12` and is the sharper of the two: `NodeInfo` needed a nil field
+*inside* a value, where `OpPublicKey` at `074a852b` hands the channel a nil
+*object* and the panic lands in `ObjectType()` before any field is read.
 
-**`crypto.sign_text` ignores a public key streamed on its body.**
-`OpSignText` builds its signer from `signerKey` *before* entering `ch.Switch`
-(`mod/crypto/src/op_sign_text.go`, line 38); the `*crypto.PublicKey` branch then
-assigns to `signerKey` and answers `ack`, but `signer` has already captured the
-old key, so the text is signed as the caller and the `ack` says otherwise. Its
-sibling `OpSignHash` builds the signer *inside* `signAndSend` and does honour a
-streamed key, which is what makes this an oversight rather than a design. This
+**Before astrald `341fcdd5`, `crypto.sign_text` ignores a public key streamed on
+its body.** `OpSignText` builds its signer from `signerKey` *before* entering
+`ch.Switch` (`mod/crypto/src/op_sign_text.go`, line 38 at `074a852b`); the
+`*crypto.PublicKey` branch then assigns to `signerKey` and answers `ack`, but
+`signer` has already captured the old key, so the text is signed as the caller
+and the `ack` says otherwise. Its sibling `OpSignHash` builds the signer
+*inside* `signAndSend` and does honour a streamed key, which is what makes this
+an oversight rather than a design. This
 SDK sends `key` as a query argument on every sign and verify op, which is
 parsed before the switch and therefore works on both -- so nothing here depends
 on the broken path, and nothing here can be repaired into depending on it.
@@ -134,12 +148,11 @@ Reached as `client.crypto`, the `functools.cached_property` design section 5.1
 asks for, or as `Crypto(client)`, which constructs the same object and is what
 the tests here use.
 
-Source citations are pinned to astrald `074a852b` and astral-go `5c18d9c`. Both
-references have moved since -- astrald to `3392926b`, astral-go to `0a15afb` --
-and `mod/crypto`, `mod/secp256k1`, `mod/bip137sig`, `api/crypto` and
-`api/secp256k1` are byte for byte unchanged across both moves, so every line
-number above still resolves at either end. `tests/test_api_crypto.py` reads
-those directories rather than trusting this paragraph.
+Source citations are pinned to astrald `26bb51d5` and astral-go `6ea26c7`, the
+revisions `tests/reference.py` names. A citation that names another revision
+resolves at that revision: the `074a852b` and `5c18d9c` ones describe nodes that
+predate the commit named beside them. `tests/test_api_crypto.py` reads those
+directories rather than trusting this paragraph.
 """
 
 from __future__ import annotations
@@ -387,7 +400,7 @@ def _split_key_text(text: str, type_name: str) -> tuple[str, str]:
     A missing colon is `invalid format` there and a `ParseError` here. **An empty
     prefix is not refused**, because astral-go does not refuse it -- its
     `UnmarshalText` checks the part count and nothing else (`api/crypto/
-    public_key.go` at `5c18d9c`) -- and because the zero value of all three types
+    public_key.go` at `6ea26c7`) -- and because the zero value of all three types
     is exactly the one this used to reject: `PublicKey().text()` is `":"`, so a
     parser that refused it refused its own encoder's output and the text channel
     was the one framing of four that could not carry a zero key.
@@ -635,11 +648,14 @@ def _key_param(value: PublicKey | Identity | str, op: str) -> str:
 def _refuse_node_crash(key: PrivateKey, op: str) -> None:
     """The guard that keeps `crypto.public_key` from killing the node.
 
-    `OpPublicKey` answers with whatever `secp256k1.PublicKey(key)` returns and
-    that is a nil pointer for every key type but `secp256k1`; the sender then
-    calls `ObjectType()` through it and the process dies with no recovery
-    anywhere above (see the module docstring). The message names the crash
-    because a caller who reads "unsupported key type" will retry.
+    At astrald `074a852b`, `OpPublicKey` answers with whatever
+    `secp256k1.PublicKey(key)` returns and that is a nil pointer for every key
+    type but `secp256k1`; the sender then calls `ObjectType()` through it and,
+    at astral-go `5c18d9c`, the process dies with no recovery anywhere above
+    (see the module docstring). astrald `640fbc12` answers the type in band and
+    astral-go `f86be1a` contains the panic, but a caller cannot tell which node
+    it has. The message names the crash because a caller who reads "unsupported
+    key type" will retry.
     """
     if key.is_secp256k1:
         return
@@ -725,8 +741,9 @@ class Crypto(ModuleClient):
         module's docstring names.
 
         A key type other than `secp256k1` is refused here and never sent,
-        because the op crashes the node on one. `public_key_of()` is the local
-        form and needs no node.
+        because the op crashes a node that carries neither astrald `640fbc12`
+        nor astral-go `f86be1a` on one. `public_key_of()` is the local form and
+        needs no node.
         """
         return (await self.public_key_many([private_key], **kw))[0]
 
@@ -1042,9 +1059,10 @@ class Crypto(ModuleClient):
         async with self._one_shot(qs, kw) as (stream, budget):
             for obj in inputs:
                 await stream.send(obj, timeout=budget.remaining)
-            # Every crypto op ends its switch with `BreakOnEOS`, so the
-            # terminator is what lets the op leave its read loop cleanly rather
-            # than on the read error a bare close produces.
+            # Every crypto op leaves its switch on `eos` (`BreakOnEOS` at
+            # astrald `074a852b`, `MarkEOS` from `dc89aa71`), so the terminator
+            # is what lets the op leave its read loop cleanly rather than on the
+            # read error a bare close produces.
             await stream.send_eos(timeout=budget.remaining)
             answers = stream.raw_objects()
             seen: list[Any] = []
@@ -1120,8 +1138,9 @@ CRYPTO_TYPES: Final[Sequence[type]] = (Hash, PrivateKey, PublicKey, Signature)
 
 `registry.add(*Crypto.TYPES)` puts the whole crypto vocabulary in a `Blueprints`
 that is not the default one. These four are the only `mod.crypto.*` types
-astral-go registers (`api/crypto/*.go`, four `astral.Add` calls); `secp256k1`
-declares none of its own -- its op answers a `mod.crypto.private_key`.
+astral-go registers (`api/crypto/*.go`, four `astral.MustAdd` calls);
+`secp256k1` declares none of its own -- its op answers a
+`mod.crypto.private_key`.
 """
 
 Crypto.TYPES = CRYPTO_TYPES

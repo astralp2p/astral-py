@@ -26,10 +26,12 @@ claim:
 
 **Two live calls are deliberately absent and must stay absent.**
 
-`crypto.public_key` with a key type other than `secp256k1` **kills the node**:
-astrald answers with a nil `*crypto.PublicKey` whose `ObjectType()` dereferences
-nil, in a goroutine nothing recovers. The guard that refuses it is tested
-against the mock, where the assertion is that *nothing was sent at all*.
+`crypto.public_key` with a key type other than `secp256k1` **kills a node that
+carries neither astrald `640fbc12` nor astral-go `f86be1a`**: astrald
+`074a852b` answers with a nil `*crypto.PublicKey` whose `ObjectType()`
+dereferences nil, in a goroutine nothing at astral-go `5c18d9c` recovers. The
+guard that refuses it is tested against the mock, where the assertion is that
+*nothing was sent at all*.
 
 `crypto.sign_hash` and `crypto.sign_text` with no `key` sign as the caller. On
 a node that predates astrald `341fcdd5` an anonymous caller is the node and
@@ -179,8 +181,8 @@ def op(*replies: tuple[str, bytes], eos: bool = False):  # type: ignore[no-untyp
     """A route shaped like astrald's `ch.Switch`: read one object, answer one.
 
     Every crypto op that takes a body has exactly this shape -- the switch reads
-    a frame, the matching branch answers, the loop goes round, `BreakOnEOS` ends
-    it -- so modelling it is both more faithful than a canned `Accept` and the
+    a frame, the matching branch answers, the loop goes round, an `eos` ends it
+    -- so modelling it is both more faithful than a canned `Accept` and the
     only way to test these ops at all: `MockApphost` writes an `Accept` body and
     closes at once, while every op here writes its input **after** the query has
     been accepted, so the two race and the client's frames are dropped.
@@ -633,10 +635,11 @@ class PublicKeyTest(CryptoCase):
 
     @bounded()
     async def test_a_foreign_key_type_is_refused_and_nothing_is_sent(self):
-        """The guard that matters most in this module. astrald answers a nil
-        `*crypto.PublicKey` for any type but `secp256k1`, the sender calls
-        `ObjectType()` through it, and the process dies with no recovery
-        anywhere above. The assertion is that the node was never asked."""
+        """The guard that matters most in this module. astrald `074a852b`
+        answers a nil `*crypto.PublicKey` for any type but `secp256k1`, the
+        sender calls `ObjectType()` through it, and at astral-go `5c18d9c` the
+        process dies with no recovery anywhere above. The assertion is that the
+        node was never asked."""
         async with MockApphost(
             routes={OP_PUBLIC_KEY: op(PUBLIC_KEY_FRAME)}
         ) as mock:
@@ -651,7 +654,8 @@ class PublicKeyTest(CryptoCase):
     @bounded()
     async def test_one_foreign_key_anywhere_in_a_batch_sends_nothing(self):
         """Every key is checked before the first is written, because a batch
-        that failed halfway would have already killed the node."""
+        that failed halfway would have already killed a node that carries
+        neither astrald `640fbc12` nor astral-go `f86be1a`."""
         async with MockApphost(
             routes={OP_PUBLIC_KEY: op(PUBLIC_KEY_FRAME)}
         ) as mock:
@@ -1078,10 +1082,15 @@ class AstraldParityTest(unittest.TestCase):
             names = reference.listdir(reference.ASTRALD, directory)
         except reference.Unavailable as exc:  # pragma: no cover -- may be absent
             self.skipTest(str(exc))
+        # `_test.go` is excluded: astrald grew `op_decode_error_test.go`,
+        # `op_public_key_test.go` and `op_rig_test.go` beside the ops, and none
+        # of them is an op.
         return {
             name[len("op_") : -len(".go")]
             for name in names
-            if name.startswith("op_") and name.endswith(".go")
+            if name.startswith("op_")
+            and name.endswith(".go")
+            and not name.endswith("_test.go")
         }
 
     IMPLEMENTED = {
@@ -1119,14 +1128,32 @@ class AstraldParityTest(unittest.TestCase):
                 self.assertIn("crypto.Signature", source)
                 self.assertIn("ch.Switch", source)
 
-    def test_op_public_key_still_sends_an_underived_public_key(self):
-        """The crash the guard exists for. `secp256k1.PublicKey` answers nil for
-        a foreign key type and `OpPublicKey` sends the result unchecked; if
-        astrald ever adds the nil test, this fails and the guard can be
-        reconsidered."""
-        source = self.source(f"{self.ASTRALD}/op_public_key.go")
+    def test_at_074a852b_op_public_key_sends_an_underived_public_key(self):
+        """The crash the guard exists for, read at the revision it describes.
+        `secp256k1.PublicKey` answers nil for a foreign key type and
+        `OpPublicKey` there sends the result unchecked."""
+        try:
+            source = reference.read(
+                reference.ASTRALD, f"{self.ASTRALD}/op_public_key.go", "074a852b"
+            )
+        except reference.Unavailable as exc:  # pragma: no cover -- may be absent
+            self.skipTest(str(exc))
         self.assertIn("ch.Send(secp256k1.PublicKey(key))", source)
         self.assertNotIn("== nil", source)
+
+    def test_from_640fbc12_op_public_key_answers_a_foreign_key_in_band(self):
+        """The fix the module docstring names, read at the pin: the nil is
+        tested before it reaches the channel and answered as an
+        `ErrUnsupportedKeyType` error object. The SDK's guard stays, because a
+        caller cannot tell which side of this commit a node is on."""
+        source = self.source(f"{self.ASTRALD}/op_public_key.go")
+        self.assertIn("if publicKey == nil {", source)
+        self.assertIn("cryptomod.ErrUnsupportedKeyType", source)
+        self.assertNotIn("ch.Send(secp256k1.PublicKey(key))", source)
+        errors = self.source("mod/crypto/errors.go")
+        self.assertIn(
+            'ErrUnsupportedKeyType = errors.New("unsupported key type")', errors
+        )
 
     def test_public_key_is_reachable_with_no_credential_at_all(self):
         """Both halves of the module docstring's security claim. An IPC guest is
@@ -1150,21 +1177,14 @@ class AstraldParityTest(unittest.TestCase):
         self.assertIn('Infov(0, "%v routed in %v", q.Query, d)', source)
 
     def test_from_341fcdd5_both_sign_ops_build_their_signer_per_signature(self):
-        """The fix to the defect the next test pins at the pin, read where it
-        landed: `NewTextSigner` moved inside `signAndSend`, after the
-        authorization every signature passes. The module's docstring says a
-        streamed key is honoured and a refused key answers per text from this
-        commit, and this is that claim's source."""
-        try:
-            text_source = reference.read(
-                reference.ASTRALD, f"{self.ASTRALD}/op_sign_text.go", "26bb51d5"
-            )
-            guard = reference.read(
-                reference.ASTRALD, f"{self.ASTRALD}/sign_guard.go", "26bb51d5"
-            )
-            errors = reference.read(reference.ASTRALD, "mod/crypto/errors.go", "26bb51d5")
-        except reference.Unavailable as exc:  # pragma: no cover -- may be absent
-            self.skipTest(str(exc))
+        """The fix to the defect the next test reads at `074a852b`, read at the
+        pin: `NewTextSigner` moved inside `signAndSend`, after the authorization
+        every signature passes. The module's docstring says a streamed key is
+        honoured and a refused key answers per text from this commit, and this
+        is that claim's source."""
+        text_source = self.source(f"{self.ASTRALD}/op_sign_text.go")
+        guard = self.source(f"{self.ASTRALD}/sign_guard.go")
+        errors = self.source("mod/crypto/errors.go")
         start = text_source.index("var signAndSend")
         self.assertGreater(text_source.index("mod.NewTextSigner"), start)
         self.assertGreater(
@@ -1175,13 +1195,20 @@ class AstraldParityTest(unittest.TestCase):
         self.assertIn('"cannot sign with the node\'s key"', errors)
         self.assertIn('"cannot sign with another identity\'s key"', errors)
 
-    def test_op_sign_text_still_builds_its_signer_before_the_switch(self):
+    def test_at_074a852b_op_sign_text_builds_its_signer_before_the_switch(self):
         """The reason this SDK sends `key` as an argument on every sign op, read
-        at the pin. astrald moved the construction inside `signAndSend` at
-        `341fcdd5` (the test above), so the note now describes older nodes and
-        stays for them; this fails only when the pin moves past that commit."""
-        text_source = self.source(f"{self.ASTRALD}/op_sign_text.go")
-        hash_source = self.source(f"{self.ASTRALD}/op_sign_hash.go")
+        at the revision the module docstring names for it. astrald moved the
+        construction inside `signAndSend` at `341fcdd5` (the test above), so the
+        note describes older nodes and stays for them."""
+        try:
+            text_source = reference.read(
+                reference.ASTRALD, f"{self.ASTRALD}/op_sign_text.go", "074a852b"
+            )
+            hash_source = reference.read(
+                reference.ASTRALD, f"{self.ASTRALD}/op_sign_hash.go", "074a852b"
+            )
+        except reference.Unavailable as exc:  # pragma: no cover -- may be absent
+            self.skipTest(str(exc))
         # In sign_text the signer is built once, above `signAndSend`.
         self.assertLess(
             text_source.index("mod.NewTextSigner"),
@@ -1202,7 +1229,8 @@ class LiveCryptoTest(live_support.LiveCase):
     """The read-only half, against a real node, as an anonymous caller.
 
     Nothing here sends a private key whose type is not `secp256k1`, because that
-    kills the node.
+    kills a node that carries neither astrald `640fbc12` nor astral-go
+    `f86be1a`.
 
     **Every sign call here is refused.** From astrald `341fcdd5` a caller signs
     only as itself, the core router makes an anonymous caller the node, and the

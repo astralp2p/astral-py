@@ -20,13 +20,15 @@ claim is made at each and the three must agree:
 `purge`, `new_mem`, `remove_repository` and the three `register_*` ops are
 exercised against the mock only; Tier C is the read-only subset of design
 section 13's anonymous safe list. `objects.new` is never swept over type names:
-`mod.nodes.node_info` panics astrald deterministically, and the one test that
-names that type asserts the client refuses it without sending anything.
+`mod.nodes.node_info` panics astrald deterministically on a build before astral-go
+`0a15afb`, and the one test that names that type asserts the client refuses it
+without sending anything.
 """
 
 from __future__ import annotations
 
 import asyncio
+import pathlib
 import unittest
 
 import astral
@@ -99,6 +101,7 @@ from astral.spec import PRIMITIVE_TYPES, AnySpec, Primitive, Ptr
 from astral.types import Duration, Identity, ObjectID, Size, Zone
 
 import live_support
+import reference
 from mock_apphost import (
     Accept,
     FURRY_BOLT,
@@ -542,7 +545,7 @@ class SearchGrammarTest(unittest.TestCase):
         """A query built rather than parsed can hold what the grammar cannot
         spell, and the text channel loses it silently -- `bin`, `json` and
         `canonical` all carry it exactly. The loss is astral-go's
-        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 5c18d9c),
+        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 6ea26c7),
         which a registered searcher parses the same query with, so the SDK
         matching it is what keeps the two agreeing about the question.
 
@@ -1511,9 +1514,10 @@ class NewOpTest(ObjectsCase):
 
     @bounded()
     async def test_the_node_killing_type_is_refused_without_a_query(self):
-        """`mod.nodes.node_info`'s zero value holds a nil `*Identity` and its
-        `WriteTo` has a value receiver, so serialising it kills astrald. The fix
-        is not merged, so the running node still crashes."""
+        """`mod.nodes.node_info`'s zero value holds a nil `*Identity` and, at
+        astral-go `5c18d9c`, its `WriteTo` has a value receiver, so serialising
+        it kills astrald. astral-go `0a15afb` fixes it; a node built before that
+        still crashes, and a client cannot tell which build it reached."""
         mock = MockApphost()
         async with mock:
             o = await self.objects(mock)
@@ -2366,6 +2370,45 @@ class LiveObjectsTest(live_support.LiveCase):
         ids = await self.objects.scan(REPO_MAIN, zone=Zone.DEVICE, timeout=20)
         for object_id in ids:
             self.assertIsInstance(object_id, ObjectID)
+
+
+class CitationTest(unittest.TestCase):
+    """Every `path:line` this module cites lands on its claim at the pin."""
+
+    CITATIONS = (
+        (
+            reference.ASTRAL_GO,
+            "astral/channel/channel.go",
+            69,
+            "br.AllowUnparsed = cfg.allowUnparsed",
+        ),
+        (
+            reference.ASTRALD,
+            "mod/apphost/src/guest.go",
+            224,
+            "ctx = ctx.WithZone(msg.Zone)",
+        ),
+    )
+
+    def test_every_cited_line_lands_on_its_claim(self):
+        for repo, path, number, expected in self.CITATIONS:
+            with self.subTest(citation=f"{path}:{number}"):
+                try:
+                    line = reference.cited_line(repo, path, number)
+                except reference.Unavailable as exc:  # pragma: no cover
+                    self.skipTest(str(exc))
+                self.assertIn(expected, line)
+
+    def test_only_the_lines_this_test_checks_are_cited(self):
+        """A `path:line` added to the module without a row here goes unread."""
+        import re
+
+        prose = pathlib.Path(objects_module.__file__).read_text(encoding="utf-8")
+        cited = set(re.findall(r"([\w/]+\.go):(\d+)", prose))
+        self.assertEqual(
+            {(path.rpartition("/")[2], number) for path, number in cited},
+            {(path.rpartition("/")[2], str(n)) for _, path, n, _ in self.CITATIONS},
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
