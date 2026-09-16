@@ -149,12 +149,14 @@ NODE_ZERO_JSON = {
 NODE_ACTION_BINARY = {
     "mod.auth.sudo_action": "00000000000000000000",
     "mod.objects.create_object_action": "000000000000000000",
-    "mod.user.adopt_action": "00000000000000000000",
+    "mod.user.admin_swarm_action": "0000000000000000000000",
 }
 NODE_ACTION_JSON = {
     "mod.auth.sudo_action": '{"Nonce":"0","ActorID":null,"AsID":null}',
     "mod.objects.create_object_action": '{"Nonce":"0","ActorID":null}',
-    "mod.user.adopt_action": '{"Nonce":"0","ActorID":null,"Subject":null}',
+    "mod.user.admin_swarm_action": (
+        '{"Nonce":"0","ActorID":null,"Subject":null,"ObjectID":null}'
+    ),
 }
 
 # The blueprint every action type is refused, and the reason astral-go gives.
@@ -419,14 +421,14 @@ class EmbedTest(unittest.TestCase):
         self.assertIn(inner, payload_bytes(signed))
 
     def test_an_action_s_value_embed_flattens_in_both_facades(self):
-        """`mod.user.adopt_action` on the node: ten binary bytes and three
-        top-level JSON keys, with no `Action` key anywhere."""
-        theirs = json.loads(NODE_ACTION_JSON["mod.user.adopt_action"])
-        self.assertEqual(sorted(theirs), ["ActorID", "Nonce", "Subject"])
+        """`mod.user.admin_swarm_action` on astrald `26bb51d5`: eleven binary
+        bytes and four top-level JSON keys, with no `Action` key anywhere."""
+        theirs = json.loads(NODE_ACTION_JSON["mod.user.admin_swarm_action"])
+        self.assertEqual(sorted(theirs), ["ActorID", "Nonce", "ObjectID", "Subject"])
         self.assertNotIn("Action", theirs)
         self.assertEqual(
-            len(bytes.fromhex(NODE_ACTION_BINARY["mod.user.adopt_action"])),
-            10,
+            len(bytes.fromhex(NODE_ACTION_BINARY["mod.user.admin_swarm_action"])),
+            11,
         )
 
 
@@ -439,27 +441,29 @@ class ActionBaseTest(unittest.TestCase):
         # registry would collide with it the moment it lands.
         self.registry = Blueprints()
 
-        @record("mod.user.adopt_action", registry=self.registry)
-        class AdoptAction(Action):
+        @record("mod.user.admin_swarm_action", registry=self.registry)
+        class AdminSwarmAction(Action):
             subject: Identity | None = wire("Subject", Ptr("identity"))
+            object_id: ObjectID | None = wire("ObjectID", Ptr("object_id.sha256"))
 
-        self.cls = AdoptAction
+        self.cls = AdminSwarmAction
 
     def test_the_base_fields_come_first_and_in_the_node_s_order(self):
         self.assertEqual(
-            [f.wire_name for f in self.cls.FIELDS], ["Nonce", "ActorID", "Subject"]
+            [f.wire_name for f in self.cls.FIELDS],
+            ["Nonce", "ActorID", "Subject", "ObjectID"],
         )
 
     def test_the_zero_payload_is_the_node_s(self):
         self.assertEqual(
             payload_bytes(self.cls()).hex(),
-            NODE_ACTION_BINARY["mod.user.adopt_action"],
+            NODE_ACTION_BINARY["mod.user.admin_swarm_action"],
         )
 
     def test_the_zero_json_is_the_node_s(self):
         self.assertEqual(
             jsoncodec.marshal(self.cls()),
-            json.loads(NODE_ACTION_JSON["mod.user.adopt_action"]),
+            json.loads(NODE_ACTION_JSON["mod.user.admin_swarm_action"]),
         )
 
     def test_an_action_with_no_extra_field_is_nine_bytes(self):
@@ -497,7 +501,7 @@ class PermitTest(unittest.TestCase):
             ASTRAL_TYPE = "mod.auth.see_objects_action"
 
         class Other:
-            ASTRAL_TYPE = "mod.user.adopt_action"
+            ASTRAL_TYPE = "mod.user.admin_swarm_action"
 
         self.assertTrue(permit.allows(Anything()))
         self.assertFalse(permit.allows(Other()))
@@ -575,8 +579,8 @@ class ContractTest(unittest.TestCase):
 
     def test_has_permit_selects_by_action_type(self):
         read = Permit(action="mod.auth.see_objects_action")
-        adopt = Permit(action="mod.user.adopt_action")
-        contract = Contract(permits=[read, None, adopt, read])
+        admin = Permit(action="mod.user.admin_swarm_action")
+        contract = Contract(permits=[read, None, admin, read])
         self.assertEqual(
             contract.has_permit("mod.auth.see_objects_action"), [read, read]
         )

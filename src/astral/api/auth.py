@@ -88,8 +88,8 @@ Go's default showing through a gap.
 
 **No action type has a blueprint.** `objects.get_blueprint` answers
 `error_message` for every one of them -- verified live for
-`mod.auth.sudo_action`, `mod.objects.create_object_action` and
-`mod.user.adopt_action`, each with
+`mod.auth.sudo_action` and `mod.objects.create_object_action` on `furry-bolt`,
+and for `mod.user.admin_swarm_action` on astrald `26bb51d5`, each with
 `BlueprintFromType <type>.Action: type auth.Action does not implement Object and
 is not a supported container`. `auth.Action` has no `ObjectType` method, so
 astral-go's blueprint derivation stops at the embedded field. A peer therefore
@@ -228,7 +228,7 @@ class Permit:
     """One grant: an action type, its constraints, and how far it delegates.
 
     `action` is the **object type name** of an action, not a verb:
-    `mod.auth.see_objects_action`, `mod.user.adopt_action`. A permit whose
+    `mod.auth.see_objects_action`, `mod.user.admin_swarm_action`. A permit whose
     action names a type the node does not know grants nothing, because
     authorization matches on the string the concrete action reports.
 
