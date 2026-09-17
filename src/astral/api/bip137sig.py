@@ -198,7 +198,7 @@ class _Bytes8Alias(AliasRecord):
 
         **The length rule holds here too, and in astral-go it does not.** Go
         checks it in `WriteTo`/`ReadFrom` and not in `MarshalText`/`UnmarshalText`
-        (`api/bip137sig/entropy.go` at `5b1d282`), so over there a JSON or text
+        (`api/bip137sig/entropy.go` at `02ba1c1`), so over there a JSON or text
         channel carries an entropy the binary channel refuses -- and once such a
         value exists nothing can re-emit it, because the only encoding it came
         through is the one that let it in. The rule belongs to the type rather

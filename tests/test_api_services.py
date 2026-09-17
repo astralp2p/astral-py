@@ -1079,8 +1079,8 @@ class CitationTest(unittest.TestCase):
         (reference.ASTRALD, "mod/services/src/module.go", 49, "switch {"),
         (reference.ASTRALD, "mod/services/src/module.go", 53, "createProviderService"),
         (reference.ASTRALD, "mod/services/src/module.go", 55, "deleteProviderService"),
-        (reference.ASTRALD, "mod/services/src/op_sync.go", 36, "ch.Receive()"),
-        (reference.ASTRALD, "mod/services/src/op_sync.go", 37, "cancel()"),
+        (reference.ASTRALD, "mod/services/src/op_sync.go", 37, "ch.Receive()"),
+        (reference.ASTRALD, "mod/services/src/op_sync.go", 38, "cancel()"),
         (reference.ASTRALD, "mod/dir/src/module.go", 58, 'if s == "" || s == "anyone"'),
     )
 

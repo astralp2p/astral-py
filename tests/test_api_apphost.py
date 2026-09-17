@@ -935,18 +935,18 @@ class SecurityNoteTest(unittest.TestCase):
         asked = {
             name
             for name, src in ops.items()
-            if "authorizeAdminManageApps" in src
+            if "AdminManageAppsAction" in src
         }
         self.assertEqual(asked, self.ADMIN_MANAGE_APPS)
         self.assertEqual(
-            {n for n, s in ops.items() if "authorizeServeApps" in s}, self.SERVE_APPS
+            {n for n, s in ops.items() if "ServeAppsAction" in s}, self.SERVE_APPS
         )
 
         for name in sorted(self.ADMIN_MANAGE_APPS):
             with self.subTest(op=name):
                 src = ops[name]
                 self.assertLess(
-                    src.index("authorizeAdminManageApps"), src.index("Accept")
+                    src.index("AdminManageAppsAction"), src.index("Accept")
                 )
                 self.assertLess(src.index("OriginNetwork"), src.index("Accept"))
 
@@ -988,20 +988,20 @@ class SecurityNoteTest(unittest.TestCase):
         A citation that names the wrong line is a reader sent to the wrong
         place, which is the failure this whole file exists to make loud.
         """
-        admin = "authorizeAdminManageApps"
+        admin = "AdminManageAppsAction"
         cites = (
-            (f"{self.SRC}/op_list_tokens.go", 20, "OriginNetwork"),
-            (f"{self.SRC}/op_list_tokens.go", 24, admin),
-            (f"{self.SRC}/op_create_token.go", 20, "OriginNetwork"),
-            (f"{self.SRC}/op_create_token.go", 24, admin),
-            (f"{self.SRC}/op_delete_token.go", 19, "OriginNetwork"),
-            (f"{self.SRC}/op_delete_token.go", 23, admin),
+            (f"{self.SRC}/op_list_tokens.go", 21, "OriginNetwork"),
+            (f"{self.SRC}/op_list_tokens.go", 27, admin),
+            (f"{self.SRC}/op_create_token.go", 21, "OriginNetwork"),
+            (f"{self.SRC}/op_create_token.go", 25, admin),
+            (f"{self.SRC}/op_delete_token.go", 20, "OriginNetwork"),
+            (f"{self.SRC}/op_delete_token.go", 24, admin),
             (f"{self.SRC}/op_cancel.go", 23, "OriginNetwork"),
             (f"{self.SRC}/op_cancel.go", 36, "answers as a missing one"),
             (f"{self.SRC}/op_cancel.go", 58, "func (mod *Module) mayCancel"),
-            (f"{self.SRC}/op_register_handler.go", 26, "authorizeServeApps"),
-            (f"{self.SRC}/authorize_admin_manage_apps.go", 17, f"func (mod *Module) {admin}"),
-            (f"{self.SRC}/authorize_admin_manage_apps.go", 18, "AdminManageAppsAction"),
+            (f"{self.SRC}/op_register_handler.go", 29, "ServeAppsAction"),
+            (f"{self.SRC}/authorize_admin_manage_apps.go", 19, "func (mod *Module) mayManageApps"),
+            (f"{self.SRC}/authorize_admin_manage_apps.go", 24, "AdminManageAppsAction"),
             (f"{self.SRC}/guest.go", 205, "ExtraAnonymous"),
             (f"{self.SRC}/guest.go", 268, "isAuthenticated()"),
             ("mod/user/src/authorize_user_or_node.go", 16, "authorizeUserOrNode"),

@@ -11,20 +11,16 @@ amendments that supersede the sections they name. **Section 11.4 is deferred**:
 the wire core's `Any`/nil behaviour stays as it is.
 
 Authorities, in precedence order: the live node, astral-go
-(`../astral-go/main` @ `5b1d282`, the revision astrald `d5bb0bbd` requires), astrald, astral-docs.
+(`../astral-go/main` @ `02ba1c1`, the revision astrald `f6d3de71` requires), astrald, astral-docs.
 The SDK supports the node at those revisions and no older one, so a claim about
 an earlier astrald or astral-go has no place in this tree.
 
-**One type is read past the pins.** `mod.objects.repository_info` gained `Kind`,
-`Children` and `Concurrent` in astrald `c520482e`, hours after `d5bb0bbd` was
-cut, and `api/objects.py` decodes the six-field record — so `objects.repositories`
-now requires a node at or past that commit and fails against one at the pins.
-The rest of the tree is unaffected. That type's evidence is therefore a byte
-corpus generated from astral-go `21acd1b` rather than a `path:line` citation,
-because no citation to those fields resolves at `5b1d282`. Moving the pins is a
-re-read of every citation in the package — 27 citation assertions across six
-modules fail on the bump — and is its own change, not a side effect of the next
-one to touch this type.
+**Every type is read at the pins.** `mod.objects.repository_info`'s `Kind`,
+`Children` and `Concurrent` were the one exception: they arrived in astrald
+`c520482e`, hours after the previous astrald pin `d5bb0bbd` was cut, so no
+citation to them resolved and their evidence was a byte corpus instead. The pin
+bump onto `f6d3de71` ended that — the fields are cited in `api/objects.py` and
+read by `test_api_objects.CitationTest` like every other claim.
 Where the docs disagree with the node, the node wins and the disagreement is a
 bug report in design section 9.2. A wire fact sourced from astral-docs alone is
 not established.

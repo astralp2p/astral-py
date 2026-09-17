@@ -51,7 +51,7 @@ and `dir.apply_filters?filters=` answers `bool(false)`.
 **`set_alias` needs both arguments, `alias` included when it is empty.**
 astrald declares `Alias *string` with `query:"required"` and the comment
 "required but can be empty" (`mod/dir/src/op_set_alias.go` `opSetAliasArgs.Alias`,
-line 11 at astrald `d5bb0bbd`); the required
+line 12 at astrald `f6d3de71`); the required
 check tests key **presence** in the parsed parameters
 (`astral-go/lib/routing/op.go:166`). Removal is therefore `alias=` with an empty
 value, which is a different query string from an absent `alias`. Design bug
@@ -96,8 +96,8 @@ package eagerly so registration never depends on the property being touched.
 **Source citations name the symbol as well as the line.** astrald is a moving
 target and three anchors in this file had already drifted by a line or two, which
 costs a reader more than an absent citation: it makes them distrust the exact
-ones. Line numbers below are pinned to astrald `d5bb0bbd` and astral-go
-`5b1d282`, the revisions `tests/reference.py` pins, and no citation names
+ones. Line numbers below are pinned to astrald `f6d3de71` and astral-go
+`02ba1c1`, the revisions `tests/reference.py` pins, and no citation names
 another revision.
 """
 
@@ -147,7 +147,7 @@ OP_SET_ALIAS: Final = "dir.set_alias"
 
 # astrald joins and splits filter names on this byte, so a name containing one
 # is two names on the server (`mod/dir/src/op_apply_filters.go` `OpApplyFilters`,
-# line 29 at astrald `d5bb0bbd`).
+# line 30 at astrald `f6d3de71`).
 FILTER_SEPARATOR: Final = ","
 
 # The parameter specs, so every value travels as the bare payload half of its
