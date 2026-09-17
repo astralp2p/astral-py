@@ -464,12 +464,12 @@ class RepositoryInfo:
     this record's own output is unreadable to a node that has not taken the
     change. astral-go took the identical break.
 
-    That revision is **newer than `tests/reference.py`'s pins** -- astrald
-    `d5bb0bbd`, astral-go `5b1d282`, both cut hours earlier -- so no `path:line`
-    citation to the new field can resolve, and none is written. The evidence is
-    `RepositoryInfoWireTest`, whose vectors are bytes astral-go `21acd1b`
-    encodes. Moving the pins is a re-read of every citation in the package and
-    is tracked on its own.
+    The three fields are at the pins: `Kind` at
+    `api/objects/repository_info.go:19`, `Children` at
+    `repository_info.go:21`, `Concurrent` at `repository_info.go:23`, and the
+    two `kind` values at `repository_info.go:11` and `repository_info.go:12`.
+    `RepositoryInfoWireTest` pins the bytes beside the citations, because a
+    field list gives the order and the names but not the encoding.
     """
 
     name: str = wire("Name", Primitive("string8"))

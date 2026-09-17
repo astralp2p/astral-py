@@ -204,7 +204,7 @@ class EmitterReadsBackTest(unittest.IsolatedAsyncioTestCase):
         ),
     }
     """`mod.tor.endpoint` was the second entry here until astral-go `eeb31e3`
-    and `54f55b0` (in `main` at `5b1d282`) made its zero value 37 readable bytes
+    and `54f55b0` (in `main` at `02ba1c1`) made its zero value 37 readable bytes
     and its text form `unknown`. All four framings agree on it now, so it is
     swept with everything else and an entry would fail on its own
     `assertNotEqual`."""
@@ -264,7 +264,7 @@ class EmitterReadsBackTest(unittest.IsolatedAsyncioTestCase):
         and leaves the consumer with a clean, complete, wrong answer.
 
         astral-go writes `" " + text + "\\n"` with no escaping
-        (`astral/channel/text_sender.go` at astral-go `5b1d282`), so escaping
+        (`astral/channel/text_sender.go` at astral-go `02ba1c1`), so escaping
         here would leave the node behind; base64 is a spelling its
         `TextReceiver` reads.
         """

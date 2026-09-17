@@ -106,7 +106,7 @@ Source citations name a single line each, and every one of them is read back by
 `tests/test_api_tree.py`. astrald and astral-go are moving targets, and a
 citation that has drifted by two lines costs a reader more than an absent one:
 it makes them distrust the exact ones. Line numbers are pinned to astral-go
-`5b1d282` and astrald `d5bb0bbd`, the revisions `tests/reference.py` pins, and
+`02ba1c1` and astrald `f6d3de71`, the revisions `tests/reference.py` pins, and
 no citation names another revision.
 """
 
@@ -445,7 +445,7 @@ class Tree(ModuleClient):
 
         **`node`, not `target`, and the name is the whole point.** The op's wire
         argument is `identity=` and the node requires it
-        (`astrald/mod/tree/src/op_mount_remote.go:11`). `target` is the routing
+        (`astrald/mod/tree/src/op_mount_remote.go:12`). `target` is the routing
         keyword every method of every module client forwards to `Client.query`
         -- "route this query to node X" -- and this op is the one place in the
         SDK where those are two different nodes. Taking the op's argument under

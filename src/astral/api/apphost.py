@@ -52,29 +52,40 @@ a property of astrald rather than an omission here:
 ## Authorization
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `d5bb0bbd` and astral-go `5b1d282`.** An identity argument travels
+pins, astrald `f6d3de71` and astral-go `02ba1c1`.** An identity argument travels
 under the key `identity` and `apphost.cancel`'s nonce under `query_id`.
 
 **`apphost.list_tokens` and `apphost.create_token` are administration, not
 introspection.** Each refuses a query whose origin is the network and then asks
 `mod.auth.admin_manage_apps_action`, in that order, before it accepts the
-connection or reads a token -- `op_list_tokens.go:20,24` and
-`op_create_token.go:20,24`, over the one question at
-`authorize_admin_manage_apps.go:17-21`. The action's name is astral-go's
-`AdminManageAppsAction.ObjectType()`, `api/auth/admin_manage_apps_action.go:19`.
+connection or reads a token -- `op_list_tokens.go:21,27` and
+`op_create_token.go:21,25`. Each op asks the action itself, through
+`mod.Auth.Authorize` on an `AdminManageAppsAction` built from `q.Caller()`;
+there is no shared helper between the op and the authority. The action's name is
+astral-go's `AdminManageAppsAction.ObjectType()`,
+`api/auth/admin_manage_apps_action.go:19`.
 
-`apphost.delete_token` carries the same pair (`op_delete_token.go:19,23`) and so
+`apphost.delete_token` carries the same pair (`op_delete_token.go:20,24`) and so
 does the grant surface beside it -- `apphost.grant`, `apphost.list_grants`,
 `apphost.revoke`. None of the four has a client here. `apphost.cancel` refuses
 the network origin too (`op_cancel.go:23`) and authorizes on ownership instead:
 a session cancels what it launched, and the action is the way past that
 (`op_cancel.go:58-68`).
 
-**The census, re-derived at `d5bb0bbd`.** Fourteen `op_*.go` files. Twelve
+**The two questions are not the same question.** `apphost.bind` and
+`apphost.cancel` reach the action through `mayManageApps`
+(`authorize_admin_manage_apps.go:19-27`), which refuses a zero principal before
+it asks the authority (`authorize_admin_manage_apps.go:20-22`) and takes the
+session's authenticated identity rather than `q.Caller()`. The token and grant
+ops do not use it. The distinction decides who the plaintext-token paragraph
+below applies to: the router's substitution of the node identity for a missing
+caller reaches the token ops and is refused by `mayManageApps`.
+
+**The census, re-derived at `f6d3de71`.** Fourteen `op_*.go` files. Twelve
 refuse a network origin; the two that do not are `whoami` and `register`. Six
 ask `mod.auth.admin_manage_apps_action` -- `create_token`, `delete_token`,
 `list_tokens`, `grant`, `list_grants`, `revoke`. One asks
-`mod.auth.serve_apps_action`: `register_handler` (`op_register_handler.go:26`).
+`mod.auth.serve_apps_action`: `register_handler` (`op_register_handler.go:29`).
 The other seven ask no action.
 
 **A local caller holding no token passes the action check, because it arrives

@@ -711,7 +711,7 @@ class SearchGrammarTest(unittest.TestCase):
         """A query built rather than parsed can hold what the grammar cannot
         spell, and the text channel loses it silently -- `bin`, `json` and
         `canonical` all carry it exactly. The loss is astral-go's
-        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 5b1d282),
+        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 02ba1c1),
         which a registered searcher parses the same query with, so the SDK
         matching it is what keeps the two agreeing about the question.
 
@@ -2556,6 +2556,14 @@ class CitationTest(unittest.TestCase):
             171,
             "ctx = ctx.WithZone(msg.Zone)",
         ),
+        # The repository_info group fields, readable at the pins since the
+        # astral-go pin moved onto 02ba1c1. They were the one type this tree
+        # read past the pins, on a byte corpus rather than a citation.
+        (reference.ASTRAL_GO, "api/objects/repository_info.go", 11, 'RepositoryKindRepository = "repository"'),
+        (reference.ASTRAL_GO, "api/objects/repository_info.go", 12, 'RepositoryKindGroup      = "group"'),
+        (reference.ASTRAL_GO, "api/objects/repository_info.go", 19, "Kind  astral.String8"),
+        (reference.ASTRAL_GO, "api/objects/repository_info.go", 21, "Children []astral.String8"),
+        (reference.ASTRAL_GO, "api/objects/repository_info.go", 23, "Concurrent astral.Bool"),
     )
 
     def test_every_cited_line_lands_on_its_claim(self):

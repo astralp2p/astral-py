@@ -510,8 +510,8 @@ class ApplyFiltersOpTest(DirCase):
     async def test_the_identity_argument_accepts_a_directory_name(self):
         """Unlike `get_alias`, this method sends a name for the node to resolve:
         the op declares `Identity string`
-        (`mod/dir/src/op_apply_filters.go:13`) and hands a non-empty one to
-        `ResolveIdentity` (`mod/dir/src/op_apply_filters.go:34`). No query is
+        (`mod/dir/src/op_apply_filters.go:14`) and hands a non-empty one to
+        `ResolveIdentity` (`mod/dir/src/op_apply_filters.go:35`). No query is
         spent resolving the name here."""
         mock = MockApphost(routes={OP_APPLY_FILTERS: Accept(objects=[frame_bool(True)])})
         async with mock:
@@ -892,8 +892,8 @@ class CitationTest(unittest.TestCase):
             (astrald, "mod/dir/src/db.go", 10, '`gorm:"index;unique;not null"`'),
             (astrald, "mod/dir/src/alias.go", 23, 'First(&row, "identity = ?", identity)'),
             (astrald, "mod/dir/src/op_resolve.go", 22, "mod.ResolveIdentity(args.Identity)"),
-            (astrald, filters, 13, "Identity string"),
-            (astrald, filters, 34, "mod.ResolveIdentity(args.Identity)"),
+            (astrald, filters, 14, "Identity string"),
+            (astrald, filters, 35, "mod.ResolveIdentity(args.Identity)"),
             (go, "lib/routing/op.go", 166, "field required"),
             (go, client, 20, "dir.MethodApplyFilters"),
             (go, client, 17, "matches any of them"),
