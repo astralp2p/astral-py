@@ -1556,16 +1556,27 @@ class Objects(ModuleClient):
         `RemoteError`. Both verified live.
 
         **A registered type is not necessarily a describable one.** astral-go's
-        `BlueprintFromType` refuses any struct holding a plain Go scalar, a
-        value-embedded non-`Object` struct, or a primitive newtype that does not
-        implement `PrimitiveAlias`. Swept over astrald `26bb51d5`, one name at a
-        time: 102 of the 152 non-primitive registered names answered and 50
-        refused, including this module's own `mod.objects.create_object_action`,
-        which embeds `auth.Action`. The counts are that revision's: every type
-        astrald registers moves them, so `LiveObjectsTest` holds the claim and
-        not the numbers.
+        `BlueprintFromType` refuses anything that is not a struct: a named scalar
+        or byte-slice registered as an `Object` has no fields to describe, and
+        the message says so — `want struct or *struct, got <Go type>`. Swept over
+        astrald `d5bb0bbd`, one name at a time: of 154 non-primitive registered
+        names 137 answered and 17 refused, every refusal that shape. The counts
+        are that revision's: every type astrald registers moves them, so
+        `LiveObjectsTest` holds the claim and not the numbers. `mod.dir.alias`
+        (`dir.Alias`, a named string) is the pinned example, with
+        `mod.ip.ip_address`, `mod.nearby.flag`, `mod.tor.digest` and
+        `mod.crypto.hash` among the rest.
         The refusal is an `error_message`, so it arrives as `RemoteError` and
         never as a wrong schema.
+
+        **Every action type is describable**, and until astral-go `5b1d282` none
+        was. That revision gave `auth.Action` an `ObjectType` and registered it;
+        before it, the embedded value stopped the derivation and the refusal read
+        `type auth.Action does not implement Object and is not a supported
+        container`. `mod.objects.create_object_action` was this docstring's
+        refusal example and now answers, carrying its embedded action as a
+        `RefSpec` naming `mod.auth.action`. Verified at `d5bb0bbd`, whose
+        `go.mod` requires `5b1d282`.
 
         Design bug G-21 said this op does not exist. It does, on the live
         registry; it is missing only from astral-go's method constants.

@@ -2450,10 +2450,14 @@ class LiveObjectsTest(live_support.LiveCase):
 
         self.assertTrue(answered, "the node described no registered type")
         self.assertTrue(refused, "the node described every registered type")
-        self.assertIn("mod.objects.create_object_action", refused)
+        # mod.dir.alias is a named string type, not a struct, so the reflector
+        # has nothing to describe and cannot ever acquire fields. The previous
+        # example here was mod.objects.create_object_action, which stopped being
+        # refused once astral-go 5b1d282 registered the auth.Action it embeds.
+        self.assertIn("mod.dir.alias", refused)
         doc = objects_module.Objects.get_blueprint.__doc__ or ""
-        self.assertIn("`mod.objects.create_object_action`", doc)
-        self.assertIn("astrald `26bb51d5`", doc)
+        self.assertIn("`mod.dir.alias`", doc)
+        self.assertIn("astrald `d5bb0bbd`", doc)
 
     async def test_learn_registers_a_types_closure(self):
         """The wiring `RuntimeRecord` needed: a node's type, learned into a child

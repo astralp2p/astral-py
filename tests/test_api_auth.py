@@ -43,6 +43,7 @@ import unittest
 
 import astral
 from astral import blueprint
+from astral.blueprint import RefSpec
 from astral.api.auth import (
     AUTH_TYPES,
     Action,
@@ -149,6 +150,7 @@ NODE_ZERO_JSON = {
 # Every action type on the node flattens its embedded `auth.Action`. Both
 # façades, captured the same way.
 NODE_ACTION_BINARY = {
+    "mod.auth.action": "000000000000000000",
     "mod.auth.sudo_action": "00000000000000000000",
     "mod.objects.create_object_action": "000000000000000000",
     "mod.user.admin_swarm_action": "0000000000000000000000",
@@ -161,11 +163,10 @@ NODE_ACTION_JSON = {
     ),
 }
 
-# The blueprint every action type is refused, and the reason astral-go gives.
-NODE_ACTION_BLUEPRINT_ERROR = (
-    "BlueprintFromType mod.objects.create_object_action.Action: type auth.Action "
-    "does not implement Object and is not a supported container"
-)
+# Every action type embeds auth.Action, and astral-go 5b1d282 gave that struct an
+# ObjectType and registered it. The embedded field is therefore a reference to a
+# named type rather than an opaque struct, and this is the spec it derives to.
+NODE_ACTION_EMBEDDED_SPEC = RefSpec(type="mod.auth.action")
 
 def frame_error(message: str) -> tuple[str, bytes]:
     w = Writer()
@@ -1082,13 +1083,21 @@ class LiveAuthTest(live_support.LiveCase):
                     self.assertEqual(theirs, blueprint.of(cls))
 
     @bounded(30.0)
-    async def test_mod_auth_action_is_not_a_type_on_the_node(self):
-        """The op survey's D-27 says `mod.auth.sudo_action` has no counterpart;
-        the base struct is the one that genuinely has none. `objects.new`
-        answers `nil` for an unregistered name."""
+    async def test_mod_auth_action_is_a_type_on_the_node(self):
+        """The base struct is registered. astral-go `5b1d282` gave `auth.Action`
+        an `ObjectType` and an `astral.MustAdd`; at `6ea26c7` it had neither and
+        `objects.new` answered `nil` for the name. Nine bytes: a nonce and one
+        nil pointer."""
         async with await self.client() as client:
-            value = await client.call_one("objects.new?type=mod.auth.action", timeout=20.0)
-        self.assertEqual(getattr(value, "ASTRAL_TYPE", ""), "nil")
+            async with client.stream(
+                "objects.new?type=mod.auth.action", allow_unparsed=True, timeout=20.0
+            ) as stream:
+                objects = [obj async for obj in stream.raw_objects()]
+        self.assertEqual(len(objects), 1)
+        self.assertEqual(objects[0].ASTRAL_TYPE, "mod.auth.action")
+        self.assertEqual(
+            objects[0].payload.hex(), NODE_ACTION_BINARY["mod.auth.action"]
+        )
 
     @bounded(30.0)
     async def test_mod_auth_sudo_action_is_a_type_on_the_node(self):
@@ -1107,21 +1116,33 @@ class LiveAuthTest(live_support.LiveCase):
         )
 
     @bounded(30.0)
-    async def test_no_action_type_has_a_blueprint_on_the_node(self):
-        """astral-go's derivation stops at the embedded `auth.Action`, which has
-        no `ObjectType` method, so no action type can be described to a peer and
-        `astral.blueprint.of()` on an SDK action record produces a schema
-        astral-go cannot produce for itself. The message is the node's."""
+    async def test_every_action_type_has_a_blueprint_on_the_node(self):
+        """Each action type is describable, and its embedded `auth.Action` is a
+        reference rather than a flattened anonymous struct.
+
+        This reverses what the tree asserted before. astral-go `6ea26c7` gave
+        `auth.Action` neither an `ObjectType` nor a registration, the derivation
+        stopped at the embedded value, and every action type was refused with
+        `type auth.Action does not implement Object and is not a supported
+        container`. `5b1d282` added both, and `specFromType` probes
+        `tryObjectType` ahead of its container dispatch, so the embedded field
+        now yields a `RefSpec` naming `mod.auth.action`. astrald `d5bb0bbd`
+        requires `5b1d282`, so the SDK's own pin is already on this side of it.
+        """
         async with await self.client() as client:
-            with self.assertRaises(RemoteError) as caught:
-                await client.call_one(
-                    "objects.get_blueprint?type=mod.objects.create_object_action",
-                    timeout=20.0,
-                )
-        self.assertTrue(
-            str(caught.exception).endswith(NODE_ACTION_BLUEPRINT_ERROR),
-            f"the node's message changed: {caught.exception}",
-        )
+            for name in (
+                "mod.auth.sudo_action",
+                "mod.objects.create_object_action",
+                "mod.user.admin_swarm_action",
+            ):
+                with self.subTest(type=name):
+                    theirs = await client.call_one(
+                        f"objects.get_blueprint?type={name}", timeout=20.0
+                    )
+                    self.assertEqual(theirs.type, name)
+                    embedded = theirs.fields[0]
+                    self.assertEqual(embedded.name, "Action")
+                    self.assertEqual(embedded.spec, NODE_ACTION_EMBEDDED_SPEC)
 
     @bounded(30.0)
     async def test_an_empty_batch_is_answered_by_the_mirrored_eos_alone(self):
