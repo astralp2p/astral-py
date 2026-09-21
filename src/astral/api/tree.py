@@ -1,6 +1,6 @@
 """`tree`: the node's configuration tree, addressed by path and holding objects.
 
-Tier 1, six ops, and the one module whose values have no declared type. A tree
+Tier 1, four ops, and the one module whose values have no declared type. A tree
 node holds any registered object and may hold named subnodes at the same time;
 astrald's modules keep their settings here, so `/mod/tcp/settings/listen` is a
 `bool` and `/mod/user/config/active_contract` is a `mod.auth.signed_contract`.
@@ -18,10 +18,8 @@ a per-op contract and is not discoverable from the wire):
 | `tree.set` with `value` | RR | `ack` \\| `error_message` | **mutates** |
 | `tree.set` without `value` | WA | one `ack` per object on the body | **mutates** |
 | `tree.delete` | RR | `ack` \\| `error_message` | **mutates** |
-| `tree.mount_remote` | RR | `ack` \\| `error_message` | **mutates** |
-| `tree.unmount` | RR | `ack` \\| `error_message` | **mutates** |
 
-Five of the six ops mutate. `tree.get` and `tree.list` are verified live against
+Two of the four ops mutate. `tree.get` and `tree.list` are verified live against
 `furry-bolt`; every mutating op is exercised against the mock alone.
 
 **`tree.get` with `follow` has no snapshot/live separator, and design section
@@ -121,7 +119,6 @@ from ..object import Ack, EmptyObject
 from ..primitives import String8
 from ..registry import default_blueprints
 from ..spec import Primitive, Spec
-from ..types import Identity
 from .base import ModuleClient
 
 __all__ = [
@@ -129,9 +126,7 @@ __all__ = [
     "OP_DELETE",
     "OP_GET",
     "OP_LIST",
-    "OP_MOUNT_REMOTE",
     "OP_SET",
-    "OP_UNMOUNT",
     "ROOT",
     "TREE_TYPES",
     "Tree",
@@ -140,9 +135,7 @@ __all__ = [
 OP_DELETE: Final = "tree.delete"
 OP_GET: Final = "tree.get"
 OP_LIST: Final = "tree.list"
-OP_MOUNT_REMOTE: Final = "tree.mount_remote"
 OP_SET: Final = "tree.set"
-OP_UNMOUNT: Final = "tree.unmount"
 
 ROOT: Final = "/"
 """The root path, and `tree.list`'s default.
@@ -412,7 +405,7 @@ class Tree(ModuleClient):
         has subnodes` (`astrald/mod/tree/src/module.go:222`). `recursive=True`
         descends the subtree depth-first and deletes from the leaves up
         (`astral-go/api/tree/client/server.go:173`), and it descends **through
-        remote mounts**, where every step is a query to the mounted node.
+        mounts**, where every step reaches the mounted implementation.
 
         The argument is `recursive` and is sent only when true. astral-docs
         writes `-Recursive`, which the node drops silently, so the documented
@@ -423,77 +416,6 @@ class Tree(ModuleClient):
             params["recursive"] = _param(_BOOL, True)
         obj = await self._c.call_one(querystring.build(OP_DELETE, params), **kw)
         self._expect(obj, Ack, OP_DELETE)
-
-    async def mount_remote(
-        self,
-        path: str,
-        node: Identity | str,
-        *,
-        root: str | None = None,
-        **kw: Any,
-    ) -> None:
-        """Mount a remote node's subtree at a local path. RR, one `ack`.
-        **Mutates.**
-
-        `path` must be absolute and must not already be a mount point; astrald
-        answers `path must be absolute` (`astrald/mod/tree/src/module.go:94`) or
-        `mount point already exists` (`astrald/mod/tree/src/module.go:101`).
-        `node` is resolved by the node's own directory, so an alias,
-        `localnode`, or 66 hex characters all reach it; an empty one is refused
-        here, because the node's resolver reads it as the zero identity and
-        would mount a subtree of `anyone`.
-
-        **`node`, not `target`, and the name is the whole point.** The op's wire
-        argument is `identity=` and the node requires it
-        (`astrald/mod/tree/src/op_mount_remote.go:12`). `target` is the routing
-        keyword every method of every module client forwards to `Client.query`
-        -- "route this query to node X" -- and this op is the one place in the
-        SDK where those are two different nodes. Taking the op's argument under
-        the name `target` ate the routing keyword: `mount_remote(p, X)`
-        put X in the query string and routed to the local node, with no way to
-        reach the routing target on this op at all and nothing said about it.
-        `Objects` met the same collision on `zone`, where the two levers really
-        are one scope, and forwards the value to both (`_scope`); here they are
-        not one thing, so the parameter is renamed instead and `target=` in `**kw`
-        keeps meaning what it means everywhere else.
-
-        `root` is the path on the remote node, and is sent only when given. An
-        absent `root` mounts the remote root, which is what `/` addresses too
-        (`astrald/mod/tree/src/module.go:131`).
-
-        Every read under the mount point becomes a query to the remote node, so
-        a `list` or a recursive `delete` below it leaves the local process.
-        """
-        params = {
-            "path": _param(_STRING8, _path(path, OP_MOUNT_REMOTE)),
-            "identity": _param(_STRING8, _target(node, OP_MOUNT_REMOTE)),
-        }
-        if root is not None:
-            params["root"] = _param(_STRING8, _path(root, OP_MOUNT_REMOTE))
-        obj = await self._c.call_one(querystring.build(OP_MOUNT_REMOTE, params), **kw)
-        self._expect(obj, Ack, OP_MOUNT_REMOTE)
-
-    async def unmount(self, path: str, **kw: Any) -> None:
-        """Remove a mount point. RR, one `ack`. **Mutates.**
-
-        The mount point only, never the nodes under it: unmounting drops the
-        entry that overlaid the path and leaves whatever the local subtree held
-        before. A path that is not a mount point answers `mount point does not
-        exist` (`astrald/mod/tree/src/module.go:118`), and a relative one
-        answers `path must be absolute`.
-
-        `/` is a mount point on every node -- astrald mounts the database store
-        there at load (`astrald/mod/tree/src/loader.go:30`) -- so unmounting it
-        detaches the whole tree and every later op answers an error. Nothing
-        here refuses it; the caller names the path.
-        """
-        obj = await self._c.call_one(
-            querystring.build(
-                OP_UNMOUNT, {"path": _param(_STRING8, _path(path, OP_UNMOUNT))}
-            ),
-            **kw,
-        )
-        self._expect(obj, Ack, OP_UNMOUNT)
 
 
 # --- argument discipline --------------------------------------------------
@@ -519,27 +441,6 @@ def _path(value: str, op: str) -> str:
     if not value:
         raise BadArgument(
             f"{op}: the empty path addresses the root; pass ROOT to mean the root"
-        )
-    return value
-
-
-def _target(value: Identity | str, op: str) -> str:
-    """A target the node resolves: an alias, `localnode`, or a hex key.
-
-    An empty string is refused: astrald's resolver maps `""` and `"anyone"` to
-    the zero identity (`astrald/mod/dir/src/module.go:58`), so an accidental
-    empty target mounts a subtree of `anyone`.
-    """
-    if isinstance(value, Identity):
-        return value.text()
-    if not isinstance(value, str):
-        raise BadArgumentType(
-            f"{op}: expected an identity or a name, got {type(value).__name__}"
-        )
-    if not value:
-        raise BadArgument(
-            f"{op}: the empty target resolves to the zero identity on the node; "
-            "pass Identity.ANYONE to mean that identity"
         )
     return value
 

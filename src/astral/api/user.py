@@ -96,7 +96,7 @@ sent as `identity=`; neither op declares `target`, and the binder drops the key.
 `target` is the routing keyword every module-client method forwards to
 `Client.query`, and on these two ops the routing target (the node running the op)
 and the op's target (the node being adopted or expelled) are different nodes.
-`Tree.mount_remote` met this collision first and renamed for it.
+`Nodes.new_link` names the same distinction the same way.
 
 **An empty target adopts or expels `anyone`.** `user.adopt` and `user.expel`
 tag `Identity string` with `query:"required"`, and the tag tests that the key is

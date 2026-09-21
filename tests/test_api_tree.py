@@ -32,9 +32,7 @@ from astral.api.tree import (
     OP_DELETE,
     OP_GET,
     OP_LIST,
-    OP_MOUNT_REMOTE,
     OP_SET,
-    OP_UNMOUNT,
     ROOT,
     TREE_TYPES,
     Tree,
@@ -196,16 +194,14 @@ class ErrNoValueTest(unittest.TestCase):
 class ConstantTest(unittest.TestCase):
     """The op names, spelled as the live registry spells them."""
 
-    def test_the_six_op_names_carry_no_mod_prefix(self):
+    def test_the_four_op_names_carry_no_mod_prefix(self):
         self.assertEqual(
-            [OP_DELETE, OP_GET, OP_LIST, OP_MOUNT_REMOTE, OP_SET, OP_UNMOUNT],
+            [OP_DELETE, OP_GET, OP_LIST, OP_SET],
             [
                 "tree.delete",
                 "tree.get",
                 "tree.list",
-                "tree.mount_remote",
                 "tree.set",
-                "tree.unmount",
             ],
         )
 
@@ -236,25 +232,8 @@ class ArgumentRefusalTest(unittest.TestCase):
         `get`; refusing it here would hide the node's own message."""
         self.assertEqual(tree_module._path(ROOT, OP_LIST), "/")
 
-    def test_an_empty_mount_target_is_refused(self):
-        with self.assertRaises(BadArgument) as caught:
-            tree_module._target("", OP_MOUNT_REMOTE)
-        self.assertIn("zero identity", str(caught.exception))
 
-    def test_an_identity_target_travels_as_its_hex_text(self):
-        self.assertEqual(
-            tree_module._target(FURRY_BOLT, OP_MOUNT_REMOTE), FURRY_BOLT.text()
-        )
-        self.assertEqual(
-            tree_module._target(FURRY_BOLT_ALIAS, OP_MOUNT_REMOTE), FURRY_BOLT_ALIAS
-        )
-
-    def test_a_non_identity_target_is_a_type_error(self):
-        with self.assertRaises(BadArgumentType):
-            tree_module._target(7, OP_MOUNT_REMOTE)  # type: ignore[arg-type]
-
-
-# --- Tier B: the six ops against the mock --------------------------------
+# --- Tier B: the four ops against the mock --------------------------------
 
 
 class TreeCase(unittest.IsolatedAsyncioTestCase):
@@ -813,111 +792,6 @@ class DeleteTest(TreeCase):
                 await t.delete("/tmp/k")
 
 
-class MountRemoteTest(TreeCase):
-    """`tree.mount_remote`: two required arguments and one optional root."""
-
-    @bounded()
-    async def test_it_sends_path_and_identity_with_the_keys_sorted(self):
-        mock = MockApphost(routes={OP_MOUNT_REMOTE: Accept(objects=[ACK_FRAME])})
-        async with mock:
-            t = await self.tree(mock)
-            await t.mount_remote("/remote/peer", FURRY_BOLT_ALIAS)
-        self.assertEqual(
-            self.sent(mock),
-            f"{OP_MOUNT_REMOTE}?identity={FURRY_BOLT_ALIAS}&path=%2Fremote%2Fpeer",
-        )
-
-    @bounded()
-    async def test_the_routing_target_is_reachable_and_is_not_the_mount_target(self):
-        """The op's own remote node is `node`; `target` still routes.
-
-        This op is the one place in the SDK where the two are different nodes,
-        and the parameter used to be called `target`, so it ate the routing
-        keyword: `mount_remote(p, X)` put X in the query string and routed to the
-        local node, with no way to reach the routing target on this op at all.
-        """
-        mock = MockApphost(routes={OP_MOUNT_REMOTE: Accept(objects=[ACK_FRAME])})
-        async with mock:
-            t = await self.tree(mock)
-            await t.mount_remote("/remote/peer", "somenode", target=OTHER)
-        self.assertEqual(
-            self.sent(mock),
-            f"{OP_MOUNT_REMOTE}?identity=somenode&path=%2Fremote%2Fpeer",
-        )
-        self.assertEqual(
-            mock.queries[-1].target,
-            OTHER,
-            "the routing target did not reach route_query_msg",
-        )
-
-    @bounded()
-    async def test_an_identity_target_travels_as_hex(self):
-        mock = MockApphost(routes={OP_MOUNT_REMOTE: Accept(objects=[ACK_FRAME])})
-        async with mock:
-            t = await self.tree(mock)
-            await t.mount_remote("/remote/peer", FURRY_BOLT)
-        self.assertIn(f"identity={FURRY_BOLT.hex()}", self.sent(mock))
-
-    @bounded()
-    async def test_the_root_is_sent_only_when_given(self):
-        mock = MockApphost(routes={OP_MOUNT_REMOTE: Accept(objects=[ACK_FRAME])})
-        async with mock:
-            t = await self.tree(mock)
-            await t.mount_remote("/remote/peer", "somenode", root="/mod")
-        sent = self.sent(mock)
-        _, params = parse(sent)
-        self.assertEqual(
-            params, {"path": "/remote/peer", "root": "/mod", "identity": "somenode"}
-        )
-        self.assertEqual(
-            sent,
-            f"{OP_MOUNT_REMOTE}?identity=somenode&path=%2Fremote%2Fpeer&root=%2Fmod",
-        )
-
-    @bounded()
-    async def test_an_empty_target_never_reaches_the_node(self):
-        mock = MockApphost()
-        async with mock:
-            t = await self.tree(mock)
-            with self.assertRaises(BadArgument):
-                await t.mount_remote("/remote/peer", "")
-            self.assertEqual(mock.queries, [])
-
-    @bounded()
-    async def test_an_unresolvable_target_raises_the_error_message(self):
-        mock = MockApphost(
-            routes={
-                OP_MOUNT_REMOTE: Accept(objects=[frame_error("unknown identity: nope")])
-            }
-        )
-        async with mock:
-            t = await self.tree(mock)
-            with self.assertRaises(RemoteError):
-                await t.mount_remote("/remote/peer", "nope")
-
-
-class UnmountTest(TreeCase):
-    """`tree.unmount`: one argument, one `ack`."""
-
-    @bounded()
-    async def test_it_sends_the_path_and_reads_the_ack(self):
-        mock = MockApphost(routes={OP_UNMOUNT: Accept(objects=[ACK_FRAME])})
-        async with mock:
-            t = await self.tree(mock)
-            self.assertIsNone(await t.unmount("/remote/peer"))
-        self.assertEqual(self.sent(mock), f"{OP_UNMOUNT}?path=%2Fremote%2Fpeer")
-
-    @bounded()
-    async def test_a_path_that_is_not_a_mount_point_raises(self):
-        mock = MockApphost(
-            routes={OP_UNMOUNT: Accept(objects=[frame_error("mount point does not exist")])}
-        )
-        async with mock:
-            t = await self.tree(mock)
-            with self.assertRaises(RemoteError):
-                await t.unmount("/nowhere")
-
-
 class TreePlumbingTest(TreeCase):
     """What every op shares."""
 
@@ -947,8 +821,6 @@ class TreePlumbingTest(TreeCase):
                 OP_LIST: Accept(objects=[frame_string8("mod")], eos=True),
                 OP_SET: switch(ACK_FRAME),
                 OP_DELETE: Accept(objects=[ACK_FRAME]),
-                OP_MOUNT_REMOTE: Accept(objects=[ACK_FRAME]),
-                OP_UNMOUNT: Accept(objects=[ACK_FRAME]),
             }
         )
         async with mock:
@@ -958,14 +830,12 @@ class TreePlumbingTest(TreeCase):
             await t.list("/x")
             await t.set("/x", Bool(True))
             await t.delete("/x")
-            await t.mount_remote("/x", "peer")
-            await t.unmount("/x")
             async with t.get_follow("/x"):
                 pass
             self.assertEqual(client.live_streams, 0)
             self.assertEqual(client.available, 8)
             self.assertEqual(client.available_persistent, 4)
-        self.assertEqual(len(mock.queries), 7)
+        self.assertEqual(len(mock.queries), 5)
 
     @bounded()
     async def test_no_op_ever_sends_a_capitalised_parameter_key(self):
@@ -978,8 +848,6 @@ class TreePlumbingTest(TreeCase):
                 OP_LIST: Accept(objects=[frame_string8("mod")], eos=True),
                 OP_SET: Accept(objects=[ACK_FRAME]),
                 OP_DELETE: Accept(objects=[ACK_FRAME]),
-                OP_MOUNT_REMOTE: Accept(objects=[ACK_FRAME]),
-                OP_UNMOUNT: Accept(objects=[ACK_FRAME]),
             }
         )
         async with mock:
@@ -988,11 +856,9 @@ class TreePlumbingTest(TreeCase):
             await t.list("/x")
             await t.set_text("/x", "true", type="bool")
             await t.delete("/x", recursive=True)
-            await t.mount_remote("/x", "peer", root="/y")
-            await t.unmount("/x")
         keys = {key for q in mock.queries for key in parse(q.query)[1]}
         self.assertEqual(
-            keys, {"path", "type", "value", "recursive", "root", "identity"}
+            keys, {"path", "type", "value", "recursive"}
         )
         self.assertTrue(all(key == key.lower() for key in keys), keys)
 
@@ -1004,7 +870,7 @@ class LiveTreeTest(live_support.LiveCase):
     """`tree` against a real node. Read-only: `get` and `list` and nothing else.
 
     The config tree is the node's running configuration, so no live test calls
-    `set`, `create`, `delete`, `mount_remote` or `unmount`. Every assertion is
+    `set`, `create` or `delete`. Every assertion is
     node-agnostic: the paths are discovered by walking from the root rather than
     named, because another node's tree holds other modules.
     """
@@ -1145,12 +1011,12 @@ class LiveTreeTest(live_support.LiveCase):
 class DocstringTest(unittest.TestCase):
     """Claims in the module docstring that the repository can check."""
 
-    def test_the_op_table_names_the_six_ops_and_no_others(self):
+    def test_the_op_table_names_the_four_ops_and_no_others(self):
         doc = tree_module.__doc__ or ""
         found = set(re.findall(r"`(tree\.[a-z_]+)", doc))
         self.assertEqual(
             found,
-            {OP_DELETE, OP_GET, OP_LIST, OP_MOUNT_REMOTE, OP_SET, OP_UNMOUNT},
+            {OP_DELETE, OP_GET, OP_LIST, OP_SET},
         )
 
     def test_the_docstring_matches_whether_client_carries_a_tree_property(self):
@@ -1215,14 +1081,7 @@ class CitationTest(unittest.TestCase):
     ASTRALD_CITATIONS = {
         "mod/tree/src/node.go:29": "root node cannot hold a value",
         "mod/tree/src/node.go:37": "object = &astral.Nil{}",
-        "mod/tree/src/module.go:94": "path must be absolute",
-        "mod/tree/src/module.go:101": "mount point already exists",
-        "mod/tree/src/module.go:118": "mount point does not exist",
-        "mod/tree/src/module.go:131": "if len(remotePath) > 0 {",
         "mod/tree/src/module.go:222": "return tree.ErrNodeHasSubnodes",
-        "mod/tree/src/op_mount_remote.go:12": 'Identity string `query:"required"`',
-        "mod/tree/src/loader.go:30": 'mod.mounts.Set("/", &Node{mod: mod})',
-        "mod/dir/src/module.go:58": 'if s == "" || s == "anyone"',
         # The op that does have a separator, cited so the objection is scoped:
         # ST+follow is a real mode and `tree.get` is not in it.
         "mod/services/src/op_discover.go:17": "snapshot/stream separator",

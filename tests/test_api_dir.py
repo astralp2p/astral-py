@@ -918,8 +918,8 @@ class QueryKeywordShadowTest(unittest.TestCase):
 
     Two ops did it and neither said so. `Tree.mount_remote(path, target)` spent
     `target` on the mount's remote node, so `target=X` put X in the query string
-    and routed to the *local* node -- and this is the one op in the SDK where the
-    routing target and the op's own target are genuinely different nodes.
+    and routed to the *local* node; that op has since been removed with remote
+    mounts, and `Nodes.new_link` carries the same distinction under `peer`.
     `Dir.apply_filters(filters)` spent `filters` on the op's filter names, which
     are not `route_query_msg.Filters` at all. Both parameters are renamed.
 
