@@ -74,12 +74,16 @@ already did, so all four endpoint types now render one string per value.
 `json.Marshal(e.Address())`. The three stay separate methods because they are
 separate upstream, not because any of them currently disagrees.
 
-**`mod.tor.digest` is the one tor spelling that still cannot read its own
-text.** `Digest.MarshalText` renders the zero digest as the bare `.onion` and
-`Digest.UnmarshalText` refuses that on length; `54f55b0` repaired the endpoint
-and left the digest. Reproduced rather than repaired, and named as a divergence
-in `tests/test_channel_formats.py`, because the binary form is the one a node
-sends and it round-trips.
+**The zero digest's text form is `unknown`, the string the zero endpoint
+uses.** `Digest.MarshalText` rendered the zero digest as the bare `.onion`, and
+`Digest.UnmarshalText` refused that on length; `54f55b0` repaired the endpoint
+and left the digest. astral-go `94f6923` (PR #99) repairs the digest:
+`String` renders the zero value as `unknown`, `MarshalText` and so
+`MarshalJSON` delegate to `String`, and `UnmarshalText` reads exactly
+`unknown` back as the zero value. `TorDigest.text`, `json` and `parse` do the
+same, so every framing of every tor value reads its own output back.
+`Endpoint.UnmarshalText` hands the host half to `Digest.UnmarshalText`, so
+`unknown:1791` parses on both sides to a zero endpoint that keeps its port.
 
 **Three astral-go parser defects, none of them ported** (design section 5.1
 rule 7):
@@ -103,8 +107,8 @@ reuse `IPEndpoint` rather than restate it.
 
 Source citations are pinned to astral-go `bf8542a` and astrald `993ffac0`. The
 tor paragraphs above name the astral-go commits that made the changes they
-describe, and both are in `main` at that pin, so every citation here resolves
-at one of the two pinned revisions.
+describe, and all three are in `main` at that pin, so every citation here
+resolves at one of the two pinned revisions.
 """
 
 from __future__ import annotations
@@ -157,8 +161,8 @@ astrald's tor parser supplies it for an address with no port; astral-go's
 `UnmarshalText` requires one. `TorEndpoint.parse` accepts both."""
 
 TOR_UNKNOWN: Final = "unknown"
-"""What `tor.Endpoint.Address()` renders for a zero value, and what its
-`UnmarshalText` reads back as one."""
+"""What `tor.Endpoint.Address()` and `tor.Digest.String()` render for a zero
+value, and what each type's `UnmarshalText` reads back as one."""
 
 ONION_SUFFIX: Final = ".onion"
 
@@ -359,9 +363,10 @@ class TorDigest:
     mod.tor.digest` answers `BlueprintFromType: want struct or *struct, got
     tor.Digest`, verified live.
 
-    The text form is base32 of the bytes, lowercased, with `.onion` appended.
-    Parsing accepts either case and the suffix is optional, which is astral-go's
-    `UnmarshalText` exactly.
+    The text form is base32 of the bytes, lowercased, with `.onion` appended,
+    and `unknown` for the zero value. Parsing reads exactly `unknown` as the
+    zero value, and otherwise accepts either case with the suffix optional,
+    which is astral-go `94f6923`'s `UnmarshalText` exactly.
 
     A digest of any other length is constructible and **not** encodable.
     astral-go `eeb31e3` refuses any length but 0 and `DigestSize` with
@@ -419,20 +424,32 @@ class TorDigest:
         return not self.value
 
     def text(self) -> str:
-        """astral-go's `MarshalText`: lowercase base32 of the bytes, then
-        `.onion`. An empty digest renders the bare suffix, which `parse`
-        refuses -- see the module docstring."""
+        """astral-go's `MarshalText`, which is `String`: `unknown` for the zero
+        value, else lowercase base32 of the bytes, then `.onion`.
+
+        The zero value rendered as the bare `.onion` until astral-go `94f6923`,
+        a string `UnmarshalText` refused on length. `unknown` is the one text
+        form of the zero digest and the one `parse` reads back as it.
+        """
+        if self.is_zero():
+            return TOR_UNKNOWN
         return base64.b32encode(self.value).decode("ascii").lower() + ONION_SUFFIX
 
     @classmethod
     def parse(cls, text: str) -> "TorDigest":
-        """astral-go's `UnmarshalText`: uppercase, drop `.ONION`, base32-decode,
-        and require exactly `SIZE` bytes."""
+        """astral-go's `UnmarshalText`: exactly `unknown` is the zero value;
+        anything else is uppercased, loses `.ONION`, is base32-decoded, and
+        must come to exactly `SIZE` bytes.
+
+        The `unknown` match is case-sensitive, as upstream's is, so `UNKNOWN`
+        falls through to base32 and is refused there."""
         if not isinstance(text, str):
             raise ParseError(
                 f"{cls.ASTRAL_TYPE}: expected the text form, got "
                 f"{type(text).__name__}"
             )
+        if text == TOR_UNKNOWN:
+            return cls()
         body = text.upper()
         if body.endswith(ONION_SUFFIX.upper()):
             body = body[: -len(ONION_SUFFIX)]
