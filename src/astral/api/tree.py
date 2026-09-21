@@ -104,7 +104,7 @@ Source citations name a single line each, and every one of them is read back by
 `tests/test_api_tree.py`. astrald and astral-go are moving targets, and a
 citation that has drifted by two lines costs a reader more than an absent one:
 it makes them distrust the exact ones. Line numbers are pinned to astral-go
-`02ba1c1` and astrald `f6d3de71`, the revisions `tests/reference.py` pins, and
+`bf8542a` and astrald `993ffac0`, the revisions `tests/reference.py` pins, and
 no citation names another revision.
 """
 
@@ -402,7 +402,7 @@ class Tree(ModuleClient):
         """Delete the node at a path. RR, one `ack`. **Mutates.**
 
         A node with subnodes cannot be deleted on its own: astrald answers `node
-        has subnodes` (`astrald/mod/tree/src/module.go:222`). `recursive=True`
+        has subnodes` (`astrald/mod/tree/src/module.go:196`). `recursive=True`
         descends the subtree depth-first and deletes from the leaves up
         (`astral-go/api/tree/client/server.go:173`), and it descends **through
         mounts**, where every step reaches the mounted implementation.

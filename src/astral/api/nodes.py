@@ -39,7 +39,7 @@ a per-op contract and is not discoverable from the wire):
 
 `nodes.resolve_endpoints`, `nodes.add_endpoint` and `nodes.new_link` name their
 identity argument `identity`, and `nodes.close_link` names its nonce `link_id`,
-as `nodes.migrate_session` does. astrald `f6d3de71` marks seven parameters
+as `nodes.migrate_session` does. astrald `993ffac0` marks seven parameters
 required in source: `identity` on `nodes.resolve_endpoints`,
 `nodes.add_endpoint` and `nodes.new_link`, `endpoint` on `nodes.add_endpoint`,
 `link_id` on `nodes.close_link`, and `session_id` and `link_id` on
@@ -198,7 +198,7 @@ def require_experimental(op: str, opted_in: bool) -> None:
     `nodes.links` is read-only and answers on any node. What it is, is design
     section 0.1's Tier 3 in force. This surface is the least covered by the
     reference client -- 3 of 7 `nodes` ops have an astral-go client at
-    astral-go `02ba1c1` -- two of `nat`'s five ops are
+    astral-go `bf8542a` -- two of `nat`'s five ops are
     dropped outright (section 4.5), and four of these seven **mutate node
     state**: `close_link` drops a live link, `add_endpoint` writes a record that
     stands for 90 days. An SDK that let all of that be reached by a typo in an
