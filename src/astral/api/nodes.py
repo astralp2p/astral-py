@@ -763,7 +763,7 @@ class Nodes(ModuleClient):
         is the routing keyword every module-client method forwards to
         `Client.query` -- which node answers the query -- and here the two are
         different nodes: the query goes to one node and asks it to link to
-        another. `Tree.mount_remote` names the same distinction the same way.
+        another. `User.adopt` names the same distinction the same way.
 
         The identity argument is required, one of the seven the module marks
         required in source.
