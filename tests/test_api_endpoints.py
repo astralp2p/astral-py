@@ -38,6 +38,7 @@ from astral.api.endpoints import (
     TCP_NETWORK,
     TOR_DEFAULT_PORT,
     TOR_NETWORK,
+    TOR_UNKNOWN,
     TcpEndpoint,
     TorDigest,
     TorEndpoint,
@@ -411,6 +412,32 @@ class TorDigestTest(unittest.TestCase):
         )
         self.assertEqual(unmarshal("mod.tor.digest", DIGEST_TEXT), DIGEST)
 
+    def test_the_zero_digest_renders_unknown_three_ways(self):
+        """astral-go `94f6923`: `String` renders the zero value as `unknown`,
+        and `MarshalText` and `MarshalJSON` both reach it. It rendered the bare
+        `.onion` before, a string its own `UnmarshalText` refused on length."""
+        zero = TorDigest()
+        self.assertEqual(zero.text(), "unknown")
+        self.assertEqual(str(zero), "unknown")
+        self.assertEqual(marshal(zero), "unknown")
+
+    def test_the_zero_digest_round_trips_through_json_and_through_text(self):
+        zero = TorDigest()
+        self.assertEqual(TorDigest.parse("unknown"), zero)
+        self.assertTrue(TorDigest.parse("unknown").is_zero())
+        self.assertEqual(TorDigest.parse(zero.text()), zero)
+        self.assertEqual(unmarshal("mod.tor.digest", "unknown"), zero)
+        self.assertEqual(text_decode(text_encode(zero)), zero)
+
+    def test_only_the_exact_spelling_is_the_zero_digest(self):
+        """Upstream compares `string(text) == "unknown"` before it uppercases,
+        so any other spelling goes to base32 and is refused there. The bare
+        `.onion` stays refused: it decodes to zero bytes, not to a digest."""
+        for text in ("UNKNOWN", "Unknown", "unknown.onion", " unknown", ".onion"):
+            with self.subTest(text=text):
+                with self.assertRaises(ParseError):
+                    TorDigest.parse(text)
+
     def test_a_digest_of_the_wrong_length_is_refused(self):
         import base64
 
@@ -496,6 +523,17 @@ class TorEndpointTest(unittest.TestCase):
         with self.assertRaises(ParseError):
             TorEndpoint.parse(".onion:0")
 
+    def test_an_unknown_host_with_a_port_is_a_zero_endpoint_that_keeps_it(self):
+        """astral-go's `Endpoint.UnmarshalText` hands the host half to
+        `Digest.UnmarshalText`, which reads `unknown` as the zero digest since
+        `94f6923`. `unknown:1791` is therefore a zero endpoint on port 1791
+        upstream and here. It renders back as `unknown`, because `Address()`
+        drops the port of a zero value."""
+        parsed = TorEndpoint.parse("unknown:1791")
+        self.assertTrue(parsed.is_zero())
+        self.assertEqual(parsed.port, 1791)
+        self.assertEqual(parsed.text(), "unknown")
+
     def test_a_populated_endpoint_renders_the_same_string_three_ways(self):
         expected = f"{DIGEST_TEXT}:1791"
         self.assertEqual(TOR.address(), expected)
@@ -528,13 +566,14 @@ class TorEndpointTest(unittest.TestCase):
 
 
 class TorUpstreamFixTest(unittest.TestCase):
-    """The two tor behaviours above are ported, so upstream is read, not recalled.
+    """The three tor behaviours above are ported, so upstream is read, not recalled.
 
-    Both changes are in astral-go at this suite's pin -- `eeb31e3` (PR #90, the
-    fixed-width digest) and `54f55b0` (PR #91, the text form) -- so each is read
-    there, which is the mechanism `tests/reference.py` exists for. Absent
-    reference, skip; present and disagreeing, fail, because then this module is
-    making a false statement about the protocol.
+    All three changes are in astral-go at this suite's pin -- `eeb31e3` (PR #90,
+    the fixed-width digest), `54f55b0` (PR #91, the endpoint's text form) and
+    `94f6923` (PR #99, the digest's text form) -- so each is read there, which
+    is the mechanism `tests/reference.py` exists for. Absent reference, skip;
+    present and disagreeing, fail, because then this module is making a false
+    statement about the protocol.
     """
 
     GO = reference.ASTRAL_GO
@@ -561,6 +600,30 @@ class TorUpstreamFixTest(unittest.TestCase):
         body = marshal_text.partition("\n}")[0]
         self.assertIn("e.Address()", body)
         self.assertNotIn("Sprintf", body)
+
+    def test_the_zero_digest_text_form_is_unknown_upstream(self):
+        digest = self.source("api/tor/digest.go")
+        self.assertIn('const zeroDigestText = "unknown"', digest)
+        self.assertEqual(TOR_UNKNOWN, "unknown")
+
+        def body(signature: str) -> str:
+            after = digest.partition(signature)[2]
+            self.assertTrue(after, f"{signature} is not declared upstream")
+            return after.partition("\n}")[0]
+
+        self.assertIn("return zeroDigestText", body("func (d Digest) String()"))
+        self.assertIn("if len(d) == 0 {", body("func (d Digest) String()"))
+        self.assertIn(
+            "return []byte(d.String()), nil",
+            body("func (d Digest) MarshalText()"),
+        )
+        self.assertIn(
+            "if string(text) == zeroDigestText {",
+            body("func (d *Digest) UnmarshalText("),
+        )
+        self.assertIn(
+            "d.UnmarshalText([]byte(s))", body("func (d *Digest) UnmarshalJSON(")
+        )
 
     def test_the_widths_this_module_pins_are_the_ones_upstream_declares(self):
         """`DigestSize` bytes for the digest and `DigestSize` + a `uint16` for

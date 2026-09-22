@@ -52,7 +52,7 @@ a property of astrald rather than an omission here:
 ## Authorization
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `f6d3de71` and astral-go `02ba1c1`.** An identity argument travels
+pins, astrald `993ffac0` and astral-go `bf8542a`.** An identity argument travels
 under the key `identity` and `apphost.cancel`'s nonce under `query_id`.
 
 **`apphost.list_tokens` and `apphost.create_token` are administration, not
@@ -81,7 +81,7 @@ ops do not use it. The distinction decides who the plaintext-token paragraph
 below applies to: the router's substitution of the node identity for a missing
 caller reaches the token ops and is refused by `mayManageApps`.
 
-**The census, re-derived at `f6d3de71`.** Fourteen `op_*.go` files. Twelve
+**The census, re-derived at `993ffac0`.** Fourteen `op_*.go` files. Twelve
 refuse a network origin; the two that do not are `whoami` and `register`. Six
 ask `mod.auth.admin_manage_apps_action` -- `create_token`, `delete_token`,
 `list_tokens`, `grant`, `list_grants`, `revoke`. One asks

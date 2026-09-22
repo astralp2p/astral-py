@@ -106,7 +106,7 @@ def switch(*replies: tuple[str, bytes], mirror_eos: bool = False):  # type: igno
 
     `Batch` mirrors the terminator: "an explicit EOS input is answered with a
     final EOS, while a stream ended by EOF is not"
-    (`astral-go/astral/channel/batch.go` at `02ba1c1`). The client always sends
+    (`astral-go/astral/channel/batch.go` at `bf8542a`). The client always sends
     an explicit `eos`, so a node at the pin always answers one. `mirror_eos`
     selects that shape; it defaults off so the EOF-terminated shape, which
     design section 3.10 requires the client to accept, stays covered.
@@ -609,7 +609,7 @@ class SetTest(TreeCase):
     async def test_a_mirrored_eos_after_the_acks_is_tolerated(self):
         """The shape a node at the pin actually answers with. `channel.Batch`
         ends an explicitly terminated input stream with an `EOS` of its own
-        (`astral-go/astral/channel/batch.go` at `02ba1c1`), and every mock here
+        (`astral-go/astral/channel/batch.go` at `bf8542a`), and every mock here
         omitted it, so nothing covered the client meeting one."""
         mock = MockApphost(
             routes={OP_SET: switch(ACK_FRAME, ACK_FRAME, mirror_eos=True)}
@@ -1081,7 +1081,7 @@ class CitationTest(unittest.TestCase):
     ASTRALD_CITATIONS = {
         "mod/tree/src/node.go:29": "root node cannot hold a value",
         "mod/tree/src/node.go:37": "object = &astral.Nil{}",
-        "mod/tree/src/module.go:222": "return tree.ErrNodeHasSubnodes",
+        "mod/tree/src/module.go:196": "return tree.ErrNodeHasSubnodes",
         # The op that does have a separator, cited so the objection is scoped:
         # ST+follow is a real mode and `tree.get` is not in it.
         "mod/services/src/op_discover.go:17": "snapshot/stream separator",

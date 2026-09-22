@@ -1,7 +1,7 @@
 """`exonet`: the endpoint abstraction, and the registry of endpoint types.
 
 Tier 2, and the one module in this package with **no ops at all**.
-`api/exonet/module.go` at astral-go `02ba1c1` declares one interface and nothing
+`api/exonet/module.go` at astral-go `bf8542a` declares one interface and nothing
 else -- no method constants, no client package, no docs directory:
 
     type Endpoint interface {
@@ -12,7 +12,7 @@ else -- no method constants, no client package, no docs directory:
     }
 
 So this module is that interface plus the dispatch table astrald keeps beside
-it. `mod/exonet/module.go` at astrald `f6d3de71` declares a per-network registry
+it. `mod/exonet/module.go` at astrald `993ffac0` declares a per-network registry
 of dialers, unpackers and parsers with three dispatch methods; `Unpack(network,
 data)` and `Parse(network, address)` are the two a client needs, and `Dial` is
 the one it does not -- dialing an endpoint is the node's business and no
@@ -28,7 +28,7 @@ depend on which endpoints a build ships.
 **Two names for one thing, kept apart.** `Endpoint.network()` is the network a
 concrete type belongs to and is fixed per class; a *registration* maps one or
 more names to that class, because astrald's TCP module answers to both `tcp` and
-`inet` (`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `f6d3de71`).
+`inet` (`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `993ffac0`).
 `network()` is always the canonical name, never an alias.
 
 **`Endpoint.pack()` is the object payload and nothing else.** Every concrete
@@ -246,7 +246,7 @@ def _require(types: EndpointTypes, network: str) -> type[Endpoint]:
     """The class for a network name, or the fault of there being none.
 
     astrald answers `ErrUnsupportedNetwork` here
-    (`mod/exonet/errors.go`, astrald `f6d3de71`). This SDK adds no exception
+    (`mod/exonet/errors.go`, astrald `993ffac0`). This SDK adds no exception
     class for it: an unregistered network is an argument this SDK refuses before
     it sends anything, which is `BadArgument`.
     """

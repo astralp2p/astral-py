@@ -1038,7 +1038,7 @@ class ListSiblingsOpTest(UserCase):
     @bounded()
     async def test_a_zone_goes_to_the_op_argument_and_to_the_routing_zone(self):
         """One scope, two levers, as `Objects` does it. The op's own argument is
-        inert on astrald `f6d3de71` -- the context it builds is never used --
+        inert on astrald `993ffac0` -- the context it builds is never used --
         and the routing zone is not, so sending only one of them is wrong
         whichever one it is."""
         api = await self.serving(
@@ -1218,7 +1218,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_sends_the_identity_and_no_height_by_default(self):
-        """`start` is undeclared on astrald `f6d3de71`, and the node reads the
+        """`start` is undeclared on astrald `993ffac0`, and the node reads the
         height out of its own tree. An implicit `start=0` would mean "re-read
         the whole log" to a node that reads it, which is not what a caller who
         named no height asked for."""
