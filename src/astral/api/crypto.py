@@ -32,7 +32,7 @@ on the channel body (`mod/crypto/src/op_verify_hash_signature.go`,
 `op_verify_text_signature.go`), so an implementation that never streams one
 gets an accepted query, no answer, EOF -- and, if it reports that as success,
 **silently never verifies**. Every shape below was read out of astrald's
-`mod/crypto/src` at `993ffac0`, never out of a sibling SDK.
+`mod/crypto/src` at `e85f5da4`, never out of a sibling SDK.
 
 **One rule decides where each value travels**, and it is stated once here so no
 method has to argue it again:
@@ -75,7 +75,7 @@ form.
 
 **A caller signs as itself, and an anonymous caller cannot sign at all.** Every
 signature passes `authorizeSigner`
-(`mod/crypto/src/sign_guard.go` at `993ffac0`): the key must be the caller's
+(`mod/crypto/src/sign_guard.go` at `e85f5da4`): the key must be the caller's
 own identity, or one the caller holds a `mod.auth.sudo_action` for, and the
 node's own key is refused on the self branch. The core router substitutes the
 node's identity for an anonymous caller, so an anonymous IPC guest is refused
@@ -119,7 +119,7 @@ Reached as `client.crypto`, the `functools.cached_property` design section 5.1
 asks for, or as `Crypto(client)`, which constructs the same object and is what
 the tests here use.
 
-Source citations are pinned to astrald `993ffac0` and astral-go `bf8542a`, the
+Source citations are pinned to astrald `e85f5da4` and astral-go `5ea970b4`, the
 revisions `tests/reference.py` names. The SDK supports the node at those
 revisions and no older one, so every citation here resolves at a pin.
 `tests/test_api_crypto.py` reads those directories rather than trusting this
@@ -371,7 +371,7 @@ def _split_key_text(text: str, type_name: str) -> tuple[str, str]:
     A missing colon is `invalid format` there and a `ParseError` here. **An empty
     prefix is not refused**, because astral-go does not refuse it -- its
     `UnmarshalText` checks the part count and nothing else (`api/crypto/
-    public_key.go` at `bf8542a`) -- and because the zero value of all three types
+    public_key.go` at `5ea970b4`) -- and because the zero value of all three types
     is exactly the one this used to reject: `PublicKey().text()` is `":"`, so a
     parser that refused it refused its own encoder's output and the text channel
     was the one framing of four that could not carry a zero key.

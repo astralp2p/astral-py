@@ -1,6 +1,6 @@
 """`ip`: the node's own addresses, and the `mod.ip.ip_address` wire type.
 
-Tier 2, three ops, and **zero astral-go client**: `api/ip` at `bf8542a` is
+Tier 2, three ops, and **zero astral-go client**: `api/ip` at `5ea970b4` is
 `ip.go`, `event_network_address_changed.go` and a `README.md`, and nothing else
 -- no `module.go` method constants, no `client/` package. The op names come
 from the live `shell.spec` registry, which is the authority design section 0
@@ -31,7 +31,7 @@ wire.** `local_addrs` and `public_ip_candidates` end at an `eos`;
 is a `bytes8` whose payload is the address bytes: **four for IPv4, sixteen for
 IPv6, zero for the unset address**. astral-go writes `To4()` when the value is
 IPv4 and the whole slice otherwise (`api/ip/ip.go` `IP.WriteTo`, astral-go
-`bf8542a`), and its reader takes whatever length arrives. The three payloads
+`5ea970b4`), and its reader takes whatever length arrives. The three payloads
 above are the proof and are pinned as vectors in `tests/test_api_ip.py`:
 `04 0a150005` is `10.21.0.5`, `10 fe800000000000008aa29efffea84ab0` is
 `fe80::8aa2:9eff:fea8:4ab0`, and `objects.new?type=mod.ip.ip_address` answers
@@ -86,7 +86,7 @@ learns where the bytes end, which is more than astral-go can tell it.
 
 **astral-go's `ip.ParseIP` never returns an error.** `func ParseIP(s string)
 (IP, error) { return IP(net.ParseIP(s)), nil }` (`api/ip/ip.go`, astral-go
-`bf8542a`): `net.ParseIP` answers nil for anything it cannot read, and the nil
+`5ea970b4`): `net.ParseIP` answers nil for anything it cannot read, and the nil
 travels as a valid-looking zero address. Every caller of it inherits the defect
 -- `tcp.ParseEndpoint("garbage:80")` succeeds -- and this SDK does not port it
 (design section 5.1 rule 7). `IPAddress.parse` raises `ParseError`.
@@ -98,7 +98,7 @@ use. Importing `astral.api` registers `mod.ip.ip_address` and
 `mod.ip.ip_address` in a `Ref` slot, so a program that never asks this module
 anything still needs the type to decode a link.
 
-Source citations are pinned to astral-go `bf8542a` and astrald `993ffac0`.
+Source citations are pinned to astral-go `5ea970b4` and astrald `e85f5da4`.
 """
 
 from __future__ import annotations

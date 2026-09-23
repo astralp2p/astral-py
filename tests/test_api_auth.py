@@ -1016,7 +1016,7 @@ class LiveAuthTest(live_support.LiveCase):
     Nothing here signs, stores or indexes. `auth.index` gets an empty batch and
     IDs of objects no repository holds: the op loads before it indexes and
     answers `object not found` without reaching the index
-    (`mod/auth/src/op_index.go` at astrald `993ffac0`, `indexOne`).
+    (`mod/auth/src/op_index.go` at astrald `e85f5da4`, `indexOne`).
     `auth.sign_contract` is opened and closed with nothing on the body, so the
     node has nothing to sign. Both are the ops' refusal shapes and both are
     verified rather than assumed.
@@ -1126,8 +1126,8 @@ class LiveAuthTest(live_support.LiveCase):
         `type auth.Action does not implement Object and is not a supported
         container`. `5b1d282` added both, and `specFromType` probes
         `tryObjectType` ahead of its container dispatch, so the embedded field
-        now yields a `RefSpec` naming `mod.auth.action`. astrald `993ffac0`
-        requires `bf8542a`, which is past `5b1d282`, so the SDK's own pin is
+        now yields a `RefSpec` naming `mod.auth.action`. astrald `e85f5da4`
+        requires `5ea970b4`, which is past `5b1d282`, so the SDK's own pin is
         already on this side of it.
         """
         async with await self.client() as client:

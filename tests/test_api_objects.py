@@ -6,7 +6,10 @@ claim is made at each and the three must agree:
 - **Tier A** pins the wire. Every payload here is bytes `furry-bolt` sent this
   session -- ten `mod.objects.repository_info` frames, a `mod.objects.probe`, and
   the zero value of six types as `objects.new` produced them -- so a round trip
-  through them cannot agree with itself while disagreeing with the node. The
+  through them cannot agree with itself while disagreeing with the node. Two of
+  those captures are now pre-change: that node predates the fourth field of
+  `mod.objects.repository_info` and the fifth of `mod.objects.probe`, so each is
+  named `PRE_CHANGE_*` and pins the break rather than the current record. The
   search grammar is pinned against astral-go's `SearchQuery.UnmarshalText` case
   by case, because a searcher registered through `objects.register_searcher` is
   handed the raw string and parses it with that function.
@@ -203,16 +206,26 @@ REPOSITORY_INFO_VECTORS = {
     ),
 }
 
-LIVE_PROBE = bytes.fromhex(
+# A probe the node answered before `mod.objects.probe` gained its resolved
+# `ObjectID`. The capture stands as the bytes that node sent; it is not edited to
+# the current shape, because a byte no node emitted is not a capture. The field
+# arrived in astral-go `48090aa` and the pin is past it, so this is now the
+# pre-change form and `PreChangeProbeTest` is what it pins.
+PRE_CHANGE_PROBE = bytes.fromhex(
     "16" "6d6f642e63727970746f2e707269766174655f6b6579"   # string8 "mod.crypto.private_key"
     "06" "73797374656d"                                   # string8 "system"
     "18" "6170706c69636174696f6e2f6f637465742d73747265616d"  # string8 mime
     "0000000000002134"                                    # duration 8500 ns
 )
 
+# The zero `mod.objects.probe` the same pre-change node answered: three empty
+# string8 and a zero duration, with no trailing presence byte.
+PRE_CHANGE_PROBE_ZERO = bytes.fromhex("0000000000000000000000")
+
 # `objects.new?type=<name>` on the live node, one zero value per type.
+# `mod.objects.probe` is not here: the value this node answered predates the
+# appended field, so it lives in `PRE_CHANGE_PROBE_ZERO` instead.
 LIVE_ZEROS = {
-    "mod.objects.probe": bytes.fromhex("0000000000000000000000"),
     "mod.objects.search_result": bytes.fromhex("0000"),
     "objects.search_query": bytes.fromhex("000000000000"),
     "mod.objects.commit_msg": b"",
@@ -231,6 +244,20 @@ LIVE_READ_HEAD = bytes.fromhex("41444330166d6f642e63727970746f2e")
 def framed(obj: object) -> tuple[str, bytes]:
     """One response frame for an object this SDK can build."""
     return (getattr(obj, "ASTRAL_TYPE", ""), payload_bytes(obj))
+
+# The probe a node at the pin answers for `ID_A`: the four fields `PRE_CHANGE_PROBE`
+# captured, then the resolved ID, which a successful probe always sets. Built and
+# not captured -- the node that answered `PRE_CHANGE_PROBE` predates the field, so
+# there is no capture of this shape to quote. The op tests below drive the mock
+# with it because what they exercise is the op plumbing; the byte-level claims
+# against the real capture are `ProbeWireTest`'s and `PreChangeProbeTest`'s.
+CURRENT_PROBE = Probe(
+    type="mod.crypto.private_key",
+    repo="system",
+    mime="application/octet-stream",
+    time=Duration(8500),
+    object_id=ID_A,
+)
 
 
 def error_frame(message: str) -> tuple[str, bytes]:
@@ -392,22 +419,84 @@ class PreChangeRepositoryInfoTest(unittest.TestCase):
 class ProbeWireTest(unittest.TestCase):
     """`mod.objects.probe`, against the node's own bytes and its own blueprint."""
 
-    def test_the_live_payload_decodes_and_re_encodes(self):
-        probe = Probe.read_payload(object_reader(LIVE_PROBE))
-        self.assertEqual(probe.type, "mod.crypto.private_key")
-        self.assertEqual(probe.repo, "system")
-        self.assertEqual(probe.mime, "application/octet-stream")
-        self.assertEqual(int(probe.time), 8500)
-        self.assertEqual(payload_bytes(probe), LIVE_PROBE)
+    def test_the_captured_fields_decode_and_re_encode(self):
+        """The four fields the capture carries, read back out of a current
+        payload built from them. The capture itself is one byte short of a
+        current record, so it is rebuilt here rather than decoded."""
+        probe = Probe(
+            type="mod.crypto.private_key",
+            repo="system",
+            mime="application/octet-stream",
+            time=Duration(8500),
+        )
+        again = Probe.read_payload(object_reader(payload_bytes(probe)))
+        self.assertEqual(again.type, "mod.crypto.private_key")
+        self.assertEqual(again.repo, "system")
+        self.assertEqual(again.mime, "application/octet-stream")
+        self.assertEqual(int(again.time), 8500)
+        self.assertIsNone(again.object_id)
 
     def test_time_is_a_duration_and_not_a_timestamp(self):
         """The Go field is `astral.Duration`: how long the probe took. Reading it
         as a `time` would report 1970 for every object on the node."""
-        self.assertEqual(Probe.FIELDS[-1].spec, Primitive("duration"))
+        self.assertEqual(Probe.FIELDS[-2].spec, Primitive("duration"))
         self.assertIsInstance(Probe().time, Duration)
 
-    def test_the_zero_value_is_the_bytes_the_node_answers(self):
-        self.assertEqual(payload_bytes(Probe()), LIVE_ZEROS["mod.objects.probe"])
+    def test_the_field_specs_are_the_five_the_node_sends(self):
+        self.assertEqual(
+            [(f.wire_name, f.spec) for f in Probe.FIELDS],
+            [
+                ("Type", Primitive("string8")),
+                ("Repo", Primitive("string8")),
+                ("Mime", Primitive("string8")),
+                ("Time", Primitive("duration")),
+                ("ObjectID", Ptr("object_id.sha256")),
+            ],
+        )
+
+    def test_the_resolved_id_round_trips(self):
+        """A set pointer costs its `0x01` flag and 40 flat bytes, so it is 40
+        longer than the same record with a nil one, whose flag it replaces."""
+        probe = Probe(type="", repo="main", mime="", time=Duration(0), object_id=ID_A)
+        raw = payload_bytes(probe)
+        self.assertEqual(len(raw), len(payload_bytes(Probe(repo="main"))) + 40)
+        self.assertEqual(raw[-41], 0x01)
+        self.assertEqual(Probe.read_payload(object_reader(raw)).object_id, ID_A)
+
+    def test_the_zero_value_is_the_pre_change_bytes_plus_a_nil_flag(self):
+        """The break is additive: the four fields did not move, and the fifth
+        adds the one `0x00` a nil `Ptr` costs."""
+        raw = payload_bytes(Probe())
+        self.assertEqual(raw, PRE_CHANGE_PROBE_ZERO + b"\x00")
+
+
+class PreChangeProbeTest(unittest.TestCase):
+    """A node built before astral-go `48090aa` sends four fields, and is refused.
+
+    The same break `PreChangeRepositoryInfoTest` pins. Refusing rather than
+    defaulting keeps the decode honest about its own footing: a short read says
+    the payload is not the record this SDK was written against, while a
+    defaulted nil would be indistinguishable from the nil a current node sends,
+    and both would then mean "this node does not report the field" while only
+    one of them was read from the wire. astral-go takes the same break, in
+    `TestProbe_ReadFrom_PreChangePayloadIsEOF`.
+    """
+
+    def test_a_four_field_payload_no_longer_decodes(self):
+        """`ShortRead` at the presence byte: the old record ends exactly where
+        the new one expects the fifth field."""
+        with self.assertRaises(ShortRead) as caught:
+            Probe.read_payload(object_reader(PRE_CHANGE_PROBE))
+        self.assertIn(f"offset {len(PRE_CHANGE_PROBE)}", str(caught.exception))
+
+    def test_the_prefix_the_old_node_sent_is_still_the_prefix_sent_now(self):
+        probe = Probe(
+            type="mod.crypto.private_key",
+            repo="system",
+            mime="application/octet-stream",
+            time=Duration(8500),
+        )
+        self.assertEqual(payload_bytes(probe)[: len(PRE_CHANGE_PROBE)], PRE_CHANGE_PROBE)
 
 
 class DescriptorWireTest(unittest.TestCase):
@@ -711,7 +800,7 @@ class SearchGrammarTest(unittest.TestCase):
         """A query built rather than parsed can hold what the grammar cannot
         spell, and the text channel loses it silently -- `bin`, `json` and
         `canonical` all carry it exactly. The loss is astral-go's
-        `SearchQuery.UnmarshalText` (api/objects/search_query.go at bf8542a),
+        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 5ea970b4),
         which a registered searcher parses the same query with, so the SDK
         matching it is what keeps the two agreeing about the question.
 
@@ -1245,7 +1334,7 @@ class ProbeOpTest(ObjectsCase):
     @bounded()
     async def test_the_single_form_returns_a_probe(self):
         mock = MockApphost(
-            routes={OP_PROBE: Accept(objects=[("mod.objects.probe", LIVE_PROBE)])}
+            routes={OP_PROBE: Accept(objects=[framed(CURRENT_PROBE)])}
         )
         async with mock:
             o = await self.objects(mock)
@@ -1256,7 +1345,7 @@ class ProbeOpTest(ObjectsCase):
     @bounded()
     async def test_a_repository_may_be_named(self):
         mock = MockApphost(
-            routes={OP_PROBE: Accept(objects=[("mod.objects.probe", LIVE_PROBE)])}
+            routes={OP_PROBE: Accept(objects=[framed(CURRENT_PROBE)])}
         )
         async with mock:
             o = await self.objects(mock)
@@ -1265,7 +1354,7 @@ class ProbeOpTest(ObjectsCase):
 
     @bounded()
     async def test_the_batch_form_sends_the_eos_because_the_op_closes_on_it(self):
-        route = Batch(("mod.objects.probe", LIVE_PROBE), ("mod.objects.probe", LIVE_PROBE))
+        route = Batch(framed(CURRENT_PROBE), framed(CURRENT_PROBE))
         mock = MockApphost(routes={OP_PROBE: route})
         async with mock:
             o = await self.objects(mock)
@@ -1642,8 +1731,15 @@ class NewOpTest(ObjectsCase):
 
     @bounded()
     async def test_it_returns_the_zero_value(self):
+        # The node's own zero `mod.objects.probe` plus the nil flag its fifth
+        # field adds; `ProbeWireTest` pins that those are the same bytes the SDK
+        # encodes, so this route stays anchored to the capture.
         mock = MockApphost(
-            routes={OP_NEW: Accept(objects=[("mod.objects.probe", LIVE_ZEROS["mod.objects.probe"])])}
+            routes={
+                OP_NEW: Accept(
+                    objects=[("mod.objects.probe", PRE_CHANGE_PROBE_ZERO + b"\x00")]
+                )
+            }
         )
         async with mock:
             o = await self.objects(mock)
@@ -2544,6 +2640,24 @@ class CitationTest(unittest.TestCase):
     """Every `path:line` this module cites lands on its claim at the pin."""
 
     CITATIONS = (
+        (
+            reference.ASTRAL_GO,
+            "api/objects/probe.go",
+            15,
+            "ObjectID is the resolved full ID of the probed object. It is optional; nil means",
+        ),
+        (
+            reference.ASTRAL_GO,
+            "api/objects/probe.go",
+            17,
+            "ObjectID *astral.ObjectID",
+        ),
+        (
+            reference.ASTRALD,
+            "mod/objects/src/module.go",
+            186,
+            "probe.ObjectID = r.ID()",
+        ),
         (
             reference.ASTRAL_GO,
             "astral/channel/channel.go",

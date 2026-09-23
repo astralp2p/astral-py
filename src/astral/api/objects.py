@@ -407,12 +407,27 @@ class Probe:
     `type` is empty for an object with no astral type header, which is what
     distinguishes a stored blob from a stored object. astral-go names this type
     `Probe` and the wire name is `mod.objects.probe`; both agree here.
+
+    `object_id` is the resolved ID of the object probed: a probe answered for a
+    `Partial Object ID` names the object in full, size included. It is a `Ptr`,
+    so nil is legal on the wire, and nil means the answering node predates the
+    field rather than that the probe failed. Sourced: astral-go
+    `api/objects/probe.go:17` at the pin, `ObjectID *astral.ObjectID`, whose
+    comment at `probe.go:15-16` gives nil that meaning; astrald sets it on every
+    successful probe (`mod/objects/src/module.go:186`, `probe.ObjectID =
+    r.ID()`, unconditional on the success path).
+
+    The field is appended, so it is a compatibility break in both directions:
+    this decoder reading a pre-field payload runs out of bytes, and a pre-field
+    decoder reading ours has one byte left over for a nil pointer and 41 for a
+    set one.
     """
 
     type: str = wire("Type", Primitive("string8"))
     repo: str = wire("Repo", Primitive("string8"))
     mime: str = wire("Mime", Primitive("string8"))
     time: Duration = wire("Time", Primitive("duration"))
+    object_id: ObjectID | None = wire("ObjectID", Ptr("object_id.sha256"))
 
 
 @record("mod.objects.registration_lease")
