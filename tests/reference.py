@@ -43,13 +43,24 @@ ASTRALD: Final = "astrald"
 ASTRAL_GO: Final = "astral-go"
 
 PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
-    # The revisions the modules were read against: astrald `993ffac0` and the
+    # The revisions the modules were read against: astrald `e85f5da4` and the
     # astral-go its `go.mod` requires. The SDK supports the current node and no
     # older one, so every `path:line` citation in `astral/api/*.py` resolves at
     # one of these two and none names another revision. Bumping one means
     # re-reading the citations that name it.
-    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "993ffac0"),
-    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "bf8542a"),
+    #
+    # Bumped from astrald `993ffac0` / astral-go `bf8542a` for the partial
+    # Object ID. Verified at the bump: of the files this tree cites, eight
+    # differ between the old pin and the new one -- astral-go
+    # `api/objects/probe.go`, `astral/object_id.go` and `astral/object_resolver.go`,
+    # astrald `mod/gateway/src/parser.go`, `mod/apphost/src/ws_server.go`,
+    # `mod/auth/src/contracts.go`, `mod/bip137sig/src/engine.go` and
+    # `mod/crypto/src/module.go`. Each was re-read. One claim changed and was
+    # rewritten: `Module.Parse` gained a zero-identity refusal
+    # (`astral/api/endpoints.py`). No line-numbered citation moved, and the
+    # `CITATIONS` rows of every test module resolve at these pins.
+    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "e85f5da4"),
+    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "5ea970b4"),
 }
 
 

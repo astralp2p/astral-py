@@ -11,7 +11,7 @@ amendments that supersede the sections they name. **Section 11.4 is deferred**:
 the wire core's `Any`/nil behaviour stays as it is.
 
 Authorities, in precedence order: the live node, astral-go
-(`../astral-go/main` @ `bf8542a`, the revision astrald `993ffac0` requires), astrald, astral-docs.
+(`../astral-go/main` @ `5ea970b4`, the revision astrald `e85f5da4` requires), astrald, astral-docs.
 The SDK supports the node at those revisions and no older one, so a claim about
 an earlier astrald or astral-go has no place in this tree.
 

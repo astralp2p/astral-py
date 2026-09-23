@@ -696,7 +696,18 @@ class Duration(int):
 _ZBASE32: Final = "ybndrfg8ejkmcpqxot1uwisza345h769"
 _ZBASE32_INDEX: Final = {c: i for i, c in enumerate(_ZBASE32)}
 _ID_PREFIX: Final = "data1"
+_PARTIAL_ID_PREFIX: Final = "data0"
 _ID_SYMBOLS: Final = 64  # 40 bytes = 320 bits = exactly 64 symbols, never padded
+# The `data0` body is the last 52 of those 64 symbols. The first 12 span bits
+# 0-59, which are size bits alone, so a zero size makes all 12 `y` and they are
+# dropped whole -- unlike `data1`, which strips every leading `y` it happens to
+# have. sourced: astral-go `astral/object_id.go:24` at the pin, "without the 12
+# characters that carry Size bits alone".
+_PARTIAL_ID_SYMBOLS: Final = 52
+_PARTIAL_ID_HEAD: Final = _ID_SYMBOLS - _PARTIAL_ID_SYMBOLS
+# Symbol 12 carries the last four size bits (all zero) and the first hash bit, so
+# only two of the 32 symbols can open a `data0` body.
+_PARTIAL_ID_FIRST: Final = (_ZBASE32[0], _ZBASE32[1])
 
 
 def _zbase32_encode(data: bytes) -> str:
@@ -753,6 +764,20 @@ class ObjectID:
 
     @classmethod
     def parse(cls, text: str) -> "ObjectID":
+        """The text form, either prefix. `data0` names an object by hash alone.
+
+        A `data0` ID carries no size, so it parses to size 0 -- a
+        `Partial Object ID`. Encoding is not symmetric: `__str__` emits `data1`
+        for every value, size 0 included. Sourced: astral-go
+        `astral/object_id.go:36` `ParseID` at the pin, which dispatches on the
+        prefix and decodes both forms into the same 40-byte buffer.
+
+        A node resolves such an ID by hash inside the selected repository
+        (astrald `mod/objects/src/partial_id_test.go` at the pin pins the
+        behaviour for read, contains, delete, load and probe).
+        """
+        if text.startswith(_PARTIAL_ID_PREFIX):
+            return cls._parse_partial(text)
         if not text.startswith(_ID_PREFIX):
             raise ParseError(f"object_id: {text!r} has no {_ID_PREFIX!r} prefix")
         body = text[len(_ID_PREFIX) :]
@@ -760,6 +785,35 @@ class ObjectID:
             raise ParseError(f"object_id: {text!r} is too long")
         data = _zbase32_decode(body.rjust(_ID_SYMBOLS, _ZBASE32[0]))
         return cls(size=int.from_bytes(data[:8], "big"), hash=data[8:])
+
+    @classmethod
+    def _parse_partial(cls, text: str) -> "ObjectID":
+        """`data0` + exactly 52 symbols opening on `y` or `b`.
+
+        The width is exact rather than a maximum: `data1` strips leading `y`
+        symbols and so has a variable body, while `data0` strips a fixed 12 and
+        keeps every symbol after them. A short body is not a smaller number here,
+        it is a different hash, so padding one would invent an ID.
+        """
+        body = text[len(_PARTIAL_ID_PREFIX) :]
+        if len(body) != _PARTIAL_ID_SYMBOLS:
+            raise ParseError(
+                f"object_id: {text!r} is not {_PARTIAL_ID_SYMBOLS} symbols after "
+                f"{_PARTIAL_ID_PREFIX!r}"
+            )
+        if body[0] not in _PARTIAL_ID_FIRST:
+            raise ParseError(
+                f"object_id: {text!r} opens on {body[0]!r}, not "
+                f"{' or '.join(repr(c) for c in _PARTIAL_ID_FIRST)}"
+            )
+        data = _zbase32_decode(_ZBASE32[0] * _PARTIAL_ID_HEAD + body)
+        size = int.from_bytes(data[:8], "big")
+        if size:
+            # Unreachable through the two checks above, which is the point: the
+            # size bits are asserted rather than assumed, so a future change to
+            # either check cannot quietly admit a sized `data0`.
+            raise ParseError(f"object_id: {text!r} decodes to size {size}, not 0")
+        return cls(size=0, hash=data[8:])
 
     def json(self) -> str:
         return "" if self.is_zero else str(self)
