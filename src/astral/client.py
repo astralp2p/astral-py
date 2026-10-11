@@ -402,7 +402,7 @@ class Client:
 
     @functools.cached_property
     def services(self) -> "Services":
-        """The `services` ops: discovery and sync."""
+        """The `services` ops: advertising and discovery."""
         from .api.services import Services
 
         return Services(self)

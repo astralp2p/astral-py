@@ -171,7 +171,7 @@ class ReadmeFollowTest(unittest.TestCase):
     `objects.scan?repo=main&follow=true` both ended at a separator `eos`.
     """
 
-    SEPARATOR_OPS = frozenset({"objects.scan", "services.discover", "services.sync"})
+    SEPARATOR_OPS = frozenset({"objects.scan", "services.discover"})
     """Ops whose first `eos` is the snapshot/live boundary. Verified live."""
 
     NO_SEPARATOR_OPS = frozenset({"tree.get"})

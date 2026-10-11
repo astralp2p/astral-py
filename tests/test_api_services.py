@@ -1,44 +1,56 @@
-"""The `services` module client, and the bundle kind it proves.
+"""The `services` module client on the Services v1 wire.
 
 Three tiers in one file, because the same claim is made at each and the three
 must agree:
 
-- **Tier A** pins the wire. `services.update` is the SDK's first record with a
-  `bundle` in a pointer slot, and R-13 is exactly the question of whether that
-  bundle decodes through the registry or stays opaque. Both vectors here are
-  bytes the node produced, not bytes this SDK produced: the zero value comes
-  from `objects.new?type=services.update` and the populated one came back from
-  `objects.echo?strict=true`, which drops the unparsed-object fallback and so
-  forces the node to decode through its own registry and re-encode from the
-  decoded value.
-- **Tier B** pins the two ops against `MockApphost`: the query string each one
-  builds, the answer each one accepts, the shape each one declares, and the
-  three faults that are the point of separating `discover` from
-  `discover_follow` -- collecting past a separator, leaving a follow stream
-  open, and sending `follow` on a `sync` that must answer.
-- **Tier C** runs the read-only half against a real node, plus the two probes
-  that settle R-13 live. `services.sync` is never called: it mutates the local
-  registry (design section 7.3).
-
-The op inventory is the live `shell.spec` registry and nothing else:
-`services.discover` and `services.sync`, verified this session against
-`furry-bolt`.
+- **Tier A** pins the wire. Every v1 type round-trips bytes astral-go `3c849bf`
+  wrote for it -- its own `WriteTo` and `ResolveObjectID`, run against the
+  astral-go checkout at that revision -- and `services.update` keeps the two
+  vectors the node itself produced: the zero value from
+  `objects.new?type=services.update` and a populated update the node decoded and
+  re-encoded through `objects.echo?strict=true` (R-13).
+- **Tier B** pins both ops against `MockApphost`: the query string each one
+  builds, the binding's ask/answer/change exchange, the discovery events and
+  their initial outcome, and the watcher's offering set.
+- **Tier C** runs against a real node, read-only: the op surface, the two
+  refusals an anonymous caller meets, and every v1 type round-tripped through
+  the node's own registry.
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import unittest
 
 import astral
+from astral.api import services as services_module
+from astral.api.auth import Permit
 from astral.api.services import (
+    ERR_ADVERTISED,
+    MAX_NAMES,
     OP_ADVERTISE,
     OP_DISCOVER,
-    OP_SYNC,
+    REACH_LOCAL,
+    REACH_SWARM,
     SERVICES_TYPES,
+    Answer,
+    Ask,
+    Binding,
+    Change,
+    DiscoveryRule,
+    DiscoveryScope,
+    Incomplete,
+    InitialOutcome,
+    OfferingKey,
+    OperationsList,
+    Removed,
+    ServiceDiscoveryAction,
     Services,
     Update,
+    join_names,
+    validate_name,
 )
 from astral.client import connect
 from astral.codec.binary import object_reader, payload_bytes
@@ -47,35 +59,32 @@ from astral.errors import (
     BadArgumentType,
     ProtocolError,
     QueryRejected,
+    QueryTimeout,
     RemoteError,
 )
 from astral.object import Ack, Bundle, UnparsedObject
+from astral.objectid import object_id
 from astral.primitives import String8, Uint64
 from astral.querystring import parse
 from astral.registry import default_blueprints
 from astral.session import Session, flush_cancels
-from astral.spec import Primitive, Ptr
-from astral.types import Identity
+from astral.spec import Primitive, Ptr, Slice
+from astral.types import Identity, Nonce
 
 import live_support
 import reference
-from astral.api import services as services_module
 from mock_apphost import (
-    ACK,
     Accept,
     ErrorMsg,
     FURRY_BOLT,
-    FURRY_BOLT_ALIAS,
     MockApphost,
     QUERY_ACCEPTED,
-    ROUTE_QUERY,
     Reject,
     bounded,
     frame,
-    socket_fds,
 )
 
-# --- vectors, all of them bytes the node sent ----------------------------
+# --- vectors -------------------------------------------------------------
 
 # `objects.new?type=services.update` on `furry-bolt`, whole frame. The node
 # builds the zero value server-side and sends it, so the four zero bytes are
@@ -104,25 +113,92 @@ LIVE_BUNDLE_UPDATE = bytes.fromhex(
     "0000000f" "06" "75696e743634" "0000000000000007"
 )
 
-# The whole body of `services.discover?follow=false` on a node with neither NAT
-# nor gateway enabled: one `eos` frame and EOF. An empty answer is the ordinary
-# answer, not a fault.
-LIVE_EMPTY_DISCOVER_BODY = bytes.fromhex("03656f7300000000")
+# The secp256k1 generator's compressed key: a valid identity every reader can
+# recompute.
+G = Identity.parse("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
 
+OPS_INFO = Bundle([OperationsList(operations=["chat.send"])])
 
-def update_frame(update: Update) -> tuple[str, bytes]:
-    return ("services.update", payload_bytes(update))
-
-
-NAT_UPDATE = Update(
-    available=True, name="nat", provider_id=FURRY_BOLT, info=None
+# Bytes and ObjectIDs astral-go `3c849bf` produced for these values: each value
+# built as the Go struct literal it mirrors, then `WriteTo` and
+# `ResolveObjectID`, run against the astral-go checkout `tests/reference.py`
+# pins. Generated by Go, never by this SDK.
+GO_VECTORS: tuple[tuple[object, str, str], ...] = (
+    (
+        Ask(request_id=Nonce(42), caller_id=G, service="chat"),
+        "000000000000002a01" + G.key.hex() + "0463686174",
+        "data1rb9qattt9mkipryqcr6sfitcm8fwsm1y1nbzn7gu4tukya8upz4rk",
+    ),
+    (
+        Answer(
+            request_id=Nonce(42),
+            update=Update(available=True, name="chat", provider_id=None, info=OPS_INFO),
+        ),
+        "000000000000002a01010463686174000100000001000000281873657276696365732e6f70"
+        "65726174696f6e735f6c697374000000010109636861742e73656e64",
+        "data1fmd5oned15ftkyty6ths499wnckcsii6coft6ct7uncnku61en8mm",
+    ),
+    (
+        Change(all=False, callers=[G]),
+        "000000000101" + G.key.hex(),
+        "data1dzmjoh3fgdsuybabfzuj4k8wukxrqdeetg5jdz8jnkcnaot93rdop",
+    ),
+    (
+        Change(all=True, callers=[]),
+        "0100000000",
+        "data1buyyfrpszj1cstifnjwrht1qnr45qenhfg7rdtmr8j3zodwjz8ntz",
+    ),
+    (
+        Incomplete(services=["files"]),
+        "00000001010566696c6573",
+        "data1n8g5uuhe3iqz1ocnsdr4uiq9j6t8b1zmi1qjndht4zure83w4mgtm",
+    ),
+    (
+        OfferingKey(provider_id=G, name="chat"),
+        "01" + G.key.hex() + "0463686174",
+        "data1rnfcu1pzj6wgoy3cqwyfnat8etae93ied56kzsohkcw8itgzetmr3",
+    ),
+    (
+        Removed(offerings=[OfferingKey(provider_id=G, name="chat")]),
+        "0000000101" "01" + G.key.hex() + "0463686174",
+        "data1rnp3713twcmgynbbfbq7d8bktqd43ee9p63qd6zfgr8fxqwgc6sff",
+    ),
+    (
+        OperationsList(operations=["chat.send", "chat.read"]),
+        "000000020109636861742e73656e640109636861742e72656164",
+        "data1dxndq7sq5pw9n65jx8e7jekp8xkzpc7tiigggheadz9eui4a5ugsi",
+    ),
+    (
+        ServiceDiscoveryAction(nonce=Nonce(7), actor_id=G, service="chat", node_id=G),
+        "000000000000000701" + G.key.hex() + "0463686174" "01" + G.key.hex(),
+        "data18z6e99et4ad7epchbgpsg4ym3dddy3squojjxqhab6ahphfy1kjgt",
+    ),
+    (
+        DiscoveryRule(services=["chat"], nodes=[]),
+        "0000000101046368617400000000",
+        "data1nh4ka8t3hx9sqiyxz9bwaw1fe1j38r6ka4h8ihbk6f7srqnuf7q6f",
+    ),
+    (
+        DiscoveryScope(rules=[DiscoveryRule(services=["chat"], nodes=[G])]),
+        "000000010100000001010463686174000000010" "1" + G.key.hex(),
+        "data1fpjqo3iuuo9ny5owe9p7gcmmdnakmegb8i3hzscoajef9eymzz853",
+    ),
+    (
+        Update(available=False, name="files", provider_id=None, info=None),
+        "000566696c65730000",
+        "data1b4qaaeej9pofwa83i441hn3bmmg4bzss3wwbgjiu1k4767gjo15c4",
+    ),
 )
-GATEWAY_UPDATE = Update(
-    available=True, name="gateway", provider_id=FURRY_BOLT, info=None
-)
-GONE_UPDATE = Update(available=False, name="nat", provider_id=FURRY_BOLT, info=None)
 
-ACK_FRAME = ("ack", b"")
+PROVIDER = FURRY_BOLT
+CHAT = Update(available=True, name="chat", provider_id=PROVIDER, info=OPS_INFO)
+FILES = Update(available=True, name="files", provider_id=PROVIDER, info=None)
+CHAT_GONE = Update(available=False, name="chat", provider_id=PROVIDER, info=None)
+CHAT_KEY = OfferingKey(provider_id=PROVIDER, name="chat")
+
+
+def obj_frame(obj: object) -> tuple[str, bytes]:
+    return (obj.ASTRAL_TYPE, payload_bytes(obj))  # type: ignore[attr-defined]
 
 
 def frame_error(message: str) -> tuple[str, bytes]:
@@ -133,71 +209,123 @@ def frame_error(message: str) -> tuple[str, bytes]:
     return ("error_message", w.getvalue())
 
 
-# --- Tier A: the record, on the bytes the node sent ----------------------
+ACK_FRAME = ("ack", b"")
+EOS_FRAME = ("eos", b"")
+
+
+# --- Tier A: the records, on bytes astral-go and the node wrote -----------
+
+
+class GoWireTest(unittest.TestCase):
+    """Every v1 type against astral-go's own encoder."""
+
+    def test_every_type_encodes_to_the_go_bytes(self):
+        for value, payload, _ in GO_VECTORS:
+            with self.subTest(type=value.ASTRAL_TYPE):  # type: ignore[attr-defined]
+                self.assertEqual(payload_bytes(value).hex(), payload)
+
+    def test_every_type_decodes_the_go_bytes(self):
+        for value, payload, _ in GO_VECTORS:
+            with self.subTest(type=value.ASTRAL_TYPE):  # type: ignore[attr-defined]
+                got = type(value).read_payload(object_reader(bytes.fromhex(payload)))
+                self.assertEqual(got, value)
+
+    def test_every_object_id_is_the_go_object_id(self):
+        for value, _, oid in GO_VECTORS:
+            with self.subTest(type=value.ASTRAL_TYPE):  # type: ignore[attr-defined]
+                self.assertEqual(str(object_id(value)), oid)
+
+    def test_the_vectors_cover_every_declared_type(self):
+        self.assertEqual(
+            {type(v) for v, _, _ in GO_VECTORS}, set(SERVICES_TYPES)
+        )
+
+    def test_the_type_names_are_astral_go_s(self):
+        """Eight carry no `mod.` prefix and the three authorization types do
+        (design section 5.1 rule 6)."""
+        self.assertEqual(
+            {t.ASTRAL_TYPE for t in SERVICES_TYPES},  # type: ignore[attr-defined]
+            {
+                "services.update",
+                "services.ask",
+                "services.answer",
+                "services.change",
+                "services.incomplete",
+                "services.offering_key",
+                "services.removed",
+                "services.operations_list",
+                "mod.services.service_discovery_action",
+                "mod.services.discovery_scope",
+                "mod.services.discovery_rule",
+            },
+        )
+        for t in SERVICES_TYPES:
+            with self.subTest(type=t.ASTRAL_TYPE):  # type: ignore[attr-defined]
+                self.assertIs(default_blueprints().find(t.ASTRAL_TYPE), t)  # type: ignore[attr-defined]
+
+    def test_the_field_declarations_match_the_go_structs(self):
+        """Order, wire names and specs, read off `api/services/*.go`."""
+        self.assertEqual(
+            [(f.wire_name, f.spec) for f in Ask.FIELDS],
+            [
+                ("RequestID", Primitive("nonce64")),
+                ("CallerID", Ptr("identity")),
+                ("Service", Primitive("string8")),
+            ],
+        )
+        self.assertEqual(
+            [(f.wire_name, f.spec) for f in Answer.FIELDS],
+            [("RequestID", Primitive("nonce64")), ("Update", Ptr("services.update"))],
+        )
+        self.assertEqual(
+            [(f.wire_name, f.spec) for f in Change.FIELDS],
+            [("All", Primitive("bool")), ("Callers", Slice("identity"))],
+        )
+        self.assertEqual(
+            [(f.wire_name, f.spec) for f in Removed.FIELDS],
+            [("Offerings", Slice("services.offering_key"))],
+        )
+        self.assertEqual(
+            [(f.wire_name, f.spec) for f in ServiceDiscoveryAction.FIELDS],
+            [
+                ("Nonce", Primitive("nonce64")),
+                ("ActorID", Ptr("identity")),
+                ("Service", Primitive("string8")),
+                ("NodeID", Ptr("identity")),
+            ],
+        )
 
 
 class UpdateWireTest(unittest.TestCase):
     """`services.update` against the node's own frames."""
 
     def test_the_zero_value_the_node_built_decodes_to_four_absent_fields(self):
-        """`objects.new` builds the zero value server-side, so this fixes the
-        field count and the two nil flags without a live discoverer."""
         self.assertEqual(LIVE_NEW_FRAME[1:16], b"services.update")
         self.assertEqual(LIVE_NEW_FRAME[16:20], b"\x00\x00\x00\x04")
         self.assertEqual(LIVE_NEW_FRAME[20:], ZERO_UPDATE)
-
         u = Update.read_payload(object_reader(ZERO_UPDATE))
-        self.assertEqual(u.available, False)
-        self.assertEqual(u.name, "")
-        self.assertIsNone(u.provider_id)
-        self.assertIsNone(u.info)
+        self.assertEqual(
+            u, Update(available=False, name="", provider_id=None, info=None)
+        )
         self.assertEqual(payload_bytes(u), ZERO_UPDATE)
 
     def test_the_bundle_carrying_update_decodes_through_the_registry(self):
-        """R-13. The legacy SDK read a bundle as opaque bytes, which made every
-        object a provider advertises unreachable from Python."""
+        """R-13: the bundle's inner objects are typed, not opaque bytes."""
         u = Update.read_payload(object_reader(LIVE_BUNDLE_UPDATE))
-        self.assertEqual(u.available, True)
         self.assertEqual(u.name, "gateway")
         self.assertEqual(u.provider_id, FURRY_BOLT)
-        self.assertIsInstance(u.info, Bundle)
-        self.assertEqual(len(u.info), 2)
         self.assertEqual(list(u.info), [String8("hello"), Uint64(7)])
-        self.assertIsInstance(list(u.info)[0], String8)
-        self.assertIsInstance(list(u.info)[1], Uint64)
-
-    def test_the_bundle_carrying_update_re_encodes_byte_for_byte(self):
-        """Decode then encode is the identity on the bytes the node returned."""
-        u = Update.read_payload(object_reader(LIVE_BUNDLE_UPDATE))
         self.assertEqual(payload_bytes(u), LIVE_BUNDLE_UPDATE)
 
-    def test_the_identity_is_thirty_three_flat_bytes_behind_one_flag(self):
-        """The `01` in front of the key belongs to the pointer slot. Modelling
-        `identity` as a flag plus 33 bytes is the same 34 bytes here and a
-        different 34 bytes wherever the slot is not a pointer."""
-        self.assertEqual(LIVE_BUNDLE_UPDATE[9], 0x01)
-        self.assertEqual(LIVE_BUNDLE_UPDATE[10:43], FURRY_BOLT.key)
-        self.assertEqual(len(FURRY_BOLT.key), 33)
-
     def test_an_absent_bundle_and_an_empty_bundle_are_different_bytes(self):
-        """One byte against five, so the two must not be conflated on decode.
-        `Update.objects` conflates them on purpose and is documented as doing
-        so; the field does not."""
         absent = Update(available=True, name="x", provider_id=None, info=None)
         empty = Update(available=True, name="x", provider_id=None, info=Bundle())
         self.assertEqual(payload_bytes(absent)[-1:], b"\x00")
         self.assertEqual(payload_bytes(empty)[-5:], b"\x01\x00\x00\x00\x00")
-        self.assertNotEqual(payload_bytes(absent), payload_bytes(empty))
         self.assertEqual(absent.objects, ())
         self.assertEqual(empty.objects, ())
-        self.assertIsNone(absent.info)
-        self.assertIsNotNone(empty.info)
 
     def test_the_field_declaration_matches_the_go_struct(self):
-        """Order, wire names and specs. `Info` is `Ptr("bundle")` and not a bare
-        `Ref`: astral-go declares `Info *astral.Bundle`, so the nil flag is on
-        the wire and a bare reference would be off by one byte for every
-        update."""
         self.assertEqual(
             [(f.attr, f.wire_name, f.spec) for f in Update.FIELDS],
             [
@@ -207,201 +335,147 @@ class UpdateWireTest(unittest.TestCase):
                 ("info", "Info", Ptr("bundle")),
             ],
         )
-
-    def test_the_type_name_carries_no_mod_prefix(self):
-        """astral-go's `Update.ObjectType()` returns `services.update`. The
-        registry name is what travels, so a `mod.` here would make every update
-        frame undecodable. Design section 5.1 rule 6 lists the exception."""
-        self.assertEqual(Update.ASTRAL_TYPE, "services.update")
-        self.assertTrue(default_blueprints().has("services.update"))
-        self.assertIs(default_blueprints().find("services.update"), Update)
         self.assertFalse(default_blueprints().has("mod.services.update"))
 
-    def test_the_objects_view_reads_the_bundle_without_a_none_check(self):
-        u = Update.read_payload(object_reader(LIVE_BUNDLE_UPDATE))
-        self.assertEqual(list(u.objects), [String8("hello"), Uint64(7)])
-        self.assertEqual(
-            Update(
-                available=False, name="", provider_id=None, info=None
-            ).objects,
-            (),
+
+class DiscoveryPermitTest(unittest.TestCase):
+    """`ServiceDiscoveryAction.apply_constraints`, astral-go's rule: covered only
+    by exactly one `DiscoveryScope` that allows the service on the node."""
+
+    NODE = G
+
+    def action(self, service: str = "chat") -> ServiceDiscoveryAction:
+        return ServiceDiscoveryAction(
+            nonce=Nonce(1), actor_id=None, service=service, node_id=self.NODE
         )
 
-    def test_an_unavailable_update_is_a_delta_and_carries_no_info(self):
-        """astrald's own consumer reads it that way: `syncServices` creates a
-        cache row when `Available` is set and deletes one otherwise."""
-        u = Update.read_payload(object_reader(payload_bytes(GONE_UPDATE)))
-        self.assertFalse(u.available)
-        self.assertEqual(u.name, "nat")
-        self.assertIsNone(u.info)
+    def scope(self, services: list[str], nodes: list[Identity | None]) -> Bundle:
+        return Bundle([DiscoveryScope(rules=[DiscoveryRule(services=services, nodes=nodes)])])
 
-    def test_the_empty_discover_body_is_one_eos_frame(self):
-        """The whole body of a live `services.discover?follow=false` on a node
-        with neither discoverer enabled."""
-        self.assertEqual(LIVE_EMPTY_DISCOVER_BODY, frame("eos"))
+    def test_an_unconstrained_permit_covers_nothing(self):
+        self.assertFalse(self.action().apply_constraints(None))
+        self.assertFalse(self.action().apply_constraints(Bundle()))
+
+    def test_a_scope_covers_its_services_on_its_nodes(self):
+        a = self.action()
+        self.assertTrue(a.apply_constraints(self.scope(["chat"], [])))
+        self.assertTrue(a.apply_constraints(self.scope(["chat"], [self.NODE])))
+        self.assertFalse(a.apply_constraints(self.scope(["chat"], [FURRY_BOLT])))
+        self.assertFalse(a.apply_constraints(self.scope(["files"], [])))
+        self.assertFalse(a.apply_constraints(self.scope([], [])))
+
+    def test_anything_but_exactly_one_scope_covers_nothing(self):
+        a = self.action()
+        two = Bundle(list(self.scope(["chat"], [])) + [String8("extra")])
+        self.assertFalse(a.apply_constraints(two))
+        self.assertFalse(a.apply_constraints(Bundle([String8("chat")])))
+
+    def test_a_permit_defers_to_the_action(self):
+        permit = Permit(
+            action=ServiceDiscoveryAction.ASTRAL_TYPE,
+            constraints=self.scope(["chat"], []),
+            delegation=0,
+        )
+        self.assertTrue(permit.allows(self.action("chat")))
+        self.assertFalse(permit.allows(self.action("files")))
+
+
+class NamesTest(unittest.TestCase):
+    """The `services` list, validated as astral-go's `ParseNames` does."""
+
+    def test_valid_names_join_with_commas(self):
+        self.assertEqual(join_names(["chat", "files"]), "chat,files")
+        self.assertEqual(join_names(["a b"]), "a b")
+        self.assertEqual(join_names(["x" * 255]), "x" * 255)
+        self.assertEqual(join_names([f"s{i}" for i in range(MAX_NAMES)]).count(","), 63)
+
+    def test_invalid_lists_are_refused(self):
+        for names in (
+            [],
+            [""],
+            ["a,b"],
+            [" a"],
+            ["a "],
+            ["a", "a"],
+            ["x" * 256],
+            ["é" * 128],
+            [f"s{i}" for i in range(MAX_NAMES + 1)],
+        ):
+            with self.subTest(names=names[:3]):
+                with self.assertRaises(BadArgument):
+                    join_names(names)
+
+    def test_a_bare_string_is_not_a_list(self):
+        with self.assertRaises(BadArgumentType):
+            join_names("chat")  # type: ignore[arg-type]
+        with self.assertRaises(BadArgumentType):
+            validate_name(7)  # type: ignore[arg-type]
 
 
 class ServicesTypesTest(unittest.TestCase):
     """The module's type sweep and its op constants."""
 
     def test_the_type_sweep_names_every_declared_type(self):
-        self.assertEqual(tuple(SERVICES_TYPES), (Update,))
-        self.assertEqual(tuple(Services.TYPES), (Update,))
-
-    def test_the_op_names_carry_no_mod_prefix(self):
-        """`mod.` is never part of an op name (design section 5.1 rule 6)."""
-        self.assertEqual(OP_ADVERTISE, "services.advertise")
-        self.assertEqual(OP_DISCOVER, "services.discover")
-        self.assertEqual(OP_SYNC, "services.sync")
+        self.assertEqual(tuple(Services.TYPES), tuple(SERVICES_TYPES))
 
     def test_the_module_declares_the_whole_live_op_surface(self):
-        """Three ops, which is the whole of `services` in the registry of
-        astrald `26bb51d5`. Pinned here so a module that grows a fourth op
-        without a client fails rather than silently offering part of a surface;
+        """Two ops, which is the whole of `services` in the registry of a node
+        built from astrald `0c7e3109`; `services.sync` is gone.
         `LiveServicesTest` asserts the same set against the node itself."""
         ops = {
             value
             for name, value in vars(services_module).items()
             if name.startswith("OP_") and isinstance(value, str)
         }
-        self.assertEqual(ops, {OP_ADVERTISE, OP_DISCOVER, OP_SYNC})
+        self.assertEqual(ops, {OP_ADVERTISE, OP_DISCOVER})
+        self.assertEqual(OP_ADVERTISE, "services.advertise")
+        self.assertEqual(OP_DISCOVER, "services.discover")
+        self.assertFalse(hasattr(Services, "sync"))
 
-    def test_every_op_has_a_method(self):
-        """A module that implements half its ops is worse than an absent one,
-        because a caller cannot tell which half works."""
-        for name in (
-            "advertise",
-            "discover",
-            "discover_follow",
-            "updates",
-            "sync",
-            "sync_follow",
-        ):
-            with self.subTest(method=name):
-                self.assertTrue(callable(getattr(Services, name)))
+    def test_the_constants_are_astral_go_s(self):
+        self.assertEqual(MAX_NAMES, 64)
+        self.assertEqual(REACH_LOCAL, "local")
+        self.assertEqual(REACH_SWARM, "swarm")
+        self.assertEqual(ERR_ADVERTISED, "service already advertised by this provider")
 
 
 class QueryStringTest(unittest.TestCase):
-    """What each op puts on the wire, before any transport is involved."""
+    """What `services.discover` puts on the wire, before any transport."""
 
-    def test_discover_always_states_its_follow_flag(self):
+    def test_follow_is_always_stated_and_reach_only_when_named(self):
+        q = services_module._discover_query
         self.assertEqual(
-            services_module._discover_query(follow=False),
-            "services.discover?follow=false",
+            q(["chat"], follow=False, reach=None),
+            "services.discover?follow=false&services=chat",
         )
         self.assertEqual(
-            services_module._discover_query(follow=True),
-            "services.discover?follow=true",
+            q(["chat", "files"], follow=True, reach=REACH_SWARM),
+            "services.discover?follow=true&reach=swarm&services=chat%2Cfiles",
         )
+        op, params = parse(q(["a b", "c"], follow=False, reach=REACH_LOCAL))
+        self.assertEqual(op, OP_DISCOVER)
+        self.assertEqual(params, {"follow": "false", "reach": "local", "services": "a b,c"})
 
-    def test_follow_travels_as_true_and_false_and_never_as_yes(self):
-        """The op's field is a plain Go `bool` and `query.FieldEditor` parses it
-        with `strconv.ParseBool`, which refuses `yes` -- and a parse failure
-        rejects the whole query before the op body runs. Verified live:
-        `services.discover?follow=yes` raises `QueryRejected` with code 1.
-
-        `true` and `false` are the two words both that parser and
-        `astral.Bool.UnmarshalText` read, so the divergence is unreachable from
-        here. Nothing outside this module chooses the value: `follow` is not a
-        parameter of any public method, so a caller cannot supply a third word.
-        """
-        import inspect
-
-        self.assertEqual(
-            services_module._encode(services_module._DISCOVER, {"follow": True}),
-            {"follow": "true"},
-        )
-        self.assertEqual(
-            services_module._encode(services_module._DISCOVER, {"follow": False}),
-            {"follow": "false"},
-        )
-        for name in ("discover", "discover_follow", "sync", "sync_follow"):
-            with self.subTest(method=name):
-                params = inspect.signature(getattr(Services, name)).parameters
-                self.assertNotIn("follow", params)
-
-    def test_sync_omits_follow_rather_than_sending_it_false(self):
-        """Design section 5.1 rule 5: a server default stands while its key is
-        absent."""
-        self.assertEqual(
-            services_module._sync_query("furry-bolt", follow=None),
-            "services.sync?identity=furry-bolt",
-        )
-        self.assertEqual(
-            services_module._sync_query("furry-bolt", follow=False),
-            "services.sync?identity=furry-bolt",
-        )
-        self.assertEqual(
-            services_module._sync_query("furry-bolt", follow=True),
-            "services.sync?follow=true&identity=furry-bolt",
-        )
-
-    def test_sync_takes_a_name_or_an_identity(self):
-        """The op's field is a plain Go `string` resolved server-side, so an
-        alias, `localnode`, a hex key or a directory name all reach it. An
-        `Identity` travels as its text form and costs no resolving query."""
-        self.assertEqual(
-            services_module._sync_query("localnode", follow=None),
-            "services.sync?identity=localnode",
-        )
-        self.assertEqual(
-            services_module._sync_query(FURRY_BOLT, follow=None),
-            f"services.sync?identity={FURRY_BOLT.text()}",
-        )
+    def test_an_unknown_reach_is_refused(self):
+        with self.assertRaises(BadArgument):
+            services_module._discover_query(["chat"], follow=False, reach="galaxy")
 
     def test_the_parameters_go_through_their_declared_specs(self):
-        """Design section 5.1 rule 2. Without the declaration the encoder
-        dispatches on the value, and `identity` is `string8` rather than the
-        `identity` type because the op resolves this argument and a name is
-        legitimate."""
+        """The types the live `shell.spec` reports for each parameter."""
         self.assertEqual(services_module._DISCOVER["follow"], Primitive("bool"))
-        self.assertEqual(services_module._SYNC["identity"], Primitive("string8"))
-        self.assertEqual(services_module._SYNC["follow"], Primitive("bool"))
-
-    def test_a_name_is_url_escaped(self):
-        op, params = parse(services_module._sync_query("a b&c", follow=None))
-        self.assertEqual(op, OP_SYNC)
-        self.assertEqual(params, {"identity": "a b&c"})
-
-
-class ArgumentRefusalTest(unittest.TestCase):
-    """What must never reach the node, refused where it is named."""
-
-    def test_the_empty_id_is_refused_rather_than_sent(self):
-        """astrald's resolver maps `""` to the zero identity, and
-        `services.sync` mutates, so the accident costs the cached services of
-        `anyone` rather than one wasted query."""
-        with self.assertRaises(BadArgument) as caught:
-            services_module._sync_query("", follow=None)
-        self.assertIn(OP_SYNC, str(caught.exception))
-        self.assertIn("Identity.ANYONE", str(caught.exception))
-
-    def test_every_refusal_is_inside_the_hierarchy(self):
-        for value in ("", None, 7):
-            with self.subTest(value=value):
-                with self.assertRaises(astral.AstralError):
-                    services_module._sync_query(value, follow=None)
-                with self.assertRaises(ValueError):
-                    services_module._sync_query(value, follow=None)
-
-    def test_the_zero_identity_is_reachable_on_purpose(self):
-        """Refusing the empty name must not make `anyone` unnameable."""
-        self.assertEqual(
-            services_module._sync_query(Identity.ANYONE, follow=None),
-            f"services.sync?identity={Identity.ANYONE.text()}",
-        )
+        self.assertEqual(services_module._DISCOVER["services"], Primitive("string8"))
+        self.assertEqual(services_module._DISCOVER["reach"], Primitive("string8"))
+        self.assertEqual(services_module._ADVERTISE["services"], Primitive("string8"))
 
 
 # --- Tier B: the ops, against a mock apphost -----------------------------
 
 
 class ServicesCase(unittest.IsolatedAsyncioTestCase):
-    """A `Services` over a mock apphost, closed by the teardown whatever a test
-    does."""
+    """A `Services` over a mock apphost, closed by the teardown."""
 
     async def asyncSetUp(self) -> None:
         self.clients: list[astral.Client] = []
-        self.sockets_before = socket_fds()
 
     async def asyncTearDown(self) -> None:
         for client in self.clients:
@@ -425,23 +499,36 @@ class ServicesCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(mock.queries), 1, f"queries: {mock.queries}")
         return mock.queries[0].query
 
-    def assert_no_faults(self, mock: MockApphost) -> None:
-        self.assertEqual(mock.errors, [])
+    async def settle(self, s: Services) -> None:
+        for _ in range(200):
+            if s.client.live_streams == 0:
+                return
+            await asyncio.sleep(0)
+        self.assertEqual(s.client.live_streams, 0)
 
 
 class AdvertisingNode:
-    """`services.advertise` as astrald serves it: accept, `ack`, then read
-    bundles until the caller closes.
+    """`services.advertise` as astrald serves it: accept, `ack`, then asks.
 
-    `answer` replaces the `ack` to model a refusal after accept. `received` is
-    every body frame the client sent and `closed` is set once the client's
-    close reached this side, which is the withdrawal.
+    `answer` replaces the `ack` to model a refusal after accept. `asks` are
+    sent after the `ack`, one at a time, each waiting for its answer. Every
+    frame the client sends lands in `received`; `closed` is set once the
+    client's close reached this side. `then` is sent after the asks.
     """
 
-    def __init__(self, answer: tuple[str, bytes] | None = ACK_FRAME) -> None:
+    def __init__(
+        self,
+        answer: tuple[str, bytes] | None = ACK_FRAME,
+        asks: tuple[Ask, ...] = (),
+        then: tuple[str, bytes] | None = None,
+    ) -> None:
         self.answer = answer
-        self.received: list[tuple[str, bytes]] = []
+        self.asks = asks
+        self.then = then
+        self.received: list[object] = []
+        self.answered = asyncio.Event()
         self.closed = asyncio.Event()
+        self.arrived = asyncio.Event()
 
     async def __call__(self, conn, query) -> None:  # type: ignore[no-untyped-def]
         conn.send_frame(QUERY_ACCEPTED)
@@ -454,582 +541,435 @@ class AdvertisingNode:
         if self.answer[0] != "ack":
             await conn.aclose()
             return
+        for ask in self.asks:
+            conn.send_frame(*obj_frame(ask))
+            await conn.flush()
+            got = await conn.recv_frame_or_none()
+            if got is None:
+                break
+            self.record(got)
+        self.answered.set()
+        if self.then is not None:
+            conn.send_frame(*self.then)
+            await conn.flush()
         while True:
             got = await conn.recv_frame_or_none()
             if got is None:
                 break
-            self.received.append(got)
+            self.record(got)
         self.closed.set()
+        await conn.aclose()
 
-    @property
-    def types(self) -> list[str]:
-        return [name for name, _ in self.received]
+    def record(self, got: tuple[str, bytes]) -> None:
+        kind = default_blueprints().find(got[0])
+        self.received.append(kind.read_payload(object_reader(got[1])))
+        self.arrived.set()
+
+
+def offer(update: Update | None):  # type: ignore[no-untyped-def]
+    async def handler(caller: Identity | None, service: str) -> Update | None:
+        return update
+
+    return handler
 
 
 class AdvertiseOpTest(ServicesCase):
-    """`services.advertise`: an `ack`, then the info on the body until closed."""
+    """`services.advertise`: the ask/answer/change exchange of a binding."""
 
     @bounded()
-    async def test_it_names_the_service_reads_the_ack_and_sends_the_info(self):
-        route = AdvertisingNode()
-        info = Bundle([String8("hello")])
+    async def test_it_names_the_services_and_answers_each_ask(self):
+        asks = (
+            Ask(request_id=Nonce(1), caller_id=G, service="chat"),
+            Ask(request_id=Nonce(2), caller_id=G, service="files"),
+        )
+        route = AdvertisingNode(asks=asks)
+        seen: list[tuple[Identity | None, str]] = []
+
+        async def handler(caller: Identity | None, service: str) -> Update | None:
+            seen.append((caller, service))
+            if service == "files":
+                return None
+            # Name and provider are the node's: both are overwritten.
+            return Update(available=True, name="wrong", provider_id=G, info=OPS_INFO)
+
         async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
             s = await self.services(mock)
-            async with s.advertise("contacts", info) as ad:
-                self.assertEqual(ad.name, "contacts")
+            async with s.advertise(["chat", "files"], handler) as binding:
+                self.assertEqual(binding.names, ("chat", "files"))
+                await asyncio.wait_for(route.answered.wait(), 5.0)
                 self.assertEqual(s.client.live_streams, 1)
-                await ad.set_info(Bundle([Uint64(7)]))
             await asyncio.wait_for(route.closed.wait(), 5.0)
-            self.assertEqual(s.client.live_streams, 0)
-        self.assertEqual(self.sent(mock), "services.advertise?name=contacts")
-        self.assertEqual(route.types, ["bundle", "bundle"])
-        self.assertEqual(route.received[0][1], payload_bytes(info))
-        self.assert_no_faults(mock)
-
-    @bounded()
-    async def test_no_info_sends_nothing_after_the_ack(self):
-        route = AdvertisingNode()
-        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
-            s = await self.services(mock)
-            async with s.advertise("contacts"):
-                pass
-            await asyncio.wait_for(route.closed.wait(), 5.0)
-        self.assertEqual(route.received, [])
-
-    @bounded()
-    async def test_it_holds_the_persistent_lane(self):
-        """The channel is the advertisement, so it never returns its permit on
-        its own; the query lane would be spent by the services an app stands."""
-        route = AdvertisingNode()
-        routes = {OP_ADVERTISE: route, OP_DISCOVER: Accept(objects=[], eos=True)}
-        async with MockApphost(routes=routes) as mock:
-            s = await self.services(mock, max_concurrency=1)
-            async with s.advertise("contacts"):
-                self.assertEqual(await s.discover(), [])
+            await self.settle(s)
+        self.assertEqual(self.sent(mock), "services.advertise?services=chat%2Cfiles")
+        self.assertEqual(seen, [(G, "chat"), (G, "files")])
         self.assertEqual(
-            [q.query for q in mock.queries],
-            ["services.advertise?name=contacts", "services.discover?follow=false"],
+            route.received,
+            [
+                Answer(
+                    request_id=Nonce(1),
+                    update=Update(available=True, name="chat", provider_id=None, info=OPS_INFO),
+                ),
+                Answer(
+                    request_id=Nonce(2),
+                    update=Update(available=False, name="files", provider_id=None, info=None),
+                ),
+            ],
         )
 
     @bounded()
-    async def test_an_error_message_raises_and_leaves_nothing_open(self):
-        text = b"the node cannot advertise to itself"
-        route = AdvertisingNode(("error_message", len(text).to_bytes(2, "big") + text))
+    async def test_a_handler_error_is_answered_as_unavailable(self):
+        """An ask is never left unanswered, as in astral-go."""
+        route = AdvertisingNode(asks=(Ask(request_id=Nonce(9), caller_id=None, service="chat"),))
+
+        def handler(caller: Identity | None, service: str) -> Update:
+            raise RuntimeError("evaluation failed")
+
+        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+            s = await self.services(mock)
+            async with s.advertise(["chat"], handler):
+                await asyncio.wait_for(route.answered.wait(), 5.0)
+        self.assertEqual(
+            route.received,
+            [
+                Answer(
+                    request_id=Nonce(9),
+                    update=Update(available=False, name="chat", provider_id=None, info=None),
+                )
+            ],
+        )
+
+    @bounded()
+    async def test_a_plain_function_handler_is_accepted(self):
+        route = AdvertisingNode(asks=(Ask(request_id=Nonce(3), caller_id=G, service="chat"),))
+        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+            s = await self.services(mock)
+            async with s.advertise(["chat"], lambda caller, service: CHAT):
+                await asyncio.wait_for(route.answered.wait(), 5.0)
+        answer = route.received[0]
+        self.assertTrue(answer.update.available)  # type: ignore[attr-defined]
+        self.assertIsNone(answer.update.provider_id)  # type: ignore[attr-defined]
+
+    @bounded()
+    async def test_changes_reach_the_node_and_an_empty_one_sends_nothing(self):
+        route = AdvertisingNode()
+        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+            s = await self.services(mock)
+            async with s.advertise(["chat"], offer(CHAT)) as binding:
+                await binding.change()
+                await binding.change(G, FURRY_BOLT)
+                await binding.change_all()
+                with self.assertRaises(BadArgumentType):
+                    await binding.change("not an identity")  # type: ignore[arg-type]
+            await asyncio.wait_for(route.closed.wait(), 5.0)
+        self.assertEqual(
+            route.received,
+            [Change(all=False, callers=[G, FURRY_BOLT]), Change(all=True, callers=[])],
+        )
+
+    @bounded()
+    async def test_anything_but_an_ask_ends_the_binding(self):
+        """astral-go's binding closes on any other object, and so does the
+        node's side of the exchange."""
+        route = AdvertisingNode(then=EOS_FRAME)
+        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+            s = await self.services(mock)
+            async with s.advertise(["chat"], offer(CHAT)) as binding:
+                await asyncio.wait_for(binding.wait_closed(), 5.0)
+                self.assertTrue(binding.done)
+                with self.assertRaises(ProtocolError):
+                    await binding.change_all()
+            await asyncio.wait_for(route.closed.wait(), 5.0)
+            await self.settle(s)
+
+    @bounded()
+    async def test_it_holds_the_persistent_lane(self):
+        route = AdvertisingNode()
+        routes = {OP_ADVERTISE: route, OP_DISCOVER: Accept(eos=True)}
+        async with MockApphost(routes=routes) as mock:
+            s = await self.services(mock, max_concurrency=1)
+            async with s.advertise(["chat"], offer(CHAT)):
+                self.assertEqual(
+                    await s.discover(["chat"]), [InitialOutcome(complete=True)]
+                )
+
+    @bounded()
+    async def test_the_already_advertised_refusal_raises_and_leaves_nothing_open(self):
+        route = AdvertisingNode(frame_error(ERR_ADVERTISED))
         async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
             s = await self.services(mock)
             with self.assertRaises(RemoteError) as caught:
-                async with s.advertise("contacts"):
+                async with s.advertise(["chat"], offer(CHAT)):
                     self.fail("the body ran without an ack")
-            self.assertEqual(caught.exception.message, "the node cannot advertise to itself")
+            self.assertEqual(caught.exception.message, ERR_ADVERTISED)
             self.assertEqual(s.client.live_streams, 0)
 
     @bounded()
     async def test_a_rejection_raises_and_leaves_nothing_open(self):
+        """The node rejects a network origin, a caller without ServeApps and
+        the node itself."""
         async with MockApphost(routes={OP_ADVERTISE: Reject(1)}) as mock:
             s = await self.services(mock)
             with self.assertRaises(QueryRejected):
-                async with s.advertise("contacts"):
+                async with s.advertise(["chat"], offer(CHAT)):
                     self.fail("the body ran on a rejected query")
             self.assertEqual(s.client.live_streams, 0)
 
     @bounded()
     async def test_a_stream_that_ends_before_the_ack_is_a_protocol_error(self):
-        route = AdvertisingNode(None)
-        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
-            s = await self.services(mock)
-            with self.assertRaises(ProtocolError) as caught:
-                async with s.advertise("contacts"):
-                    self.fail("the body ran without an ack")
-            self.assertIn("acknowledged", str(caught.exception))
-            self.assertEqual(s.client.live_streams, 0)
-
-    @bounded()
-    async def test_an_answer_that_is_not_an_ack_is_a_protocol_error(self):
-        route = AdvertisingNode(("eos", b""))
-        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
-            s = await self.services(mock)
-            with self.assertRaises(ProtocolError):
-                async with s.advertise("contacts"):
-                    self.fail("the body ran without an ack")
-            self.assertEqual(s.client.live_streams, 0)
+        for answer in (None, EOS_FRAME):
+            with self.subTest(answer=answer):
+                route = AdvertisingNode(answer)
+                async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+                    s = await self.services(mock)
+                    with self.assertRaises(ProtocolError):
+                        async with s.advertise(["chat"], offer(CHAT)):
+                            self.fail("the body ran without an ack")
+                    self.assertEqual(s.client.live_streams, 0)
 
     @bounded()
     async def test_bad_arguments_are_refused_before_anything_is_routed(self):
         async with MockApphost(routes={OP_ADVERTISE: AdvertisingNode()}) as mock:
             s = await self.services(mock)
-            with self.assertRaises(BadArgument):
-                s.advertise("")
+            for names in ([], ["a,b"], ["chat", "chat"]):
+                with self.subTest(names=names):
+                    with self.assertRaises(BadArgument):
+                        s.advertise(names, offer(CHAT))
             with self.assertRaises(BadArgumentType):
-                s.advertise("contacts", String8("not a bundle"))  # type: ignore[arg-type]
-            async with s.advertise("contacts") as ad:
-                with self.assertRaises(BadArgumentType):
-                    await ad.set_info(String8("not a bundle"))  # type: ignore[arg-type]
-        self.assertEqual(len(mock.queries), 1)
+                s.advertise("chat", offer(CHAT))  # type: ignore[arg-type]
+            with self.assertRaises(BadArgumentType):
+                s.advertise(["chat"], CHAT)  # type: ignore[arg-type]
+            s.advertise(["chat"], offer(CHAT))
+        self.assertEqual(mock.queries, [])
 
     @bounded()
-    async def test_constructing_one_routes_nothing(self):
-        async with MockApphost(routes={OP_ADVERTISE: AdvertisingNode()}) as mock:
+    async def test_closing_is_idempotent(self):
+        route = AdvertisingNode()
+        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
             s = await self.services(mock)
-            s.advertise("contacts")
-        self.assertEqual(mock.queries, [])
+            binding: Binding = s.advertise(["chat"], offer(CHAT))
+            await binding.__aenter__()
+            await binding.aclose()
+            await binding.aclose()
+            self.assertTrue(binding.done)
+            await asyncio.wait_for(route.closed.wait(), 5.0)
+            await self.settle(s)
 
 
 class DiscoverOpTest(ServicesCase):
-    """`services.discover`: ST, ends at `eos`."""
+    """`services.discover` one-shot: events, then the initial outcome."""
 
     @bounded()
-    async def test_it_returns_typed_updates_and_states_follow_false(self):
-        mock = MockApphost(
-            routes={
-                OP_DISCOVER: Accept(
-                    objects=[update_frame(NAT_UPDATE), update_frame(GATEWAY_UPDATE)],
-                    eos=True,
-                )
-            }
+    async def test_incomplete_and_eos_are_an_incomplete_outcome(self):
+        route = Accept(
+            objects=[obj_frame(CHAT), obj_frame(Incomplete(services=["files"]))],
+            eos=True,
         )
-        async with mock:
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
             s = await self.services(mock)
-            got = await s.discover()
-        self.assertEqual(got, [NAT_UPDATE, GATEWAY_UPDATE])
-        self.assertTrue(all(isinstance(u, Update) for u in got))
-        self.assertEqual(self.sent(mock), "services.discover?follow=false")
-        self.assert_no_faults(mock)
-
-    @bounded()
-    async def test_an_empty_snapshot_is_an_empty_list_and_not_a_fault(self):
-        """The ordinary answer on a node with neither NAT nor gateway enabled,
-        verified live."""
-        mock = MockApphost(routes={OP_DISCOVER: Accept(eos=True)})
-        async with mock:
-            s = await self.services(mock)
-            self.assertEqual(await s.discover(), [])
-        self.assert_no_faults(mock)
-
-    @bounded()
-    async def test_it_ends_at_a_bare_eof_as_well_as_at_an_eos(self):
-        """`ch.Close()` after the final `eos` is astrald's shape, but a node that
-        closed without one must not hang the caller."""
-        mock = MockApphost(
-            routes={OP_DISCOVER: Accept(objects=[update_frame(NAT_UPDATE)])}
+            got = await s.discover(["chat", "files"])
+        self.assertEqual(
+            got, [CHAT, InitialOutcome(complete=False, incomplete=("files",))]
         )
-        async with mock:
-            s = await self.services(mock)
-            self.assertEqual(await s.discover(), [NAT_UPDATE])
+        self.assertEqual(
+            self.sent(mock), "services.discover?follow=false&services=chat%2Cfiles"
+        )
 
     @bounded()
-    async def test_a_wrong_answer_type_is_a_protocol_error(self):
-        mock = MockApphost(routes={OP_DISCOVER: Accept(objects=[ACK_FRAME], eos=True)})
-        async with mock:
+    async def test_a_bare_eos_is_a_complete_outcome(self):
+        route = Accept(objects=[obj_frame(CHAT), obj_frame(CHAT_GONE)], eos=True)
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
+            s = await self.services(mock)
+            self.assertEqual(
+                await s.discover(["chat"]),
+                [CHAT, CHAT_GONE, InitialOutcome(complete=True)],
+            )
+            self.assertEqual(s.client.live_streams, 0)
+
+    @bounded()
+    async def test_a_removal_is_an_event(self):
+        route = Accept(objects=[obj_frame(Removed(offerings=[CHAT_KEY]))], eos=True)
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
+            s = await self.services(mock)
+            got = await s.discover(["chat"], reach=REACH_SWARM)
+        self.assertEqual(
+            got, [Removed(offerings=[CHAT_KEY]), InitialOutcome(complete=True)]
+        )
+        self.assertEqual(parse(self.sent(mock))[1]["reach"], "swarm")
+
+    @bounded()
+    async def test_a_close_before_the_eos_is_a_protocol_error(self):
+        route = Accept(objects=[obj_frame(CHAT)])
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
             s = await self.services(mock)
             with self.assertRaises(ProtocolError) as caught:
-                await s.discover()
-        self.assertIn(OP_DISCOVER, str(caught.exception))
+                await s.discover(["chat"])
+            self.assertIn("initial attempt", str(caught.exception))
+            self.assertEqual(s.client.live_streams, 0)
+
+    @bounded()
+    async def test_a_refusal_is_a_remote_error(self):
+        route = Accept(objects=[frame_error('not permitted to discover "chat"')])
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
+            s = await self.services(mock)
+            with self.assertRaises(RemoteError) as caught:
+                await s.discover(["chat"])
+        self.assertEqual(caught.exception.message, 'not permitted to discover "chat"')
+
+    @bounded()
+    async def test_a_wrong_object_is_a_protocol_error(self):
+        route = Accept(objects=[ACK_FRAME], eos=True)
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
+            s = await self.services(mock)
+            with self.assertRaises(ProtocolError) as caught:
+                await s.discover(["chat"])
         self.assertIn("services.update", str(caught.exception))
 
     @bounded()
-    async def test_an_error_message_raises_rather_than_being_yielded(self):
-        """astrald sends `ch.Send(astral.NewError(...))` when the discoverer
-        fan-out fails, in place of the snapshot."""
-        mock = MockApphost(
-            routes={OP_DISCOVER: Accept(objects=[frame_error("no discoverers")])}
-        )
-        async with mock:
+    async def test_a_silent_node_costs_the_deadline_and_not_the_connection(self):
+        route = Accept(objects=[obj_frame(CHAT)], hold=True)
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
             s = await self.services(mock)
-            with self.assertRaises(RemoteError) as caught:
-                await s.discover()
-        self.assertIn("no discoverers", str(caught.exception))
+            with self.assertRaises(QueryTimeout):
+                await s.discover(["chat"], timeout=0.3)
+            self.assertEqual(s.client.live_streams, 0)
 
     @bounded()
     async def test_a_rejected_query_surfaces_as_a_rejection(self):
-        """A `follow` value neither parser accepts fails before the op body runs
-        and the whole query is rejected -- verified live with `follow=yes`."""
-        mock = MockApphost(routes={OP_DISCOVER: ErrorMsg("route_not_found")})
-        async with mock:
+        async with MockApphost(routes={OP_DISCOVER: ErrorMsg("route_not_found")}) as mock:
             s = await self.services(mock)
             with self.assertRaises(astral.RouteNotFound):
-                await s.discover()
-
-    @bounded()
-    async def test_it_leaves_no_stream_open(self):
-        mock = MockApphost(routes={OP_DISCOVER: Accept(eos=True)})
-        async with mock:
-            s = await self.services(mock)
-            await s.discover()
-            self.assertEqual(s.client.live_streams, 0)
+                await s.discover(["chat"])
 
     @bounded()
     async def test_the_query_keywords_reach_the_node(self):
-        mock = MockApphost(routes={OP_DISCOVER: Accept(eos=True)})
-        async with mock:
+        async with MockApphost(routes={OP_DISCOVER: Accept(eos=True)}) as mock:
             s = await self.services(mock)
-            await s.discover(zone=astral.Zone.DEVICE, timeout=5.0)
+            await s.discover(["chat"], zone=astral.Zone.DEVICE, timeout=5.0)
         self.assertEqual(mock.queries[-1].zone, int(astral.Zone.DEVICE))
+
+    @bounded()
+    async def test_bad_arguments_are_refused_before_anything_is_routed(self):
+        async with MockApphost(routes={OP_DISCOVER: Accept(eos=True)}) as mock:
+            s = await self.services(mock)
+            with self.assertRaises(BadArgument):
+                await s.discover([])
+            with self.assertRaises(BadArgument):
+                await s.discover(["chat"], reach="everywhere")
+        self.assertEqual(mock.queries, [])
 
 
 class DiscoverFollowOpTest(ServicesCase):
-    """`services.discover?follow=true`: ST+follow, the first `eos` is a
-    separator."""
+    """`services.discover?follow=true`: events past the initial outcome."""
 
-    def route(self) -> Accept:
+    def route(self, hold: bool = True) -> Accept:
         return Accept(
-            objects=[update_frame(NAT_UPDATE)],
+            objects=[obj_frame(CHAT)],
             eos=True,
-            live=[update_frame(GATEWAY_UPDATE), update_frame(GONE_UPDATE)],
-            hold=True,
+            live=[obj_frame(FILES), obj_frame(Removed(offerings=[CHAT_KEY]))],
+            hold=hold,
         )
 
     @bounded()
-    async def test_it_crosses_the_separator_and_marks_the_boundary(self):
-        mock = MockApphost(routes={OP_DISCOVER: self.route()})
-        async with mock:
+    async def test_it_carries_views_and_removals_past_the_outcome(self):
+        async with MockApphost(routes={OP_DISCOVER: self.route()}) as mock:
             s = await self.services(mock)
-            pairs = []
-            async with s.discover_follow() as stream:
-                async for obj, live in stream.follow():
-                    pairs.append((obj, live))
-                    if len(pairs) == 3:
+            got = []
+            async with s.discover_follow(["chat", "files"]) as events:
+                async for event in events:
+                    got.append(event)
+                    if len(got) == 4:
                         break
+            await self.settle(s)
         self.assertEqual(
-            pairs,
-            [(NAT_UPDATE, False), (GATEWAY_UPDATE, True), (GONE_UPDATE, True)],
+            got,
+            [CHAT, InitialOutcome(complete=True), FILES, Removed(offerings=[CHAT_KEY])],
         )
-        self.assertEqual(self.sent(mock), "services.discover?follow=true")
+        self.assertEqual(
+            self.sent(mock), "services.discover?follow=true&services=chat%2Cfiles"
+        )
 
     @bounded()
-    async def test_snapshot_stops_at_the_separator_and_live_resumes_after_it(self):
-        mock = MockApphost(routes={OP_DISCOVER: self.route()})
-        async with mock:
+    async def test_a_followed_stream_that_ends_is_a_protocol_error(self):
+        async with MockApphost(routes={OP_DISCOVER: self.route(hold=False)}) as mock:
             s = await self.services(mock)
-            async with s.discover_follow() as stream:
-                snapshot = [obj async for obj in stream.snapshot()]
-                live = []
-                async for obj in stream.live():
-                    live.append(obj)
-                    if len(live) == 2:
-                        break
-        self.assertEqual(snapshot, [NAT_UPDATE])
-        self.assertEqual(live, [GATEWAY_UPDATE, GONE_UPDATE])
+            got = []
+            with self.assertRaises(ProtocolError) as caught:
+                async with s.discover_follow(["chat"]) as events:
+                    async for event in events:
+                        got.append(event)
+            self.assertIn("ended", str(caught.exception))
+            await self.settle(s)
+        self.assertEqual(len(got), 4)
 
     @bounded()
     async def test_it_takes_the_persistent_lane_with_no_deadline(self):
-        """The three requirements of follow mode have nothing to do with each
-        other, so `Client.follow` pairs them once: `persistent=True`, because a
-        follow stream never ends and a query permit spent on it is never
-        returned, and `timeout=None`, because such a stream is idle for as long
-        as nothing changes."""
-        mock = MockApphost(routes={OP_DISCOVER: self.route()})
-        async with mock:
+        async with MockApphost(routes={OP_DISCOVER: self.route()}) as mock:
             s = await self.services(mock)
-            ctx = s.discover_follow()
-            self.assertEqual(ctx._kw["persistent"], True)
-            self.assertIsNone(ctx._kw["timeout"])
-            async with ctx as stream:
+            ctx = s.discover_follow(["chat"])
+            self.assertEqual(ctx._context._kw["persistent"], True)
+            self.assertIsNone(ctx._context._kw["timeout"])
+            async with ctx as events:
                 self.assertEqual(s.client.live_streams, 1)
                 self.assertEqual(s.client.available, s.client.max_concurrency)
-
-    @bounded()
-    async def test_a_caller_may_override_the_pairing(self):
-        mock = MockApphost(routes={OP_DISCOVER: self.route()})
-        async with mock:
-            s = await self.services(mock)
-            ctx = s.discover_follow(persistent=False, timeout=9.0)
-            self.assertEqual(ctx._kw["persistent"], False)
-            self.assertEqual(ctx._kw["timeout"], 9.0)
-            async with ctx:
-                pass
-
-    @bounded()
-    async def test_the_context_manager_closes_the_stream(self):
-        """A follow stream holds one of the node's 32 workers for as long as it
-        is open, and astrald never notices a peer that vanished."""
-        mock = MockApphost(routes={OP_DISCOVER: self.route()})
-        async with mock:
-            s = await self.services(mock)
-            async with s.discover_follow() as stream:
-                self.assertFalse(stream.closed)
-            self.assertTrue(stream.closed)
-            self.assertEqual(s.client.live_streams, 0)
+                self.assertFalse(events.stream.closed)
+            await self.settle(s)
+        with self.assertRaises(ProtocolError):
+            ctx.stream
 
     @bounded()
     async def test_an_exception_through_the_body_still_closes_the_stream(self):
-        mock = MockApphost(routes={OP_DISCOVER: self.route()})
-        async with mock:
+        async with MockApphost(routes={OP_DISCOVER: self.route()}) as mock:
             s = await self.services(mock)
             with self.assertRaises(ZeroDivisionError):
-                async with s.discover_follow() as stream:
+                async with s.discover_follow(["chat"]):
                     raise ZeroDivisionError
-            self.assertTrue(stream.closed)
-            self.assertEqual(s.client.live_streams, 0)
+            await self.settle(s)
+
+
+class WatcherTest(ServicesCase):
+    """`Services.watch`: the available offerings of a followed discovery."""
 
     @bounded()
-    async def test_collecting_a_follow_stream_is_refused_rather_than_truncated(self):
-        """The reason `discover` and `discover_follow` are two methods rather
-        than one boolean that silently changes the return type.
-
-        `collect()` and `async for` stop at the first `eos`, and on a follow
-        stream that `eos` is a boundary. Both therefore answered with the
-        snapshot alone and dropped every live update **without saying so** -- a
-        silent loss, which is what makes it worse than a hang. The stream now
-        declares which shape it has, so both refuse and name `follow()`,
-        `snapshot()` and `live()` instead.
-        """
-        mock = MockApphost(routes={OP_DISCOVER: self.route()})
-        async with mock:
-            s = await self.services(mock)
-            async with s.discover_follow() as stream:
-                for what in ("collect", "aiter"):
-                    with self.subTest(reader=what):
-                        with self.assertRaises(ProtocolError) as caught:
-                            if what == "collect":
-                                await stream.collect(timeout=5.0)
-                            else:
-                                async for _ in stream:
-                                    pass
-                        self.assertIn("dropped in silence", str(caught.exception))
-                # The declared reader still crosses the boundary.
-                pairs = stream.follow()
-                try:
-                    self.assertEqual(await anext(pairs), (NAT_UPDATE, False))
-                    self.assertEqual(await anext(pairs), (GATEWAY_UPDATE, True))
-                finally:
-                    await pairs.aclose()
-
-
-class UpdatesIteratorTest(ServicesCase):
-    """`Services.updates`: the pairs, with the closing built in."""
-
-    def route(self) -> Accept:
-        return Accept(
-            objects=[update_frame(NAT_UPDATE)],
+    async def test_it_keeps_the_available_offerings(self):
+        other = Update(available=True, name="chat", provider_id=G, info=None)
+        route = Accept(
+            objects=[obj_frame(CHAT), obj_frame(FILES), obj_frame(other)],
             eos=True,
-            live=[update_frame(GATEWAY_UPDATE)],
+            live=[obj_frame(CHAT_GONE), obj_frame(Removed(offerings=[OfferingKey(provider_id=G, name="chat")]))],
             hold=True,
         )
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
+            s = await self.services(mock)
+            async with s.watch(["chat", "files"], reach=REACH_LOCAL) as w:
+                self.assertEqual(await w.initial(), InitialOutcome(complete=True))
+                while w.offerings() != [FILES]:
+                    await w.changed()
+                self.assertFalse(w.done)
+                self.assertIsNone(w.error)
+            await self.settle(s)
+        self.assertEqual(parse(self.sent(mock))[1]["reach"], "local")
 
     @bounded()
-    async def test_it_yields_typed_pairs_across_the_boundary(self):
-        mock = MockApphost(routes={OP_DISCOVER: self.route()})
-        async with mock:
+    async def test_the_end_of_the_stream_is_its_terminal_error(self):
+        route = Accept(objects=[obj_frame(CHAT)], eos=True)
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
             s = await self.services(mock)
-            pairs = []
-            async for update, live in s.updates():
-                pairs.append((update, live))
-                if len(pairs) == 2:
-                    break
-        self.assertEqual(pairs, [(NAT_UPDATE, False), (GATEWAY_UPDATE, True)])
-        self.assertEqual(self.sent(mock), "services.discover?follow=true")
+            async with s.watch(["chat"]) as w:
+                self.assertTrue((await w.initial()).complete)
+                while not w.done:
+                    await w.changed()
+                self.assertIsInstance(w.error, ProtocolError)
+                self.assertEqual(w.offerings(), [CHAT])
 
     @bounded()
-    async def test_breaking_out_of_the_loop_closes_the_stream(self):
-        """An undrained follow stream is a node worker held for the life of the
-        process, so the iterator owns the closing rather than the caller."""
-        mock = MockApphost(routes={OP_DISCOVER: self.route()})
-        async with mock:
+    async def test_a_refusal_fails_the_initial_outcome(self):
+        route = Accept(objects=[frame_error('not permitted to discover "chat"')])
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
             s = await self.services(mock)
-            async for _ in s.updates():
-                break
-            for _ in range(100):
-                if s.client.live_streams == 0:
-                    break
-                await asyncio.sleep(0)
-            self.assertEqual(s.client.live_streams, 0)
-
-    @bounded()
-    async def test_an_exception_through_the_loop_closes_the_stream(self):
-        mock = MockApphost(routes={OP_DISCOVER: self.route()})
-        async with mock:
-            s = await self.services(mock)
-            with self.assertRaises(ZeroDivisionError):
-                async for _ in s.updates():
-                    raise ZeroDivisionError
-            for _ in range(100):
-                if s.client.live_streams == 0:
-                    break
-                await asyncio.sleep(0)
-            self.assertEqual(s.client.live_streams, 0)
-
-    @bounded()
-    async def test_a_wrong_answer_type_is_a_protocol_error(self):
-        mock = MockApphost(
-            routes={OP_DISCOVER: Accept(objects=[ACK_FRAME], eos=True, hold=True)}
-        )
-        async with mock:
-            s = await self.services(mock)
-            with self.assertRaises(ProtocolError):
-                async for _ in s.updates():
-                    pass
-
-
-class SyncOpTest(ServicesCase):
-    """`services.sync`: RR, one `ack`. **Mutates**, so only the mock sees it."""
-
-    @bounded()
-    async def test_it_sends_the_id_and_reads_the_ack(self):
-        mock = MockApphost(routes={OP_SYNC: Accept(objects=[ACK_FRAME])})
-        async with mock:
-            s = await self.services(mock)
-            self.assertIsNone(await s.sync(FURRY_BOLT_ALIAS))
-        self.assertEqual(self.sent(mock), f"services.sync?identity={FURRY_BOLT_ALIAS}")
-        self.assert_no_faults(mock)
-
-    @bounded()
-    async def test_it_never_sends_follow(self):
-        """`follow=true` makes the op answer only after the caller cancels it,
-        so an RR helper that sent it would wait forever."""
-        mock = MockApphost(routes={OP_SYNC: Accept(objects=[ACK_FRAME])})
-        async with mock:
-            s = await self.services(mock)
-            await s.sync("localnode")
-        _, params = parse(self.sent(mock))
-        self.assertNotIn("follow", params)
-
-    @bounded()
-    async def test_an_identity_travels_as_its_text_form(self):
-        mock = MockApphost(routes={OP_SYNC: Accept(objects=[ACK_FRAME])})
-        async with mock:
-            s = await self.services(mock)
-            await s.sync(FURRY_BOLT)
-        self.assertEqual(self.sent(mock), f"services.sync?identity={FURRY_BOLT.text()}")
-
-    @bounded()
-    async def test_an_error_message_surfaces_as_a_remote_error(self):
-        """astrald answers this way when the identity does not resolve and when
-        the sync itself fails."""
-        mock = MockApphost(
-            routes={OP_SYNC: Accept(objects=[frame_error("unknown identity: nope")])}
-        )
-        async with mock:
-            s = await self.services(mock)
-            with self.assertRaises(RemoteError) as caught:
-                await s.sync("nope")
-        self.assertIn("unknown identity", str(caught.exception))
-
-    @bounded()
-    async def test_a_wrong_answer_type_is_a_protocol_error(self):
-        mock = MockApphost(
-            routes={OP_SYNC: Accept(objects=[update_frame(NAT_UPDATE)])}
-        )
-        async with mock:
-            s = await self.services(mock)
-            with self.assertRaises(ProtocolError) as caught:
-                await s.sync("localnode")
-        self.assertIn(OP_SYNC, str(caught.exception))
-
-    @bounded()
-    async def test_a_refused_id_never_reaches_the_node(self):
-        async with MockApphost() as mock:
-            s = await self.services(mock)
-            for value in ("", None, 7):
-                with self.subTest(value=value):
-                    with self.assertRaises(astral.AstralError):
-                        await s.sync(value)
-            self.assertEqual(mock.queries, [])
-
-    @bounded()
-    async def test_it_leaves_no_stream_open(self):
-        mock = MockApphost(routes={OP_SYNC: Accept(objects=[ACK_FRAME])})
-        async with mock:
-            s = await self.services(mock)
-            await s.sync("localnode")
-            self.assertEqual(s.client.live_streams, 0)
-
-
-class SyncFollowOpTest(ServicesCase):
-    """`services.sync?follow=true`: BD. The node answers only once cancelled."""
-
-    @staticmethod
-    def handler():  # type: ignore[no-untyped-def]
-        """Accept, say nothing, then `ack` after the first inbound object.
-
-        astrald's shape: `OpSync` parks a goroutine on `ch.Receive()` and
-        cancels the sync on the first thing it reads, and the `ack` follows the
-        cancellation.
-        """
-
-        async def route(conn, query):  # type: ignore[no-untyped-def]
-            conn.send_frame(QUERY_ACCEPTED)
-            await conn.flush()
-            await conn.recv_frame()
-            conn.send_frame(ACK)
-            await conn.flush()
-            await conn.aclose()
-
-        return route
-
-    @staticmethod
-    def ended():  # type: ignore[no-untyped-def]
-        """Accept, then close on the first inbound object without answering.
-
-        The failed sync: astrald sent its `error_message` and closed, so there
-        is no `ack` left for `stop_sync` to read.
-        """
-
-        async def route(conn, query):  # type: ignore[no-untyped-def]
-            conn.send_frame(QUERY_ACCEPTED)
-            await conn.flush()
-            await conn.recv_frame()
-            await conn.aclose()
-
-        return route
-
-    @bounded()
-    async def test_it_states_follow_true_and_takes_the_persistent_lane(self):
-        async with MockApphost(routes={OP_SYNC: self.handler()}) as mock:
-            s = await self.services(mock)
-            ctx = s.sync_follow(FURRY_BOLT_ALIAS)
-            self.assertEqual(ctx._kw["persistent"], True)
-            self.assertIsNone(ctx._kw["timeout"])
-            async with ctx as stream:
-                self.assertEqual(s.client.live_streams, 1)
-                answer = await s.stop_sync(stream, timeout=5.0)
-        # `bool`, not the payload-less `Ack` record: the value is one bit and
-        # `Ack` is exported from neither `astral` nor this module.
-        self.assertIs(answer, True)
-        self.assertEqual(
-            self.sent(mock), f"services.sync?follow=true&identity={FURRY_BOLT_ALIAS}"
-        )
-
-    @bounded()
-    async def test_stop_sync_sends_one_object_and_reads_the_ack(self):
-        """Any object cancels the sync; `ack` is the one sent because it is the
-        smallest frame and carries no payload to misread."""
-        async with MockApphost(routes={OP_SYNC: self.handler()}) as mock:
-            s = await self.services(mock)
-            async with s.sync_follow("localnode") as stream:
-                await s.stop_sync(stream, timeout=5.0)
-            self.assertEqual(
-                [t for t, _ in mock.connections[-1].received[-2:]],
-                [ROUTE_QUERY, ACK],
-            )
-
-    @bounded()
-    async def test_stop_sync_answers_false_when_the_op_already_ended(self):
-        """A sync that failed sent its `error_message` and closed, so there is
-        no `ack` left to read and the absence is not silent."""
-        async with MockApphost(routes={OP_SYNC: self.ended()}) as mock:
-            s = await self.services(mock)
-            async with s.sync_follow("localnode") as stream:
-                self.assertIs(await s.stop_sync(stream, timeout=5.0), False)
-
-    @bounded()
-    async def test_a_refused_id_never_reaches_the_node(self):
-        async with MockApphost() as mock:
-            s = await self.services(mock)
-            with self.assertRaises(BadArgument):
-                s.sync_follow("")
-            self.assertEqual(mock.queries, [])
-
-    @bounded()
-    async def test_the_context_manager_closes_the_stream(self):
-        """Closing ends the sync too -- astrald's `ch.Receive()` errors and
-        cancels -- and then no `ack` arrives, because there is nothing left to
-        write it to."""
-        async with MockApphost(routes={OP_SYNC: Accept(read=True)}) as mock:
-            s = await self.services(mock)
-            async with s.sync_follow("localnode") as stream:
-                pass
-            self.assertTrue(stream.closed)
-            self.assertEqual(s.client.live_streams, 0)
+            async with s.watch(["chat"]) as w:
+                with self.assertRaises(RemoteError):
+                    await w.initial()
+                self.assertIsInstance(w.error, RemoteError)
 
 
 class ModulePlumbingTest(ServicesCase):
@@ -1040,52 +980,65 @@ class ModulePlumbingTest(ServicesCase):
         from astral.api.base import ModuleClient
 
         self.assertTrue(issubclass(Services, ModuleClient))
-        self.assertIs(Services._expect, ModuleClient._expect)
         async with MockApphost() as mock:
             s = await self.services(mock)
             self.assertIs(s.client, s._c)
-            self.assertIn("Services", repr(s))
-            with self.assertRaises(ProtocolError) as caught:
-                s._expect(Ack(), Update, "op")
-            self.assertEqual(
-                str(caught.exception), "op: expected 'services.update', got 'ack'"
-            )
+            self.assertIs(s.client.services.client, s.client)
 
-    @bounded()
-    async def test_the_module_is_imported_by_the_api_package(self):
-        """Importing `astral.api` must register every wire type, so a module
-        without a line in `__init__.py` makes `services.update` decode in one
-        program and raise `BlueprintNotFound` in another."""
+    def test_the_module_is_imported_by_the_api_package(self):
         import sys
 
         import astral.api
 
         self.assertIn("astral.api.services", sys.modules)
-        self.assertIs(astral.api.services, services_module)
         self.assertIs(astral.api.Services, Services)
+
+    def test_records_are_dataclasses_the_binding_can_rewrite(self):
+        """The binding rewrites the handler's `Update` with `dataclasses.replace`."""
+        self.assertEqual(
+            dataclasses.replace(CHAT, name="x", provider_id=None).name, "x"
+        )
 
 
 class CitationTest(unittest.TestCase):
     """Every line number `astral.api.services` cites lands on its claim.
 
-    Read at the pins `tests/reference.py` holds, so upstream drift is a
-    deliberate bump rather than a surprise failure. Absent reference: skip.
+    Read at the pins `tests/reference.py` holds. Absent reference: skip.
     """
 
-    CITES = (
-        (reference.ASTRAL_GO, "api/services/update.go", 19, 'return "services.update"'),
-        (reference.ASTRAL_GO, "lib/query/field_editor.go", 143, "case reflect.Bool:"),
-        (reference.ASTRALD, "mod/services/src/module.go", 42, "deleteAllProviderServices"),
-        (reference.ASTRALD, "mod/services/src/module.go", 49, "switch {"),
-        (reference.ASTRALD, "mod/services/src/module.go", 53, "createProviderService"),
-        (reference.ASTRALD, "mod/services/src/module.go", 55, "deleteProviderService"),
-        (reference.ASTRALD, "mod/services/src/op_sync.go", 37, "ch.Receive()"),
-        (reference.ASTRALD, "mod/services/src/op_sync.go", 38, "cancel()"),
-        (reference.ASTRALD, "mod/dir/src/module.go", 58, 'if s == "" || s == "anyone"'),
+    ASTRALD_LINES = (
+        ("mod/services/src/op_advertise.go", 25, "astral.OriginNetwork"),
+        ("mod/services/src/op_advertise.go", 31, "auth.ServeAppsAction"),
+        ("mod/services/src/op_advertise.go", 39, "id.IsEqual(mod.node.Identity())"),
+        ("mod/services/src/op_advertise.go", 49, "astral.Err(err)"),
+        ("mod/services/src/op_advertise.go", 55, "astral.Err(err)"),
+        ("mod/services/src/op_advertise.go", 65, "ch.Switch("),
+        ("mod/services/src/op_discover.go", 29, "reach=swarm is accepted only from a local app"),
+        ("mod/services/src/op_discover.go", 34, "An eos ends the initial attempt"),
+        ("mod/services/src/op_discover.go", 36, "with follow it carries later views"),
+        ("mod/services/src/op_discover.go", 159, 'not permitted to discover %q'),
+        ("mod/services/src/coordinator/coordinator.go", 21, "service already advertised by this provider"),
+        ("mod/services/src/coordinator/coordinator.go", 36, "InitialBudget: 5 * time.Second, RequestTimeout: 10 * time.Second"),
+        ("mod/services/src/coordinator/source_messages.go", 30, "u.ProviderID = src.provider"),
+        ("mod/services/src/coordinator/source_messages.go", 45, "string(a.Update.Name) != req.service"),
+        ("mod/services/src/coordinator/source_messages.go", 47, "!a.Update.ProviderID.IsEqual(src.provider)"),
+        ("mod/services/src/coordinator/source_messages.go", 85, "if !ch.Valid() {"),
     )
 
-    def test_every_cited_line_lands_on_its_claim(self):
-        for repo, path, number, expected in self.CITES:
+    ASTRAL_GO_LINES = (
+        ("api/services/update.go", 19, 'return "services.update"'),
+        ("api/services/errors.go", 8, '"service already advertised by this provider"'),
+        ("api/services/names.go", 10, "MaxNames = 64"),
+        ("api/services/names.go", 13, "maxNameLen = 255"),
+        ("api/services/reach.go", 11, 'ReachLocal Reach = "local"'),
+        ("api/services/reach.go", 14, 'ReachSwarm Reach = "swarm"'),
+        ("api/services/client/advertise.go", 81, "if err == nil && u != nil {"),
+        ("api/services/client/services.go", 16, 'ErrStreamEnded = errors.New("discovery stream ended")'),
+        ("lib/query/field_editor.go", 143, "case reflect.Bool:"),
+    )
+
+    def check(self, repo: str, rows: tuple[tuple[str, int, str], ...]) -> None:
+        for path, number, expected in rows:
             with self.subTest(citation=f"{path}:{number}"):
                 try:
                     line = reference.cited_line(repo, path, number)
@@ -1093,42 +1046,49 @@ class CitationTest(unittest.TestCase):
                     self.skipTest(str(exc))
                 self.assertIn(expected, line)
 
-    def test_the_cache_is_cleared_and_refilled_outside_a_transaction(self):
-        """`syncServices`, lines 42-61: the delete and every write, no `InTx`."""
+    def test_every_astrald_line_lands_on_its_claim(self):
+        self.check(reference.ASTRALD, self.ASTRALD_LINES)
+
+    def test_every_astral_go_line_lands_on_its_claim(self):
+        self.check(reference.ASTRAL_GO, self.ASTRAL_GO_LINES)
+
+    def test_only_the_lines_this_test_checks_are_cited(self):
+        """A citation added without a row here would go unchecked."""
+        import pathlib
+        import re
+
+        prose = pathlib.Path(services_module.__file__).read_text(encoding="utf-8")
+        self.assertEqual(
+            set(re.findall(r"astrald/(mod/[\w/]+\.go:\d+)", prose)),
+            {f"{p}:{n}" for p, n, _ in self.ASTRALD_LINES}
+            - {"mod/services/src/coordinator/coordinator.go:21"},
+        )
+        self.assertEqual(
+            set(re.findall(r"astral-go/((?:api|lib)/[\w/]+\.go:\d+)", prose)),
+            {f"{p}:{n}" for p, n, _ in self.ASTRAL_GO_LINES},
+        )
+
+    def test_the_node_and_the_sdk_word_the_refusal_alike(self):
+        """`ERR_ADVERTISED` is compared as text, so astrald's coordinator and
+        astral-go must agree on it."""
         try:
-            lines = reference.read(
-                reference.ASTRALD, "mod/services/src/module.go"
-            ).splitlines()[41:61]
+            line = reference.cited_line(
+                reference.ASTRALD, "mod/services/src/coordinator/coordinator.go", 21
+            )
         except reference.Unavailable as exc:  # pragma: no cover
             self.skipTest(str(exc))
-        body = "\n".join(lines)
-        self.assertIn("deleteAllProviderServices", lines[0])
-        self.assertNotIn("InTx", body)
-        self.assertEqual(lines[-1].strip(), "}")
+        self.assertIn(json.dumps(ERR_ADVERTISED), line)
 
 
-# --- Tier C: the read-only half against a real node ----------------------
+# --- Tier C: read-only, against a real node ------------------------------
 
 
 class LiveServicesTest(live_support.LiveCase):
-    """`services` against a real node. Read-only.
-
-    `services.sync` is never called from here: it clears the local cache for an
-    identity and refills it over the network, which design section 7.3 puts
-    outside the live tier entirely.
-
-    Two probes here are not `services` ops. Both are on the anonymous read-only
-    list and both exist because this node's `services.discover` answers an empty
-    snapshot -- neither the NAT nor the gateway discoverer is enabled -- so the
-    design's own settling probe for R-13 cannot see a populated frame.
-    `objects.new` builds the zero value server-side and `objects.echo` makes the
-    node decode and re-encode a populated one.
-    """
+    """`services` against a real node. Read-only: an anonymous client, which
+    the node treats as itself, binds nothing and discovers nothing."""
 
     @bounded(30.0)
-    async def test_the_module_s_op_surface_is_exactly_these_three(self):
-        """`shell.spec` is the node's own op registry, so this is the inventory
-        rather than a copy of it."""
+    async def test_the_module_s_op_surface_is_exactly_these_two(self):
         async with await self.client() as client:
             body = await client.call_raw("shell.spec?out=json", timeout=20.0)
         names = {
@@ -1138,65 +1098,29 @@ class LiveServicesTest(live_support.LiveCase):
         }
         self.assertEqual(
             {name for name in names if name.startswith("services.")},
-            {OP_ADVERTISE, OP_DISCOVER, OP_SYNC},
+            {OP_ADVERTISE, OP_DISCOVER},
         )
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
-    async def test_an_anonymous_caller_is_the_node_and_cannot_advertise(self):
-        """The node stands in for an anonymous IPC caller and passes the
-        ServeApps check, and the op refuses the node as a provider before it
-        publishes anything. The one advertisement path a read-only tier may
-        take, because it ends before `advertise` runs."""
-        async with await self.client() as client:
-            with self.assertRaises(RemoteError) as caught:
-                async with client.services.advertise("astral-py-live-tier"):
-                    self.fail("the node acknowledged an advertisement by itself")
-            self.assertEqual(caught.exception.message, "the node cannot advertise to itself")
-            self.assertEqual(await client.services.discover(), [])
-        await self.assert_no_open_sockets()
-
-    @bounded(30.0)
-    async def test_only_sync_enforces_a_required_argument(self):
-        """`Required` is set only by a `query:"required"` struct tag. astrald
-        tags `opSyncArgs.Identity` and nothing in `opDiscoverArgs`. The tag
-        refuses an absent `identity` and passes an empty one, which resolves to
-        the zero identity. That is why `sync()` refuses an empty id client-side
-        rather than relying on the node.
-        `opAdvertiseArgs.Name` is untagged too, and the op answers
-        `name is required` itself, verified on astrald `26bb51d5`; `advertise()`
-        refuses an empty name before routing."""
+    async def test_the_parameters_are_the_declared_ones(self):
         async with await self.client() as client:
             params = {}
-            for op in (OP_ADVERTISE, OP_DISCOVER, OP_SYNC):
-                body = await client.call_raw(
-                    f"shell.spec?op={op}&out=json", timeout=20.0
-                )
+            for op in (OP_ADVERTISE, OP_DISCOVER):
+                body = await client.call_raw(f"shell.spec?op={op}&out=json", timeout=20.0)
                 spec = json.loads(body.decode().splitlines()[0])["Object"]
-                params[op] = [
-                    (p["Name"], p["Type"], p["Required"]) for p in spec["Parameters"]
-                ]
+                params[op] = [(p["Name"], p["Type"], p["Required"]) for p in spec["Parameters"]]
         self.assertEqual(
             params[OP_ADVERTISE],
-            [
-                ("name", "string8", False),
-                ("in", "string8", False),
-                ("out", "string8", False),
-            ],
+            [("services", "string8", False), ("in", "string8", False), ("out", "string8", False)],
         )
         self.assertEqual(
             params[OP_DISCOVER],
             [
+                ("services", "string8", False),
                 ("follow", "bool", False),
-                ("in", "string8", False),
-                ("out", "string8", False),
-            ],
-        )
-        self.assertEqual(
-            params[OP_SYNC],
-            [
-                ("identity", "string8", True),
-                ("follow", "bool", False),
+                ("reach", "string8", False),
+                ("for", "string8", False),
                 ("in", "string8", False),
                 ("out", "string8", False),
             ],
@@ -1204,104 +1128,63 @@ class LiveServicesTest(live_support.LiveCase):
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
-    async def test_discover_answers_a_list_of_updates_and_ends_at_an_eos(self):
-        """An empty list is the ordinary answer here: astrald fans the op out to
-        every module implementing `services.Discoverer`, and the two that do
-        emit an update only while their own feature is enabled."""
+    async def test_the_node_cannot_advertise(self):
+        """An anonymous caller arrives as the node, and the op rejects the
+        node's own identity before it binds anything."""
         async with await self.client() as client:
-            got = await Services(client).discover(timeout=20.0)
-        self.assertIsInstance(got, list)
-        for update in got:
-            self.assertIsInstance(update, Update)
-            self.assertIsInstance(update.name, str)
-        await self.assert_no_open_sockets()
-
-    @bounded(30.0)
-    async def test_the_discover_body_is_framed_objects_ending_in_one_eos(self):
-        """The shape, off the raw body rather than off the decoded objects."""
-        async with await self.client() as client:
-            body = await client.call_raw(
-                "services.discover?follow=false", timeout=20.0
-            )
-        self.assertTrue(body.endswith(frame("eos")), body.hex())
-        await self.assert_no_open_sockets()
-
-    @bounded(30.0)
-    async def test_a_follow_stream_reaches_its_separator_and_closes_clean(self):
-        """The separator is what `follow=true` changes, so the assertion is that
-        the stream crosses it and stays open. The live half is bounded and the
-        stream is closed on the way out: an undrained follow stream holds one of
-        the node's 32 workers until the node restarts."""
-        async with await self.client() as client:
-            s = Services(client)
-            async with s.discover_follow() as stream:
-                snapshot = [obj async for obj in stream.snapshot()]
-                self.assertTrue(stream.saw_eos)
-                self.assertTrue(stream.is_live)
-                live = []
-                try:
-                    async with asyncio.timeout(2.0):
-                        async for obj in stream.live():
-                            live.append(obj)
-                except TimeoutError:
-                    pass
-            self.assertTrue(stream.closed)
+            with self.assertRaises(QueryRejected) as caught:
+                async with client.services.advertise(["astral-py-live-tier"], offer(None)):
+                    self.fail("the node acknowledged an advertisement by itself")
+            self.assertEqual(caught.exception.code, 1)
             self.assertEqual(client.live_streams, 0)
-        for update in snapshot + live:
-            self.assertIsInstance(update, Update)
+        await self.assert_no_open_sockets()
+
+    @bounded(30.0)
+    async def test_the_node_holds_no_discovery_permit(self):
+        """Discovery is granted per service and the node identity holds none,
+        so the anonymous caller is refused before any provider is asked."""
+        async with await self.client() as client:
+            with self.assertRaises(RemoteError) as caught:
+                await client.services.discover(["astral-py-live-tier"], timeout=20.0)
+            self.assertEqual(
+                caught.exception.message, 'not permitted to discover "astral-py-live-tier"'
+            )
+            self.assertEqual(client.live_streams, 0)
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
     async def test_the_nodes_zero_value_decodes_to_four_absent_fields(self):
-        """R-13, first half: the field order and both nil flags, built by the
-        node rather than by this SDK.
-
-        One deliberate type, not a sweep. `services.Update.WriteTo` is
-        `astral.Objectify(&s).WriteTo(w)`, pure reflection, and `ptrValue.WriteTo`
-        writes `0x00` for a nil pointer without calling through it -- so the nil
-        `*astral.Identity` that panics `mod.nodes.node_info`'s hand-written
-        encoder cannot arise here.
-        """
         async with await self.client() as client:
-            body = await client.call_raw(
-                "objects.new?type=services.update", timeout=20.0
-            )
+            body = await client.call_raw("objects.new?type=services.update", timeout=20.0)
         self.assertEqual(body, LIVE_NEW_FRAME)
-        u = Update.read_payload(object_reader(body[20:]))
-        self.assertEqual(
-            u, Update(available=False, name="", provider_id=None, info=None)
-        )
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
-    async def test_a_populated_update_round_trips_through_the_nodes_registry(self):
-        """R-13, second half, and the whole of it: `Info` is a real `bundle`
-        whose inner objects decode through the registry.
-
-        `strict=true` drops the unparsed-object fallback, so the node must decode
-        the frame through its own blueprints and re-encode it from the decoded
-        value. Bytes back that equal bytes out are the reference implementation
-        agreeing with this SDK's model. `objects.echo` stores nothing.
-        """
-        sent = Update(
-            available=True,
-            name="gateway",
-            provider_id=FURRY_BOLT,
-            info=Bundle([String8("hello"), Uint64(7)]),
-        )
-        self.assertEqual(payload_bytes(sent), LIVE_BUNDLE_UPDATE)
+    async def test_every_type_round_trips_through_the_nodes_registry(self):
+        """`strict=true` drops the unparsed-object fallback, so the node decodes
+        each frame through its own blueprints and re-encodes it from the decoded
+        value. `objects.echo` stores nothing."""
+        sent = [v for v, _, _ in GO_VECTORS] + [
+            Update(
+                available=True,
+                name="gateway",
+                provider_id=FURRY_BOLT,
+                info=Bundle([String8("hello"), Uint64(7)]),
+            )
+        ]
         async with await self.client() as client:
-            async with client.stream(
-                "objects.echo?strict=true&stop=eos", timeout=20.0
-            ) as stream:
-                await stream.send(sent, timeout=10.0)
+            async with client.stream("objects.echo?strict=true&stop=eos", timeout=20.0) as stream:
+                for value in sent:
+                    await stream.send(value, timeout=10.0)
                 await stream.send_eos(timeout=10.0)
                 got = [obj async for obj in stream]
-        self.assertEqual(len(got), 1, got)
-        self.assertNotIsInstance(got[0], UnparsedObject)
-        self.assertEqual(got[0], sent)
-        self.assertEqual(payload_bytes(got[0]), LIVE_BUNDLE_UPDATE)
-        self.assertEqual(list(got[0].info), [String8("hello"), Uint64(7)])
+        self.assertEqual(len(got), len(sent), got)
+        for value, back in zip(sent, got):
+            with self.subTest(type=value.ASTRAL_TYPE):  # type: ignore[attr-defined]
+                self.assertNotIsInstance(back, UnparsedObject)
+                self.assertEqual(back, value)
+                self.assertEqual(payload_bytes(back), payload_bytes(value))
+        self.assertEqual(payload_bytes(sent[-1]), LIVE_BUNDLE_UPDATE)
         await self.assert_no_open_sockets()
 
 

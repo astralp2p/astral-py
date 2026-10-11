@@ -21,9 +21,10 @@ it, and the mnemonic is the seed. These functions exist so that a caller may
 reach a seed without one crossing the IPC socket: the node's `bip137sig.mnemonic`
 and `bip137sig.seed` ops answer the same values (verified byte for byte against
 `furry-bolt`), and they take the mnemonic on the channel body and the passphrase
-in the **query string**, which astrald writes to its log at the default
-verbosity (`astrald/core/router.go:81`, `Infov(0, "%v routed in %v", q.Query, d)`
-over an `astral.Query` that has no `String()`).
+in the **query string**. astrald writes every routed query string to its log at
+the default verbosity (`astrald/core/router.go:83`) with the `passphrase` value
+replaced by `<redacted>` (`astrald/core/query_log.go:12`); the mnemonic and the
+passphrase still cross the socket to the node's process.
 
 **Normalisation is not decoration.** BIP-39 requires the mnemonic and the
 passphrase to be NFKD before PBKDF2 sees them, so two spellings of one passphrase

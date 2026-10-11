@@ -1038,7 +1038,7 @@ class ListSiblingsOpTest(UserCase):
     @bounded()
     async def test_a_zone_goes_to_the_op_argument_and_to_the_routing_zone(self):
         """One scope, two levers, as `Objects` does it. The op's own argument is
-        inert on astrald `e85f5da4` -- the context it builds is never used --
+        inert on astrald `0c7e3109` -- the context it builds is never used --
         and the routing zone is not, so sending only one of them is wrong
         whichever one it is."""
         api = await self.serving(
@@ -1218,7 +1218,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_sends_the_identity_and_no_height_by_default(self):
-        """`start` is undeclared on astrald `e85f5da4`, and the node reads the
+        """`start` is undeclared on astrald `0c7e3109`, and the node reads the
         height out of its own tree. An implicit `start=0` would mean "re-read
         the whole log" to a node that reads it, which is not what a caller who
         named no height asked for."""
@@ -1801,15 +1801,15 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/op_sync_assets.go", 38): "height = args.Start",
         ("mod/user/src/op_sync_assets.go", 49): "height++",
         ("mod/user/src/op_list_siblings.go", 24): "IncludeZone(args.Zone)",
-        ("mod/user/src/config.go", 11): "minimalContractLength   = time.Hour",
-        ("mod/user/src/config.go", 12): "defaultContractValidity = 365 * 24 * time.Hour",
+        ("mod/user/module.go", 16): "MinimalContractLength = time.Hour",
+        ("mod/user/module.go", 20): "DefaultContractValidity = 365 * 24 * time.Hour",
         ("mod/user/src/siblings.go", 25): "user.Notification{Event",
         ("mod/user/src/op_adopt.go", 39): "return q.RejectWithCode(4)",
         ("mod/user/src/op_sync_with.go", 39): "mod.syncAssets(ctx.IncludeZone",
-        ("mod/user/src/sync.go", 29): "tree.Get[*astral.Uint64](ctx, heightNode)",
+        ("mod/user/src/sync.go", 30): "tree.Get[*astral.Uint64](ctx, heightNode)",
         ("mod/dir/src/module.go", 58): 'if s == "" || s == "anyone"',
         ("mod/dir/src/module.go", 107): "return identity.Fingerprint()",
-        ("mod/user/src/contracts.go", 171): "defaultContractValidity",
+        ("mod/user/src/contracts.go", 172): "usermod.DefaultContractValidity",
     }
 
     ASTRAL_GO_LINES = {
