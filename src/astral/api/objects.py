@@ -164,6 +164,7 @@ from ..blueprint import of as blueprint_of
 from ..blueprint import spec_of
 from ..client import Client, StreamContext
 from ..codec.binary import payload_bytes
+from ..codec.jsoncodec import json_fields
 from ..errors import (
     BadArgument,
     BadArgumentType,
@@ -493,6 +494,21 @@ class RepositoryInfo:
     kind: str = wire("Kind", Primitive("string8"))
     children: list[str] = wire("Children", Slice("string8"))
     concurrent: bool = wire("Concurrent", Primitive("bool"))
+
+    def json(self) -> dict[str, Any]:
+        """The field walk, with an empty `children` emitted as `[]`.
+
+        The codec emits an empty container as `null`. astral-go's
+        `RepositoryInfo.MarshalJSON` emits `[]` for this field instead. Sourced:
+        astral-go `api/objects/repository_info.go:46` at the pin, "a repository
+        without members emits [], never null". Verified live against astrald
+        `21890e56`: every leaf in `objects.repositories?out=json` answers
+        `"Children":[]`, and `LiveJSONTest` re-encodes that stream byte for byte.
+        """
+        walked = json_fields(type(self).FIELDS, self)
+        if walked["Children"] is None:
+            walked["Children"] = []
+        return walked
 
     @property
     def is_group(self) -> bool:

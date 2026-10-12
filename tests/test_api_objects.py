@@ -22,10 +22,10 @@ claim is made at each and the three must agree:
 **Nothing here mutates a live node.** `create`, `store`, `push`, `delete`,
 `purge`, `new_mem`, `remove_repository` and the three `register_*` ops are
 exercised against the mock only; Tier C is the read-only subset of design
-section 13's anonymous safe list. `objects.new` is never swept over type names:
-`mod.nodes.node_info` panics astrald deterministically on a build before astral-go
-`0a15afb`, and the one test that names that type asserts the client refuses it
-without sending anything.
+section 13's anonymous safe list. `objects.new` is never swept over type names.
+`mod.nodes.node_info` is sent like any other name: the supported astral-go
+substitutes the zero identity in `NodeInfo.WriteTo`, and the one live test that
+names that type asserts the node answers its zero value.
 """
 
 from __future__ import annotations
@@ -85,8 +85,10 @@ from astral.api.objects import (
     TAG_REQUIRE,
 )
 from astral.blueprint import Blueprint, Field, PrimitiveSpec, SliceSpec
+from astral.api.nodes import NodeInfo
 from astral.client import connect
 from astral.codec.binary import object_reader, payload_bytes
+from astral.codec.jsoncodec import marshal
 from astral.errors import (
     BadArgument,
     BadArgumentType,
@@ -345,6 +347,14 @@ class RepositoryInfoWireTest(unittest.TestCase):
         self.assertEqual(info.children, ["device", "virtual", "network"])
         back = RepositoryInfo.read_payload(object_reader(payload_bytes(info)))
         self.assertEqual(back.children, ["device", "virtual", "network"])
+
+    def test_an_empty_children_list_is_an_empty_json_array(self):
+        """astral-go's `MarshalJSON` emits `[]`, where the codec's rule for an
+        empty container is `null`. A non-empty list is the plain field walk."""
+        leaf = marshal(RepositoryInfo(name="x", label="y", kind="repository"))
+        self.assertEqual(leaf["Children"], [])
+        group = marshal(RepositoryInfo(name="x", kind="group", children=["a", "b"]))
+        self.assertEqual(group["Children"], ["a", "b"])
 
     def test_an_empty_children_list_is_a_bare_zero_count(self):
         """No presence byte, no element: four zero bytes and nothing else."""
@@ -2503,10 +2513,16 @@ class LiveObjectsTest(live_support.LiveCase):
         self.assertIn("mod.objects.probe", names)
 
     async def test_get_blueprint_answers_the_probe_schema(self):
-        """Design bug G-21 withdrawn: the op exists and answers."""
+        """Design bug G-21 withdrawn: the op exists and answers, with the fields
+        `Probe` declares."""
         bp = await self.objects.get_blueprint("mod.objects.probe", timeout=20)
         self.assertEqual(bp.type, "mod.objects.probe")
-        self.assertEqual([f.name for f in bp.fields], ["Type", "Repo", "Mime", "Time"])
+        self.assertEqual(
+            [f.name for f in bp.fields], [f.wire_name for f in Probe.FIELDS]
+        )
+        self.assertEqual(
+            [f.name for f in bp.fields], ["Type", "Repo", "Mime", "Time", "ObjectID"]
+        )
 
     async def test_get_blueprint_refuses_a_primitive(self):
         with self.assertRaises(RemoteError):
@@ -2575,9 +2591,14 @@ class LiveObjectsTest(live_support.LiveCase):
         self.assertEqual(await self.objects.new("mod.objects.probe", timeout=20), Probe())
         self.assertEqual(await self.objects.new("no.such.type", timeout=20), Nil())
 
-    async def test_new_refuses_the_node_killing_type_without_a_query(self):
-        with self.assertRaises(BadArgument):
-            await self.objects.new("mod.nodes.node_info", timeout=20)
+    async def test_new_answers_the_node_info_zero_value(self):
+        """`mod.nodes.node_info`'s zero value holds a nil `*Identity`, and the
+        supported astral-go substitutes the zero identity in `WriteTo`. The node
+        answers that zero value and keeps serving."""
+        self.assertEqual(
+            await self.objects.new("mod.nodes.node_info", timeout=20), NodeInfo()
+        )
+        self.assertEqual(await self.objects.new("mod.objects.probe", timeout=20), Probe())
 
     async def test_echo_round_trips_this_modules_own_types(self):
         """The strongest agreement test the protocol offers: the node decodes
@@ -2678,6 +2699,7 @@ class CitationTest(unittest.TestCase):
         (reference.ASTRAL_GO, "api/objects/repository_info.go", 19, "Kind  astral.String8"),
         (reference.ASTRAL_GO, "api/objects/repository_info.go", 21, "Children []astral.String8"),
         (reference.ASTRAL_GO, "api/objects/repository_info.go", 23, "Concurrent astral.Bool"),
+        (reference.ASTRAL_GO, "api/objects/repository_info.go", 46, "a repository without members emits [], never null"),
     )
 
     def test_every_cited_line_lands_on_its_claim(self):
