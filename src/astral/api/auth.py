@@ -22,13 +22,13 @@ others, on astrald `26bb51d5`, verified.
 
 **`auth.index` takes its object ID in the query string or its object IDs on the
 body.** `opIndexArgs.ID` is optional (`mod/auth/src/op_index.go` at astrald
-`e85f5da4`), and an omitted `id` makes the op read `object_id.sha256` objects
+`0c7e3109`), and an omitted `id` makes the op read `object_id.sha256` objects
 off the channel until `eos` or EOF, answering one `ack` or `error_message` per
 input and carrying on past a failed one -- the RR/BD hybrid `objects.contains`,
 `objects.delete`, `objects.load` and `objects.probe` already have. The batch
 goes through astral-go's `channel.Batch`, which answers an explicit `eos` with a
 final `eos` and ends silently after EOF (`astral/channel/batch.go` at astral-go
-`5ea970b4`). `index()` is the single form and `index_many()` the batch. Verified
+`3c849bf`). `index()` is the single form and `index_many()` the batch. Verified
 on astrald `26bb51d5`: the spec flags `id` `"Required":false`, a bare `eos` on
 the body answers a bare `eos`, two IDs no repository holds answer two `object
 not found` and an `eos`, and the single form answers `object not found` and EOF.
@@ -52,6 +52,19 @@ that is already set (`auth.ErrAlreadySigned`), which this op can never reach.
 A contract between two identities whose keys live on different nodes is signed
 one half at a time through `user.accept_membership`, not here.
 
+**`auth.sign_contract` signs only for a caller entitled to both parties.** The
+op rejects a query whose origin is neither local nor empty, a link's and MCP's
+included (`astrald/mod/auth/src/op_sign_contract.go:26-30`). It authorizes each
+contract before any key is touched (`op_sign_contract.go:38`): the caller passes
+crypto's signer rule for the issuer, then for the subject
+(`astrald/mod/auth/src/sign_contract_guard.go` `authorizeParties`). The rule is
+`AuthorizeSigner`'s (`astrald/mod/crypto/src/sign_guard.go`): sign as itself, or
+as an identity the caller holds `mod.auth.sudo_action` for, and never as the
+node's own key on the self branch. A refused contract is answered with an
+`error_message` opening `authorize issuer:` or `authorize subject:`. The one
+exception is the node's own session asking for the contract that claims this
+unclaimed node (`sign_contract_guard.go` `isNodeClaim`).
+
 **`auth.sign_contract` is a batch op, and takes an `eos` that is not inferable
 from the wire.** Its reader is `channel.Batch`
 (`astrald/mod/auth/src/op_sign_contract.go`), the same reader `auth.index`'s
@@ -59,7 +72,7 @@ batch form uses: it reads contracts until `eos` or EOF, answers one
 `mod.auth.signed_contract` or `error_message` per input in input order, and
 **mirrors the input stream's terminator** -- an explicit `eos` is answered with a
 final `eos`, a stream ended by EOF is not (`astral/channel/batch.go` at astral-go
-`5ea970b4`). A body-input op whose reader omits an `eos` branch answers the same
+`3c849bf`). A body-input op whose reader omits an `eos` branch answers the same
 terminator with an `error_message`
 (`astral-go/astral/channel/switch.go:101`), so the terminator is a per-op
 contract rather than a protocol rule.
@@ -93,12 +106,12 @@ promotes anonymous fields. The nesting is astral-go's rule; the flattening is
 Go's default showing through a gap.
 
 **`auth.Action` is a registered astral object at the pin.**
-`api/auth/action.go` at astral-go `5ea970b4` declares
+`api/auth/action.go` at astral-go `3c849bf` declares
 `func (Action) ObjectType() string { return "mod.auth.action" }` (line 22) and
 registers it with `astral.MustAdd(&Action{})` (line 55).
 
 That changes what astral-go can derive. `specFromType` probes `tryObjectType`
-ahead of its container dispatch (`astral/blueprint_reflect.go` at `5ea970b4`), so
+ahead of its container dispatch (`astral/blueprint_reflect.go` at `3c849bf`), so
 an embedded `auth.Action` field now yields a `RefSpec` naming
 `mod.auth.action` rather than failing -- inferred from those two sources, with
 no run behind it.
@@ -469,9 +482,10 @@ class Auth(ModuleClient):
         4.7) and this op has no parameters at all, so a caller who reaches for
         one has nowhere to put it.
 
-        The node must hold the private keys of both identities named in the
-        contract; it signs as the issuer, then as the subject, and either
-        failure is an `error_message` and a `RemoteError` here. It writes
+        The caller must be entitled to sign as both identities named in the
+        contract, and the node must hold both private keys; it signs as the
+        issuer, then as the subject, and any refusal or failure is an
+        `error_message` and a `RemoteError` here. It writes
         nothing: the answer is durable only after `objects.store`, and it
         authorizes nothing until `index()`.
 

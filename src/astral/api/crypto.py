@@ -32,7 +32,7 @@ on the channel body (`mod/crypto/src/op_verify_hash_signature.go`,
 `op_verify_text_signature.go`), so an implementation that never streams one
 gets an accepted query, no answer, EOF -- and, if it reports that as success,
 **silently never verifies**. Every shape below was read out of astrald's
-`mod/crypto/src` at `e85f5da4`, never out of a sibling SDK.
+`mod/crypto/src` at `0c7e3109`, never out of a sibling SDK.
 
 **One rule decides where each value travels**, and it is stated once here so no
 method has to argue it again:
@@ -47,9 +47,12 @@ So `sign_hash` puts its digest in the query string and `sign_text` does not put
 its text there: a hash is a fixed-width public digest, a text is the content
 being signed, it has no length bound, and **astrald writes the query string of
 every routed query to its log at the default verbosity** --
-`astrald/core/router.go` answers each one with
-`Infov(0, "%v routed in %v", q.Query, d)`, and `astral.Query` has no `String()`,
-so `%v` renders the struct with `QueryString` in it.
+`astrald/core/router.go:83` answers each one with
+`Infov(0, "%v routed in %v", logged, d)`, and `astral.Query` has no `String()`,
+so `%v` renders the struct with `QueryString` in it. `logged` is the query with
+the values of `token` and `passphrase` replaced and every other argument kept
+byte for byte (`astrald/core/query_log.go:12`), so a `text` argument reaches the
+log.
 
 **`crypto.public_key` answers an unsupported key type in band.** `OpPublicKey`
 rejects a key type that is not `secp256k1` with `unsupported key type: <type>`
@@ -74,8 +77,8 @@ verify op, which is parsed before the switch, so nothing here reads the streamed
 form.
 
 **A caller signs as itself, and an anonymous caller cannot sign at all.** Every
-signature passes `authorizeSigner`
-(`mod/crypto/src/sign_guard.go` at `e85f5da4`): the key must be the caller's
+signature passes `AuthorizeSigner`
+(`mod/crypto/src/sign_guard.go` at `0c7e3109`): the key must be the caller's
 own identity, or one the caller holds a `mod.auth.sudo_action` for, and the
 node's own key is refused on the self branch. The core router substitutes the
 node's identity for an anonymous caller, so an anonymous IPC guest is refused
@@ -119,7 +122,7 @@ Reached as `client.crypto`, the `functools.cached_property` design section 5.1
 asks for, or as `Crypto(client)`, which constructs the same object and is what
 the tests here use.
 
-Source citations are pinned to astrald `e85f5da4` and astral-go `5ea970b4`, the
+Source citations are pinned to astrald `0c7e3109` and astral-go `3c849bf`, the
 revisions `tests/reference.py` names. The SDK supports the node at those
 revisions and no older one, so every citation here resolves at a pin.
 `tests/test_api_crypto.py` reads those directories rather than trusting this
@@ -371,7 +374,7 @@ def _split_key_text(text: str, type_name: str) -> tuple[str, str]:
     A missing colon is `invalid format` there and a `ParseError` here. **An empty
     prefix is not refused**, because astral-go does not refuse it -- its
     `UnmarshalText` checks the part count and nothing else (`api/crypto/
-    public_key.go` at `5ea970b4`) -- and because the zero value of all three types
+    public_key.go` at `3c849bf`) -- and because the zero value of all three types
     is exactly the one this used to reject: `PublicKey().text()` is `":"`, so a
     parser that refused it refused its own encoder's output and the text channel
     was the one framing of four that could not carry a zero key.

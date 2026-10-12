@@ -19,12 +19,14 @@ one; all four are on astrald's anonymous-web allowlist for an unclaimed node.
 they carry are the master secret of a wallet: `new_entropy_local`,
 `mnemonic_local` and `seed_local` over `astral.bip39`, byte for byte the same
 answers (verified against `furry-bolt`, and against the published BIP-39
-vectors). The local form is the one to prefer, and the passphrase is why:
-`bip137sig.seed` takes it as a **query argument**, and astrald writes the query
-string of every routed query to its log at the default verbosity
-(`astrald/core/router.go:81`, `Infov(0, "%v routed in %v", q.Query, d)`, over an
-`astral.Query` that has no `String()`). One call to the node op therefore leaves
-the passphrase in the node's log; `seed_local` leaves the process untouched.
+vectors). The local form is the one to prefer, because the values are the
+wallet's master secret and the node op sends them across the socket to another
+process. `bip137sig.seed` takes the passphrase as a **query argument**. astrald
+writes the query string of every routed query to its log at the default
+verbosity (`astrald/core/router.go:83`), and replaces the value of a
+`passphrase` argument there with `<redacted>` (`astrald/core/query_log.go:12`),
+so the routed-query log line does not carry the passphrase. `seed_local` sends
+nothing.
 
 **BIP-32 derivation has no local form.** Non-hardened child derivation needs a
 point multiplication, so it needs the curve, and design section 5.2 rules that
@@ -198,7 +200,7 @@ class _Bytes8Alias(AliasRecord):
 
         **The length rule holds here too, and in astral-go it does not.** Go
         checks it in `WriteTo`/`ReadFrom` and not in `MarshalText`/`UnmarshalText`
-        (`api/bip137sig/entropy.go` at `5ea970b4`), so over there a JSON or text
+        (`api/bip137sig/entropy.go` at `3c849bf`), so over there a JSON or text
         channel carries an entropy the binary channel refuses -- and once such a
         value exists nothing can re-emit it, because the only encoding it came
         through is the one that let it in. The rule belongs to the type rather
@@ -462,9 +464,10 @@ class Bip137Sig(ModuleClient):
     ) -> Seed:
         """The BIP-39 seed of a mnemonic, computed by the node. WA, one exchange.
 
-        **The passphrase reaches the node's log.** It is a query argument and
-        astrald logs every routed query string; `seed_local` is the same
-        computation with nothing on the socket and nothing in the log.
+        **The passphrase crosses the socket as a query argument.** astrald
+        logs every routed query string with the `passphrase` value redacted
+        (`astrald/core/query_log.go:12`); `seed_local` is the same computation
+        with nothing on the socket.
 
         The mnemonic is validated here before it is sent, by the same rules the
         node applies, so a typo names the word that is wrong rather than

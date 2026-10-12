@@ -1,236 +1,263 @@
-"""`services`: what a node offers, and the cache of what its peers offer.
+"""`services`: providers answer for their services, consumers discover them.
 
-Tier 1, three ops, and the module that proves the `bundle` kind inside a record.
+The Services v1 wire. Two ops; `services.sync` is gone from the node.
 
 | Op | Mode | Answer | Effect |
 |---|---|---|---|
-| `services.advertise` | BD, held open | `ack` \\| `error_message`, then nothing | publishes while open |
-| `services.discover` | ST, ST+follow | `services.update` × n ++ `eos` | read-only |
-| `services.sync` | RR, BD with `follow` | `ack` \\| `error_message` | **mutates** |
+| `services.advertise` | BD, held open | `ack` \\| `error_message`, then `services.ask` × n | binds while open |
+| `services.discover` | ST+follow | `services.update` \\| `services.removed` × n, `services.incomplete`?, `eos` | read-only |
 
-The three are the complete surface: the live `shell.spec` registry holds
-`services.advertise`, `services.discover` and `services.sync` and nothing else
-under this module, verified on astrald `26bb51d5`. `furry-bolt` held the last two
-only; `services.advertise` is astrald `0ac18022`.
+The two are the complete surface: the live `shell.spec` registry holds
+`services.advertise` and `services.discover` and nothing else under this module,
+verified on an isolated astrald built from `0c7e3109`.
 
-**`services.advertise` publishes a service for exactly as long as its channel is
-open.** The provider is the caller and never an argument, so an app advertises
-nothing but itself. The op authorizes the caller under
-`mod.auth.serve_apps_action`, refuses a network-origin query, answers `ack` once
-the service is published, and then reads `bundle` objects off the channel, each
-replacing the advertised info in place. Closing the channel withdraws the
-service (`mod/services/src/op_advertise.go` at astrald `e85f5da4`).
-`services.discover` serves these advertisements beside the module discoverers':
-one `services.update` with `available` true on publish and on every info change,
-and one with `available` false on withdrawal. `advertise()` returns an
-`Advertisement`, the counterpart of astral-go's
-(`api/services/client/advertise.go` at astral-go `5ea970b4`), and `async with` is
-its contract, because the open channel **is** the advertisement.
+**A provider binds a fixed set of services for as long as its channel is open.**
+`services.advertise?services=a,b` names the set. The op refuses a network-origin
+query (`astrald/mod/services/src/op_advertise.go:25`), asks
+`mod.auth.serve_apps_action` for the caller
+(`astrald/mod/services/src/op_advertise.go:31`), and refuses a zero caller and the
+node's own identity (`astrald/mod/services/src/op_advertise.go:39`), each with a
+query rejection. An anonymous IPC caller is the node, so it is rejected: verified
+on that node, `QueryRejected` with code 1. A malformed service list and a name
+this provider already advertises are answered after accept with an
+`error_message` (`astrald/mod/services/src/op_advertise.go:49`,
+`astrald/mod/services/src/op_advertise.go:55`); the second carries the text
+`ERR_ADVERTISED`. Then the node sends `ack`, and after it one `services.ask` per
+caller and service it needs evaluated. The provider sends one `services.answer`
+per ask and a `services.change` whenever offerings may have changed; any other
+object, and closing the channel, ends the binding
+(`astrald/mod/services/src/op_advertise.go:65`). `advertise()` returns a
+`Binding`, the counterpart of astral-go's (`api/services/client/advertise.go` at
+astral-go `3c849bf`), and `async with` is its contract, because the open channel
+**is** the advertisement.
 
-**An anonymous caller is the node, and the node cannot advertise to itself.**
-astrald substitutes the node's identity for an anonymous IPC caller, the node
-passes the ServeApps check, and the op answers
-`error_message("the node cannot advertise to itself")` before it publishes
-anything. Verified on astrald `26bb51d5`. An app therefore advertises under its
-own token. Verified there too: an identity from `apphost.register` advertised,
-and a follower of `services.discover` saw the publication, the info change and the
-withdrawal.
+**An answer is the complete offering of one service for one caller.** The
+handler a `Binding` holds evaluates it. `None` or an exception is answered as
+unavailable, so an ask is never left unanswered, which is astral-go's rule
+(`astral-go/api/services/client/advertise.go:81`). The answer always carries the asked
+name and no provider: the node refuses an answer whose name differs from the
+ask's and one naming another provider, and it sets the provider from the binding
+(`astrald/mod/services/src/coordinator/source_messages.go:45`,
+`astrald/mod/services/src/coordinator/source_messages.go:47`,
+`astrald/mod/services/src/coordinator/source_messages.go:30`). One ask waits 10 s
+for its answer (`astrald/mod/services/src/coordinator/coordinator.go:36`).
 
-**`services.update` is one record with two pointer slots.** Field order,
-widths and both nil flags read off the node itself -- `objects.new?type=
-services.update` builds the zero value server-side and sends it as
-`0f 73657276696365732e757064617465 00000004 00000000`, four zero bytes for four
-fields::
+**A change that selects no caller fails the binding**
+(`astrald/mod/services/src/coordinator/source_messages.go:85`), so
+`Binding.change()` with no callers sends nothing.
 
-    01                          Available   bool, one byte
-    07 67617465776179          Name        string8
-    01 03b270…ae1               ProviderID  ptr, flag then 33 flat identity bytes
-    01 <bundle payload>         Info        ptr, flag then the bundle
+**A consumer discovers named services for itself.** `services.discover?
+services=a,b` admits the request before any work: the list must parse, `reach`
+must be `local` or `swarm`, and the caller must hold
+`mod.services.service_discovery_action` for every named service on every
+contributing node, else the op answers `not permitted to discover "<name>"`
+(`astrald/mod/services/src/op_discover.go:159`). `reach=swarm` carries the
+discovery to every member of the node's local swarm in the caller's name, and is
+accepted only from a local app (`astrald/mod/services/src/op_discover.go:29`).
+Verified on the isolated node: an anonymous caller, which is the node, is refused
+`not permitted to discover "chat"`, because the node identity holds no discovery
+permit.
 
-`Available` is an `astral.Bool` in astral-go's struct and `Name` an
-`astral.String8` (`api/services/update.go` at astral-go `5ea970b4`), which is why
-the declaration here is `Primitive("bool")` and `Primitive("string8")`. Both
-pointers are genuinely nil on this node, so both nil flags are exercised by the
-zero value above.
-
-**R-13 is settled, and the answer is that `Info` is a full `bundle`.** The
-legacy SDK treated a bundle as opaque bytes, which made every object a provider
-advertises unreachable from Python. `Info` decodes through the registry like any
-other bundle, inner objects included. Settled by round trip rather than by
-reading: `objects.echo?strict=true` drops the unparsed-object fallback, so the
-node must decode a frame through its own registry and re-encode it from the
-decoded value. A `services.update` carrying `Bundle([String8('hello'),
-Uint64(7)])` came back byte for byte::
-
-    01 07 67617465776179
-    01 03b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae1
-    01                                          Info present
-      00000002                                  uint32 count
-      0000000e 07 737472696e6738 05 68656c6c6f  bytes32( string8("string8") ++ "hello" )
-      0000000f 06 75696e743634 0000000000000007 bytes32( string8("uint64")  ++ 7 )
-
-The type name is `services.update` with **no `mod.` prefix** -- astral-go's
-`Update.ObjectType()` returns exactly that (`api/services/update.go:19`), and
-the registry name is what travels, so a `mod.` here would make every update
-frame undecodable. Design section 5.1 rule 6 lists it among the literal
-exceptions.
-
-**`services.discover` answers an empty snapshot on a node with neither NAT nor
-gateway enabled.** astrald fans the op out to every loaded module that
-implements `services.Discoverer`, and exactly two do:
-`mod/nat/src/service_discoverer.go` and `mod/gateway/src/service_discoverer.go`.
-Each emits one update only while its own feature is on. Verified live:
-`services.discover?follow=false` returns zero objects and the raw body is
-`03656f7300000000`, one `eos` frame and EOF. **An empty answer is the normal
-answer, not a fault.**
-
-**The `follow` flag changes the meaning of the first `eos`, so it gets its own
-method.** `discover()` is ST and stops at the terminator. `discover_follow()` is
-ST+follow: the first `eos` is a snapshot/live separator and the channel stays
-open until the caller closes it. Conflating them **truncates silently**: an
-`async for` and `Stream.collect()` both stop at the first `eos`, so on the
-follow form they answer the snapshot alone and drop every live update with no
-error. That is why design section 4.2 requires two methods rather than one
-boolean that changes the return type.
+**The stream has one `eos`, and it ends the initial attempt.** Before it come the
+offering views -- `services.update`, one complete offering, `available` false
+when the provider offers nothing -- and `services.removed`, the offerings of a
+lost provider. `services.incomplete` precedes the `eos` when some initial work
+did not resolve; a bare `eos` means the initial attempt completed. Without
+`follow` the channel closes after the `eos`; with `follow` it carries later views
+and removals (`astrald/mod/services/src/op_discover.go:34`,
+`astrald/mod/services/src/op_discover.go:36`). The node gives the initial attempt
+5 s (`astrald/mod/services/src/coordinator/coordinator.go:36`). This module turns
+the `eos` into an `InitialOutcome` event, so a reader never sees the separator:
+`complete` true for a bare `eos`, false with the incomplete service names
+otherwise. A one-shot stream that ends before its `eos` and a follow stream that
+ends at all are `ProtocolError`, as `ErrStreamEnded` is in astral-go
+(`astral-go/api/services/client/services.go:16`).
 
 **`follow` is not parsed as an astral `bool`.** The op's argument struct field
 is a plain Go `bool`, and `query.FieldEditor.UnmarshalText` sends that through
 `strconv.ParseBool` (`astral-go/lib/query/field_editor.go:143`), never through
-`astral.Bool.UnmarshalText`. The two vocabularies differ:
-`strconv.ParseBool` takes `1`/`0`/`t`/`f`/`true`/`false`/`TRUE`/`True` and
-refuses `yes`; `astral.Bool` takes `yes`/`no`/`y`/`n` and refuses `1`/`0`. A
-value neither accepts fails `SetMany` **before** the op body runs, so the query
-is **rejected** rather than answered -- verified live:
-`services.discover?follow=yes` and `?follow=maybe` both raise `QueryRejected`
-with code 1, while `?follow=1` and `?follow=TRUE` are accepted. This module
-sends `true`/`false` through the parameter's declared spec, which both parsers
-read, so the divergence is unreachable from here.
+`astral.Bool.UnmarshalText`. This module sends `true`/`false` through the
+parameter's declared spec, which both parsers read.
 
-**`services.sync` mutates and has no astral-go client.** It fetches another
-node's service list over `ZoneNetwork` and writes it into the local cache. The
-write is destructive first: `syncServices` calls `deleteAllProviderServices`
-before the first update arrives and never opens a transaction
-(`astrald/mod/services/src/module.go` `syncServices`, lines 42-61 at astrald
-`e85f5da4`), so a sync that dies mid-stream leaves the local registry **empty**
-for that provider rather than unchanged. astrald ships `DB.InTx` and documents
-it as "the only transaction API"; this path does not use it. The defect is
-reported against astrald and carries no number in the design's register.
+**`services.update` is one record with two pointer slots.** Field order, widths
+and both nil flags read off the node itself -- `objects.new?type=
+services.update` builds the zero value server-side and sends it as
+`0f 73657276696365732e757064617465 00000004 00000000`, four zero bytes for four
+fields. `Info` is a full `bundle` decoded through the registry (R-13), settled by
+`objects.echo?strict=true` round-tripping a populated update byte for byte. The
+type name carries **no `mod.` prefix** -- astral-go's `Update.ObjectType()`
+returns `services.update` (`astral-go/api/services/update.go:19`) -- and so do
+`ask`, `answer`, `change`, `incomplete`, `removed`, `offering_key` and
+`operations_list`. The three authorization types carry it:
+`mod.services.service_discovery_action`, `mod.services.discovery_scope`,
+`mod.services.discovery_rule`. Design section 5.1 rule 6 lists the exceptions.
 
-**`services.sync?follow=true` never answers on its own.** The op sends its `ack`
-only after `syncServices` returns, and with `follow` that call runs until its
-context is cancelled. astrald cancels it on **any inbound channel object**:
-`OpSync` parks a goroutine on `ch.Receive()` and cancels on the first thing it
-reads (`op_sync.go:36-39`). So the shape is BD, not RR -- the caller must send
-something to end it -- and `sync_follow()` is that method. `sync()` is the RR
-form and never sets `follow`.
-
-**The wire key is `identity`.** astrald declares the argument as
-`opSyncArgs.Identity` and knows no `id` key (`mod/services/src/op_sync.go` at
-astrald `e85f5da4`). The Python parameter stays `id`.
-
-**The identity is required by this module.** astrald tags `opSyncArgs.Identity`
-`query:"required"`, and that check tests key presence (`astral.api.dir` on
-`dir.set_alias`): an empty value passes it and `dir.ResolveIdentity` maps it to
-the **zero identity** (`astrald/mod/dir/src/module.go:58`). A sync of `anyone`
-wipes the cache for the zero identity and then routes a query to it. `sync()`
-therefore refuses an empty id rather than sending one, the same rule
-`dir.resolve` applies for the same reason.
-
-The identity is resolved by the node, not parsed as an identity: the field is a
-plain Go `string`, so an alias, `localnode`, a hex key or a directory name all
-reach it. This module never spends a query resolving one.
+Every type here round-trips the bytes astral-go `3c849bf` writes for it,
+`tests/test_api_services.py` `GoWireTest` holds those bytes.
 
 `Services(client)` constructs the module client, and `client.services` is the
-property design section 5.1 gives every module: a `functools.cached_property`
-in `client.py`, named after the node module and built on first use.
-Registration does not wait on it either way: `astral/__init__.py` imports the
-whole `api` package eagerly, so whether `services.update` decodes never depends
-on which property a caller happened to touch.
+property design section 5.1 gives every module. Registration does not wait on
+it: `astral/__init__.py` imports the whole `api` package eagerly, so whether
+`services.update` decodes never depends on which property a caller touched.
 
-Line numbers cite astrald `e85f5da4` and astral-go `5ea970b4`, the revisions
+Line numbers cite astrald `0c7e3109` and astral-go `3c849bf`, the revisions
 `tests/reference.py` pins, and `tests/test_api_services.py` reads each one back.
 """
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
+import inspect
 from types import TracebackType
-from typing import Any, AsyncIterator, Final, Sequence
+from typing import Any, AsyncIterator, Awaitable, Callable, Final, Sequence, Union
 
 from .. import querystring
 # `StreamContext` is imported at module scope and not under `TYPE_CHECKING`, for
 # the reason `base.py` states: this package ships `py.typed`, so every annotation
-# in it must resolve at runtime. The arrow runs module clients -> client, which
-# is the direction `client.py` already keeps by importing `astral.api.*` inside
-# its property bodies.
+# in it must resolve at runtime.
 from ..client import StreamContext
-from ..errors import BadArgument, BadArgumentType, ProtocolError
+from ..errors import BadArgument, BadArgumentType, ProtocolError, QueryTimeout
 from ..object import Ack, Bundle
 from ..record import record, wire
-from ..spec import Primitive, Ptr, Spec
+from ..spec import Primitive, Ptr, Slice, Spec
 from ..stream import Stream
-from ..types import Identity
+from ..types import Identity, Nonce
+from .auth import Action
 from .base import ModuleClient
 
 __all__ = [
-    "Advertisement",
+    "Answer",
+    "Ask",
+    "Binding",
+    "Change",
+    "DiscoveryEvent",
+    "DiscoveryRule",
+    "DiscoveryScope",
+    "DiscoveryStream",
+    "ERR_ADVERTISED",
+    "Incomplete",
+    "InitialOutcome",
+    "MAX_NAMES",
+    "MAX_NAME_LEN",
     "OP_ADVERTISE",
     "OP_DISCOVER",
-    "OP_SYNC",
+    "OfferingHandler",
+    "OfferingKey",
+    "OperationsList",
+    "REACH_LOCAL",
+    "REACH_SWARM",
+    "Removed",
     "SERVICES_TYPES",
+    "ServiceDiscoveryAction",
     "Services",
     "Update",
+    "Watcher",
+    "join_names",
+    "validate_name",
 ]
 
 OP_ADVERTISE: Final = "services.advertise"
 OP_DISCOVER: Final = "services.discover"
-OP_SYNC: Final = "services.sync"
+
+MAX_NAMES: Final = 64
+"""The most services one advertise or discover call names
+(`astral-go/api/services/names.go:10`)."""
+
+MAX_NAME_LEN: Final = 255
+"""The longest service name in bytes: a name travels as a `string8`
+(`astral-go/api/services/names.go:13`)."""
+
+ERR_ADVERTISED: Final = "service already advertised by this provider"
+"""The node's `error_message` text for an advertisement naming a service this
+provider already advertises on a live binding
+(`astral-go/api/services/errors.go:8`). `error_message` carries text only, so a
+caller compares `RemoteError.message` with it."""
+
+REACH_LOCAL: Final = "local"
+"""Discover the providers the queried node hosts. The node's default
+(`astral-go/api/services/reach.go:11`)."""
+
+REACH_SWARM: Final = "swarm"
+"""Also carry the discovery to every member of the node's local swarm, in the
+caller's name (`astral-go/api/services/reach.go:14`)."""
 
 # The parameter specs, so every value travels as the bare payload half of its
-# type's text encoding and nothing re-derives one (design section 5.1, rule 2).
-#
-# `follow` is declared `bool` because that is the type `shell.spec` reports for
-# it, and the declaration is what refuses a wrong-typed value here rather than
-# letting it reach a node that rejects the whole query. `identity` is `string8`
-# and not the `identity` type: the op resolves this argument server-side and a
-# directory name is a legitimate value for it.
+# type's text encoding (design section 5.1, rule 2). The types are the ones the
+# live `shell.spec` reports for each parameter: `string8` for the plain Go
+# strings `services` and `reach`, `bool` for `follow`.
 _ADVERTISE: Final[dict[str, Spec]] = {
-    "name": Primitive("string8"),
+    "services": Primitive("string8"),
 }
 _DISCOVER: Final[dict[str, Spec]] = {
+    "services": Primitive("string8"),
     "follow": Primitive("bool"),
-}
-_SYNC: Final[dict[str, Spec]] = {
-    "identity": Primitive("string8"),
-    "follow": Primitive("bool"),
+    "reach": Primitive("string8"),
 }
 
 
-# --- the wire type -------------------------------------------------------
+# --- service names -------------------------------------------------------
+
+
+def validate_name(name: str) -> None:
+    """Refuse a name that is not a valid service name.
+
+    A name is non-empty, at most `MAX_NAME_LEN` bytes of UTF-8, holds no comma,
+    and has no leading or trailing whitespace: astral-go's `ValidateName`
+    (`astral-go/api/services/names.go`), which the node applies to every list.
+    """
+    if not isinstance(name, str):
+        raise BadArgumentType(f"service name must be str, got {type(name).__name__}")
+    if not name:
+        raise BadArgument("empty service name")
+    if len(name.encode("utf-8")) > MAX_NAME_LEN:
+        raise BadArgument(f"service name longer than {MAX_NAME_LEN} bytes")
+    if "," in name:
+        raise BadArgument(f"service name {name!r} contains a comma")
+    if name.strip() != name:
+        raise BadArgument(f"service name {name!r} has surrounding whitespace")
+
+
+def join_names(names: Sequence[str]) -> str:
+    """The `services` argument: valid names, joined with commas.
+
+    A list holds at least one name, at most `MAX_NAMES`, and no name twice:
+    astral-go's `ParseNames`, applied here so a bad list is refused before it
+    spends one of the node's workers. A bare `str` is refused rather than read
+    as a sequence of one-character names.
+    """
+    if isinstance(names, str) or not isinstance(names, Sequence):
+        raise BadArgumentType(
+            f"service names must be a sequence of str, got {type(names).__name__}"
+        )
+    if not names:
+        raise BadArgument("no service names")
+    if len(names) > MAX_NAMES:
+        raise BadArgument(f"more than {MAX_NAMES} service names")
+    seen: set[str] = set()
+    for name in names:
+        validate_name(name)
+        if name in seen:
+            raise BadArgument(f"service {name!r} named twice")
+        seen.add(name)
+    return ",".join(names)
+
+
+# --- the wire types ------------------------------------------------------
 
 
 @record("services.update")
 class Update:
-    """One service of one provider, appearing or disappearing.
+    """One complete offering: one service of one provider for one caller.
 
-    An update is a **delta**, not a listing: `available` false names a service
-    that is gone and carries no `info`. astrald's own consumer reads it that way
-    -- `syncServices` creates a cache row when `Available` is set and deletes one
-    otherwise (`astrald/mod/services/src/module.go` `syncServices`, lines 49-56).
+    `available` false means the provider offers the caller nothing for the
+    service. `provider_id` is set by the node from the advertising binding;
+    `info` is a full `bundle`, decoded through the registry (R-13), and a
+    provider's `services.operations_list` travels in it.
 
-    `provider_id` is `None` when the node wrote `0x00`, and `info` likewise. Both
-    are nil on every update the two shipped discoverers produce, because neither
-    sets them: `mod/nat/src/service_discoverer.go` `newServiceUpdate` and
-    `mod/gateway/src/service_discoverer.go` `DiscoverServices` fill `Available`,
-    `Name` and `ProviderID` only. The absence is surfaced rather than dropped,
-    because a decode this SDK accepts must re-encode to the bytes it came from.
-
-    `info` is a full `bundle`, decoded through the registry: a provider may
-    advertise any registered object with the service, and the legacy SDK's
-    opaque-bytes model made every one of them unreachable (R-13).
-
-    The name is a **module name**, not an op name: astrald fills it from the
-    advertising module's `ModuleName` -- `nat` and `gateway` are the two values
-    this node can produce.
+    `provider_id` is `None` when the node wrote `0x00`, and `info` likewise. The
+    absence is surfaced rather than dropped, because a decode this SDK accepts
+    must re-encode to the bytes it came from.
     """
 
     available: bool = wire("Available", Primitive("bool"))
@@ -242,64 +269,442 @@ class Update:
     def objects(self) -> Sequence[Any]:
         """Every object in `info`, or an empty sequence when there is none.
 
-        The reason to reach for `info` at all, without the `None` check at each
-        call site. An absent bundle and an empty bundle are different bytes and
-        `info` keeps them apart; this view does not, because a consumer reading
-        the advertisement has the same nothing to read either way.
+        An absent bundle and an empty bundle are different bytes and `info`
+        keeps them apart; this view does not.
         """
         return () if self.info is None else tuple(self.info)
+
+
+@record("services.ask")
+class Ask:
+    """The node asks a provider, on its binding, to evaluate one service for
+    one caller. The provider replies with an `Answer` echoing `request_id`."""
+
+    request_id: Nonce = wire("RequestID", Primitive("nonce64"))
+    caller_id: Identity | None = wire("CallerID", Ptr("identity"))
+    service: str = wire("Service", Primitive("string8"))
+
+
+@record("services.answer")
+class Answer:
+    """A provider's reply to one `Ask`: the complete offering of the asked
+    service for the asked caller. The provider leaves `update.provider_id`
+    unset; the node sets it from the binding."""
+
+    request_id: Nonce = wire("RequestID", Primitive("nonce64"))
+    update: Update | None = wire("Update", Ptr("services.update"))
+
+
+@record("services.change")
+class Change:
+    """The provider tells the node that some callers' offerings may have
+    changed. With `all` false, `callers` names them and must be non-empty; with
+    `all` true it covers every caller following a service of the binding."""
+
+    all: bool = wire("All", Primitive("bool"))  # noqa: A003 -- the Go field
+    callers: list[Identity | None] = wire("Callers", Slice("identity"))
+
+
+@record("services.incomplete")
+class Incomplete:
+    """Precedes the `eos` ending a discovery's initial attempt when some initial
+    work did not resolve. `services` names requested services, never providers
+    or nodes."""
+
+    services: list[str] = wire("Services", Slice("string8"))
+
+
+@record("services.offering_key")
+class OfferingKey:
+    """One offering's identity: a provider and a service name."""
+
+    provider_id: Identity | None = wire("ProviderID", Ptr("identity"))
+    name: str = wire("Name", Primitive("string8"))
+
+
+@record("services.removed")
+class Removed:
+    """Offerings a discovery stream had shown are no longer valid because their
+    provider was lost. Distinct from an `Update` with `available` false, which is
+    the provider's own answer."""
+
+    offerings: list[OfferingKey | None] = wire(
+        "Offerings", Slice("services.offering_key")
+    )
+
+
+@record("services.operations_list")
+class OperationsList:
+    """The operations a provider exposes to one caller, carried in
+    `Update.info`. Listing an operation grants nothing."""
+
+    operations: list[str] = wire("Operations", Slice("string8"))
+
+
+@record("mod.services.discovery_rule")
+class DiscoveryRule:
+    """Allows its `services` on its `nodes`. An empty `services` list allows
+    nothing; an empty `nodes` list allows any node within reach."""
+
+    services: list[str] = wire("Services", Slice("string8"))
+    nodes: list[Identity | None] = wire("Nodes", Slice("identity"))
+
+    def allows(self, service: str, node: Identity | None) -> bool:
+        """astral-go's `DiscoveryRule.Allows`."""
+        if service not in self.services:
+            return False
+        if not self.nodes:
+            return True
+        return node is not None and any(n == node for n in self.nodes if n is not None)
+
+
+@record("mod.services.discovery_scope")
+class DiscoveryScope:
+    """Narrows a discovery permit to pairs of service and contributing node.
+    It allows a pair when one of its rules does."""
+
+    rules: list[DiscoveryRule | None] = wire(
+        "Rules", Slice("mod.services.discovery_rule")
+    )
+
+    def allows(self, service: str, node: Identity | None) -> bool:
+        """astral-go's `DiscoveryScope.Allows`."""
+        return any(r.allows(service, node) for r in self.rules if r is not None)
+
+
+@record("mod.services.service_discovery_action")
+class ServiceDiscoveryAction(Action):
+    """Permission for the actor to discover `service` on the contributing node
+    `node_id`. Discovery submits one action per requested service and node
+    before it evaluates any provider."""
+
+    service: str = wire("Service", Primitive("string8"))
+    node_id: Identity | None = wire("NodeID", Ptr("identity"))
+
+    def apply_constraints(self, constraints: Any) -> bool:
+        """astral-go's `ApplyConstraints`: covered only when the constraints
+        hold exactly one `DiscoveryScope` that allows the service on the node.
+
+        An unconstrained permit covers nothing, because discovery is granted per
+        service (`astral-go/api/services/service_discovery_action.go`).
+        """
+        if constraints is None:
+            return False
+        objects = list(constraints)
+        if len(objects) != 1 or not isinstance(objects[0], DiscoveryScope):
+            return False
+        return objects[0].allows(self.service, self.node_id)
+
+
+# --- discovery events ----------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class InitialOutcome:
+    """Whether a discovery's initial attempt completed.
+
+    Not a wire type: the event this module makes of the `eos` that ends the
+    initial attempt, and of the `services.incomplete` before it. `incomplete`
+    names the requested services whose initial work did not resolve.
+    """
+
+    complete: bool
+    incomplete: tuple[str, ...] = ()
+
+
+DiscoveryEvent = Union[Update, Removed, InitialOutcome]
+"""One item of a discovery: an offering view, a removal, or the initial
+outcome."""
+
+
+async def _events(stream: Stream, *, follow: bool) -> AsyncIterator[Any]:
+    """The events of one discovery stream, read off its separator readers.
+
+    The `eos` never reaches the caller: it becomes the `InitialOutcome`. An
+    `error_message` raises `RemoteError` from the readers themselves.
+    """
+    incomplete: Incomplete | None = None
+    async for obj in stream.snapshot():
+        if isinstance(obj, Incomplete):
+            incomplete = obj
+            continue
+        yield _view(obj)
+    if not stream.is_live:
+        raise ProtocolError(
+            f"{stream.query_string}: the discovery stream ended before its "
+            "initial attempt did"
+        )
+    if incomplete is None:
+        yield InitialOutcome(complete=True)
+    else:
+        yield InitialOutcome(complete=False, incomplete=tuple(incomplete.services))
+    if not follow:
+        return
+    async for obj in stream.live():
+        # A `services.incomplete` past the boundary describes nothing the
+        # caller can act on; astral-go's reader stores it and emits nothing.
+        if not isinstance(obj, Incomplete):
+            yield _view(obj)
+    raise ProtocolError(f"{stream.query_string}: the discovery stream ended")
+
+
+def _view(obj: Any) -> Update | Removed:
+    if isinstance(obj, (Update, Removed)):
+        return obj
+    raise ProtocolError(
+        f"{OP_DISCOVER}: expected 'services.update' or 'services.removed', got "
+        f"{getattr(obj, 'ASTRAL_TYPE', type(obj).__name__)!r}"
+    )
+
+
+class DiscoveryStream:
+    """`async with services.discover_follow(names) as events:` -- ST+follow.
+
+    `async for event in events` yields `Update`, `Removed` and one
+    `InitialOutcome`, and continues until the caller leaves the block. A stream
+    the node ends is a `ProtocolError`, because a followed discovery never ends
+    on its own. Nothing is routed on construction.
+
+    **The stream must be closed.** It holds one of the node's 32 apphost workers
+    for as long as it is open; `async with` is the contract.
+    """
+
+    __slots__ = ("_context", "_stream")
+
+    def __init__(self, context: StreamContext) -> None:
+        self._context = context
+        self._stream: Stream | None = None
+
+    async def __aenter__(self) -> DiscoveryStream:
+        self._stream = await self._context.__aenter__()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self._stream = None
+        await self._context.__aexit__(exc_type, exc, tb)
+
+    @property
+    def stream(self) -> Stream:
+        """The open stream. Raises `ProtocolError` outside the `async with`."""
+        if self._stream is None:
+            raise ProtocolError(f"{OP_DISCOVER}: the discovery is not open")
+        return self._stream
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return _events(self.stream, follow=True)
+
+
+# --- the watcher ---------------------------------------------------------
+
+
+class Watcher:
+    """`async with services.watch(names) as watcher:` -- the current offerings.
+
+    Follows a discovery and keeps the available offerings, keyed by provider and
+    name: an `Update` with `available` true sets one, with `available` false
+    deletes it, and a `Removed` deletes the offerings it names. astral-go's
+    `Watcher` (`api/services/client/watch.go` at astral-go `3c849bf`). It has no
+    reconnect policy: once `done` is set, the app starts a new one.
+
+    **The stream must be closed.** Leaving the `async with` closes it.
+    """
+
+    __slots__ = (
+        "_discovery",
+        "_offerings",
+        "_initial",
+        "_changed",
+        "_done",
+        "_error",
+        "_task",
+    )
+
+    def __init__(self, discovery: DiscoveryStream) -> None:
+        self._discovery = discovery
+        self._offerings: dict[tuple[str, str], Update] = {}
+        self._initial: asyncio.Future[InitialOutcome] | None = None
+        self._changed = asyncio.Event()
+        self._done = asyncio.Event()
+        self._error: BaseException | None = None
+        self._task: asyncio.Task[None] | None = None
+
+    async def __aenter__(self) -> Watcher:
+        await self._discovery.__aenter__()
+        self._initial = asyncio.get_running_loop().create_future()
+        self._task = asyncio.create_task(self._run())
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await self._discovery.__aexit__(exc_type, exc, tb)
+
+    async def _run(self) -> None:
+        try:
+            async for event in self._discovery:
+                self._apply(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- kept as the terminal error
+            self._error = exc
+        finally:
+            if self._initial is not None and not self._initial.done():
+                self._initial.set_exception(
+                    self._error
+                    or ProtocolError(f"{OP_DISCOVER}: the watcher closed")
+                )
+                # Read here so a caller that never awaits `initial()` leaves no
+                # "exception was never retrieved" behind.
+                self._initial.exception()
+            self._done.set()
+            self._changed.set()
+
+    def _apply(self, event: Any) -> None:
+        if isinstance(event, InitialOutcome):
+            if self._initial is not None and not self._initial.done():
+                self._initial.set_result(event)
+            return
+        if isinstance(event, Update):
+            key = (_key_text(event.provider_id), event.name)
+            if event.available:
+                self._offerings[key] = event
+            else:
+                self._offerings.pop(key, None)
+        else:
+            for k in event.offerings:
+                if k is not None:
+                    self._offerings.pop((_key_text(k.provider_id), k.name), None)
+        self._changed.set()
+
+    def offerings(self) -> list[Update]:
+        """The available offerings, ordered by provider and name."""
+        return [self._offerings[k] for k in sorted(self._offerings)]
+
+    async def initial(self) -> InitialOutcome:
+        """The outcome of the initial attempt, once it arrived. Raises the
+        terminal error when the stream ended first."""
+        if self._initial is None:
+            raise ProtocolError(f"{OP_DISCOVER}: the watcher is not open")
+        return await asyncio.shield(self._initial)
+
+    async def changed(self) -> None:
+        """Wait for the next change to the offerings or to the watcher's state.
+
+        Changes that arrive together are coalesced into one wake-up. The end of
+        the stream is a change too, so a loop over this checks `done`.
+        """
+        await self._changed.wait()
+        self._changed.clear()
+
+    @property
+    def done(self) -> bool:
+        """True once the stream ended."""
+        return self._done.is_set()
+
+    @property
+    def error(self) -> BaseException | None:
+        """The terminal error, or `None` while the stream is open."""
+        return self._error
+
+
+def _key_text(provider: Identity | None) -> str:
+    return "" if provider is None else provider.text()
 
 
 # --- a standing advertisement --------------------------------------------
 
 
-class Advertisement:
-    """`async with services.advertise(name) as ad:` -- a service, published.
+OfferingHandler = Callable[
+    [Union[Identity, None], str], Union[Awaitable[Union[Update, None]], Update, None]
+]
+"""Evaluates one service for one caller: `handler(caller, service)`. Returns
+the offering, or `None` for none; may be a coroutine function."""
 
-    The service is available from `__aenter__` until the channel closes, and
-    closing the channel is what withdraws it: there is no withdraw op. Nothing
-    is routed on construction, so building one and discarding it publishes
-    nothing, the way `StreamContext` opens nothing.
 
-    `__aenter__` routes the query on the persistent lane, because the channel is
-    held for as long as the service stands, and reads the node's `ack`. A
-    refusal raises and leaves nothing open: `QueryRejected` for a caller not
-    authorized to serve apps or a network-origin query, and `RemoteError` for
-    the node's `error_message`, such as `name is required` or
-    `the node cannot advertise to itself`. `timeout` bounds the route and the
-    `ack` together and defaults to the client's query timeout. The held channel
-    that follows has no deadline.
+class Binding:
+    """`async with services.advertise(names, handler) as binding:` -- an open
+    advertisement.
+
+    The services are bound from `__aenter__` until the channel closes, and
+    closing the channel is what releases them. Nothing is routed on
+    construction. `__aenter__` routes the query on the persistent lane and reads
+    the node's `ack`. A refusal raises and leaves nothing open: `QueryRejected`
+    for a network origin, a caller without `mod.auth.serve_apps_action` and the
+    node itself, and `RemoteError` for the node's `error_message`, such as
+    `ERR_ADVERTISED`. `timeout` bounds the route and the `ack` together and
+    defaults to the client's query timeout; the held channel has no deadline.
+
+    Each `services.ask` is answered on its own task, so a slow evaluation never
+    delays another caller's. The node already sends at most one ask per caller
+    at a time. The binding ends when the node closes the channel or sends
+    anything but an ask; `done` reports it.
 
     **The channel must be closed.** It holds one of the node's 32 apphost
-    workers for as long as it is open, the same cost a follow stream has.
+    workers for as long as it is open.
     """
 
-    __slots__ = ("_services", "_name", "_info", "_kw", "_stream")
+    __slots__ = (
+        "_services",
+        "_names",
+        "_handler",
+        "_kw",
+        "_stream",
+        "_reader",
+        "_answers",
+        "_done",
+    )
 
     def __init__(
-        self, services: Services, name: str, info: Bundle | None, kw: dict[str, Any]
+        self,
+        services: Services,
+        names: tuple[str, ...],
+        handler: OfferingHandler,
+        kw: dict[str, Any],
     ) -> None:
         self._services = services
-        self._name = name
-        self._info = info
+        self._names = names
+        self._handler = handler
         self._kw = kw
         self._stream: Stream | None = None
+        self._reader: asyncio.Task[None] | None = None
+        self._answers: set[asyncio.Task[None]] = set()
+        self._done = asyncio.Event()
 
     @property
-    def name(self) -> str:
-        """The service name this advertisement publishes."""
-        return self._name
+    def names(self) -> tuple[str, ...]:
+        """The service names this binding advertises."""
+        return self._names
 
-    async def __aenter__(self) -> Advertisement:
+    @property
+    def done(self) -> bool:
+        """True once the binding ended, by `aclose()` or by the node."""
+        return self._done.is_set()
+
+    async def wait_closed(self) -> None:
+        """Wait until the binding ends."""
+        await self._done.wait()
+
+    async def __aenter__(self) -> Binding:
         kw = dict(self._kw)
         client = self._services.client
         timeout = kw.pop("timeout", client.query_timeout)
         kw.setdefault("persistent", True)
-        stream = await client.query(
-            querystring.build(OP_ADVERTISE, _encode(_ADVERTISE, {"name": self._name})),
-            timeout=timeout,
-            **kw,
+        qs = querystring.build(
+            OP_ADVERTISE, _encode(_ADVERTISE, {"services": ",".join(self._names)})
         )
+        stream = await client.query(qs, timeout=timeout, **kw)
         try:
             answer = await stream.first(timeout=timeout)
             if answer is None:
@@ -308,12 +713,12 @@ class Advertisement:
                     "acknowledged the advertisement"
                 )
             ModuleClient._expect(answer, Ack, OP_ADVERTISE)
-            if self._info is not None:
-                await stream.send(self._info, timeout=timeout)
         except BaseException:
             await stream.aclose()
             raise
         self._stream = stream
+        self._done.clear()
+        self._reader = asyncio.create_task(self._serve(stream))
         return self
 
     async def __aexit__(
@@ -324,29 +729,86 @@ class Advertisement:
     ) -> None:
         await self.aclose()
 
-    async def set_info(self, info: Bundle, *, timeout: float | None = None) -> None:
-        """Replace the advertised info. The service stays available.
+    async def _serve(self, stream: Stream) -> None:
+        try:
+            while True:
+                try:
+                    obj = await stream.first()
+                except Exception:  # noqa: BLE001 -- any fault ends the binding
+                    break
+                if not isinstance(obj, Ask):
+                    break
+                task = asyncio.create_task(self._answer(stream, obj))
+                self._answers.add(task)
+                task.add_done_callback(self._answers.discard)
+        finally:
+            for task in list(self._answers):
+                task.cancel()
+            self._done.set()
+        await stream.aclose()
 
-        The node publishes the new info in place, so a follower of
-        `services.discover` sees one more update with `available` true rather
-        than a withdrawal and a fresh publication. `timeout` bounds the send.
+    async def _answer(self, stream: Stream, ask: Ask) -> None:
+        try:
+            offered: Any = self._handler(ask.caller_id, ask.service)
+            if inspect.isawaitable(offered):
+                offered = await offered
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 -- answered as unavailable, as astral-go does
+            offered = None
+        if isinstance(offered, Update):
+            update = dataclasses.replace(offered, name=ask.service, provider_id=None)
+        else:
+            update = Update(
+                available=False, name=ask.service, provider_id=None, info=None
+            )
+        try:
+            await stream.send(Answer(request_id=ask.request_id, update=update))
+        except Exception:  # noqa: BLE001 -- the binding closed meanwhile
+            pass
+
+    def _open(self) -> Stream:
+        if self._stream is None or self._done.is_set():
+            raise ProtocolError(f"{OP_ADVERTISE}: the binding of {self._names} is not open")
+        return self._stream
+
+    async def change(self, *callers: Identity, timeout: float | None = None) -> None:
+        """Tell the node that these callers' offerings may have changed.
+
+        No callers sends nothing: the node fails a binding on a change that
+        selects no caller. `timeout` bounds the send.
         """
-        if not isinstance(info, Bundle):
-            raise BadArgumentType(
-                f"{OP_ADVERTISE}: info must be a Bundle, got {type(info).__name__}; "
-                "the op reads bundles and ends the advertisement on anything else"
-            )
-        if self._stream is None:
-            raise ProtocolError(
-                f"{OP_ADVERTISE}: the advertisement of {self._name!r} is not open"
-            )
-        await self._stream.send(info, timeout=timeout)
+        if not callers:
+            return
+        for caller in callers:
+            if not isinstance(caller, Identity):
+                raise BadArgumentType(
+                    f"{OP_ADVERTISE}: a caller must be an Identity, got "
+                    f"{type(caller).__name__}"
+                )
+        await self._open().send(
+            Change(all=False, callers=list(callers)), timeout=timeout
+        )
+
+    async def change_all(self, *, timeout: float | None = None) -> None:
+        """Tell the node that every following caller's offerings may have
+        changed. `timeout` bounds the send."""
+        await self._open().send(Change(all=True, callers=[]), timeout=timeout)
 
     async def aclose(self) -> None:
-        """Withdraw the service by closing its channel. Idempotent."""
+        """End the binding; the node releases its services. Idempotent."""
+        reader, self._reader = self._reader, None
         stream, self._stream = self._stream, None
+        if reader is not None:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+        for task in list(self._answers):
+            task.cancel()
+        if self._answers:
+            await asyncio.gather(*self._answers, return_exceptions=True)
         if stream is not None:
             await stream.aclose()
+        self._done.set()
 
 
 # --- the client ----------------------------------------------------------
@@ -361,206 +823,105 @@ class Services(ModuleClient):
 
     __slots__ = ()
 
-    # --- advertising ---
-
     def advertise(
-        self, name: str, info: Bundle | None = None, **kw: Any
-    ) -> Advertisement:
-        """`async with s.advertise(name, info) as ad:` -- BD, held open.
+        self, names: Sequence[str], handler: OfferingHandler, **kw: Any
+    ) -> Binding:
+        """`async with s.advertise(names, handler) as binding:` -- BD, held open.
 
-        Publishes `name` with this client's caller as the provider, for as long
-        as the `async with` block runs. `info` is sent after the node's `ack`
-        when given, and `Advertisement.set_info` replaces it later.
-
-        An empty `name` is refused here: the node answers `name is required`
-        only after it has spent a worker on the query.
+        Binds `names` with this client's caller as the provider, for as long as
+        the `async with` block runs, and answers every ask with
+        `handler(caller, service)`. The list is validated here, so a bad name is
+        refused before it spends one of the node's workers.
         """
-        if not isinstance(name, str):
+        joined = join_names(names)
+        if not callable(handler):
             raise BadArgumentType(
-                f"{OP_ADVERTISE}: name must be str, got {type(name).__name__}"
+                f"{OP_ADVERTISE}: handler must be callable, got "
+                f"{type(handler).__name__}"
             )
-        if not name:
-            raise BadArgument(f"{OP_ADVERTISE}: the service name is empty")
-        if info is not None and not isinstance(info, Bundle):
-            raise BadArgumentType(
-                f"{OP_ADVERTISE}: info must be a Bundle, got {type(info).__name__}"
+        return Binding(self, tuple(joined.split(",")), handler, kw)
+
+    async def discover(
+        self, names: Sequence[str], *, reach: str | None = None, **kw: Any
+    ) -> list[Any]:
+        """The initial attempt of one discovery. ST, ends at its `eos`.
+
+        Every event in arrival order -- `Update` and `Removed` -- and an
+        `InitialOutcome` last. `timeout` bounds the route and the whole read;
+        the node spends at most 5 s on the attempt. `reach` is `REACH_LOCAL`, the
+        node's default when absent, or `REACH_SWARM`.
+        """
+        qs = _discover_query(names, follow=False, reach=reach)
+        kw.setdefault("separator", True)
+        async with self._one_shot(qs, kw) as (stream, budget):
+            try:
+                async with asyncio.timeout(budget.remaining):
+                    return [event async for event in _events(stream, follow=False)]
+            except TimeoutError:
+                raise QueryTimeout(
+                    f"{qs}: the initial attempt did not end within the deadline"
+                ) from None
+
+    def discover_follow(
+        self, names: Sequence[str], *, reach: str | None = None, **kw: Any
+    ) -> DiscoveryStream:
+        """`async with s.discover_follow(names) as events:` -- ST+follow.
+
+        The initial attempt's events, its `InitialOutcome`, then later views and
+        removals until the caller leaves the block. `Client.follow` supplies the
+        pairing this mode needs -- `persistent=True` and `timeout=None` -- and a
+        caller may override either.
+        """
+        return DiscoveryStream(
+            self._c.follow(_discover_query(names, follow=True, reach=reach), **kw)
+        )
+
+    def watch(
+        self, names: Sequence[str], *, reach: str | None = None, **kw: Any
+    ) -> Watcher:
+        """`async with s.watch(names) as watcher:` -- the current offerings of a
+        followed discovery."""
+        return Watcher(self.discover_follow(names, reach=reach, **kw))
+
+
+# --- query construction --------------------------------------------------
+
+
+def _discover_query(names: Sequence[str], *, follow: bool, reach: str | None) -> str:
+    """`services.discover?follow=…&services=…`, with `reach` only when named.
+
+    `follow` is sent even when false, so the query string states the op shape
+    this call declares. `reach` is omitted when absent, which keeps the node's
+    default standing (design section 5.1 rule 5).
+    """
+    params: dict[str, Any] = {"services": join_names(names), "follow": follow}
+    if reach is not None:
+        if reach not in (REACH_LOCAL, REACH_SWARM):
+            raise BadArgument(
+                f"{OP_DISCOVER}: reach must be {REACH_LOCAL!r} or {REACH_SWARM!r}, "
+                f"got {reach!r}"
             )
-        return Advertisement(self, name, info, kw)
-
-    # --- discovery: read-only ---
-
-    async def discover(self, **kw: Any) -> list[Update]:
-        """Every service the target advertises now. ST, ends at `eos`.
-
-        The snapshot alone: `follow=false` travels explicitly, so the answer
-        terminates rather than staying open. An empty list is the ordinary
-        answer for a node with neither NAT nor gateway enabled.
-
-        `follow` is never sent true from here. `Stream.collect()` stops at the
-        first `eos`, and on a follow stream that `eos` is a boundary, so this
-        method against the follow form would answer the snapshot alone and drop
-        every live update without saying so. `discover_follow()` is the method
-        that crosses the boundary.
-        """
-        return [
-            self._expect(obj, Update, OP_DISCOVER)
-            for obj in await self._c.call(_discover_query(follow=False), **kw)
-        ]
-
-    def discover_follow(self, **kw: Any) -> StreamContext:
-        """`async with s.discover_follow() as stream:` -- ST+follow.
-
-        The snapshot, then a separator `eos`, then live updates until the caller
-        closes the stream. `Stream.follow()` yields `(update, live)` pairs across
-        the boundary, `snapshot()` stops at it and `live()` starts after it;
-        which one is wanted is a per-call question, so the stream is handed over
-        rather than a list.
-
-        `Client.follow` supplies the pairing this mode needs -- `persistent=True`
-        so the permit comes from the long-lived lane, and `timeout=None` because
-        a follow stream is idle for as long as nothing changes. A caller may
-        override either.
-
-        **The stream must be closed.** A follow stream holds one of the node's 32
-        workers for as long as it is open and astrald never notices a peer that
-        vanished; `async with` is the contract.
-        """
-        return self._c.follow(_discover_query(follow=True), **kw)
-
-    async def updates(self, **kw: Any) -> AsyncIterator[tuple[Update, bool]]:
-        """`(update, live)` pairs from a follow stream, closed on exit.
-
-        The iterator form of `discover_follow()`, for a consumer that wants the
-        pairs and not the stream. The body is `ModuleClient._follow_pairs`, so
-        every module's follow op can grow the same convenience from one
-        implementation rather than from a habit copied per module.
-        """
-        async for pair in self._follow_pairs(
-            self.discover_follow(**kw), Update, OP_DISCOVER
-        ):
-            yield pair
-
-    # --- the write ---
-
-    async def sync(self, id: str | Identity, **kw: Any) -> None:  # noqa: A002
-        """Refresh the local cache of one identity's services. RR. **Mutates.**
-
-        One `ack`, or an `error_message` that surfaces as `RemoteError`. The
-        query runs over `ZoneNetwork` on the node's side and takes as long as
-        reaching that node takes, so `timeout` is worth setting.
-
-        `id` travels under the wire key `identity` and is resolved by the node:
-        an alias, `localnode`, a hex key or a directory name all reach it. An
-        empty value is refused here rather than sent, because the node's
-        resolver maps it to the zero identity and the sync would wipe the cache
-        for `anyone`.
-
-        **The cache is cleared before the new list arrives** and astrald opens no
-        transaction around the two, so a sync interrupted mid-stream leaves the
-        local registry empty for that provider.
-        """
-        obj = await self._c.call_one(_sync_query(id, follow=None), **kw)
-        self._expect(obj, Ack, OP_SYNC)
-
-    def sync_follow(self, id: str | Identity, **kw: Any) -> StreamContext:  # noqa: A002
-        """`async with s.sync_follow(id) as stream:` -- BD. **Mutates.**
-
-        The node keeps syncing that identity's services into the local cache
-        until the exchange ends, and answers `ack` only then. The op parks a
-        goroutine on the channel and cancels on the **first object it reads**, so
-        `Stream.send()` of anything at all ends the sync; `stop()` below is that
-        call under a name. Closing the stream ends it too, and then no `ack`
-        arrives, because there is nothing left to write it to.
-
-        Opened on the persistent lane with no deadline, for the same reasons
-        `discover_follow` is: this exchange does not end on its own.
-        """
-        kw.setdefault("persistent", True)
-        kw.setdefault("timeout", None)
-        return self._c.stream(_sync_query(id, follow=True), **kw)
-
-    async def stop_sync(self, stream: Stream, *, timeout: float | None = None) -> bool:
-        """End a `sync_follow` exchange and read its `ack`. True when it came.
-
-        Any object cancels the sync; `ack` is the one sent here because it is the
-        smallest frame and carries no payload to misread. `False` comes back when
-        the op had already ended -- a sync that failed sent its `error_message`
-        and closed -- so the distinction survives and the failure is not silent.
-
-        **`bool`, not the `Ack` object.** `Ack` carries no fields and encodes to
-        zero bytes, so the value conveys exactly one bit and returning the record
-        leaked a wire type into a public signature that neither `astral` nor this
-        module exports -- a caller who wanted to annotate the result had to go
-        and find `astral.object.Ack` on their own. Every other ack-answering op
-        in the SDK returns `None`: `Tree.set`, `Dir.set_alias`, `Objects.delete`,
-        `Auth.index`, and `Services.sync` two methods above.
-
-        This method takes `stream` rather than a query, so it routes nothing and
-        has no `**kw` to forward; `timeout` bounds the send and the answer.
-        """
-        await stream.send(Ack(), timeout=timeout)
-        obj = await stream.first(timeout=timeout)
-        if obj is None:
-            return False
-        self._expect(obj, Ack, OP_SYNC)
-        return True
-
-
-# --- query construction and argument discipline --------------------------
-
-
-def _discover_query(*, follow: bool) -> str:
-    """`services.discover?follow=…`, with `follow` always explicit.
-
-    Sent even when false, though the op's zero value is false and the two are
-    the same query to astrald -- verified live, a bare `services.discover`
-    answers the same bare `eos`. The value states the op shape this call
-    declares, and design section 4.7 makes that shape a contract the caller
-    carries rather than one the wire reveals.
-    """
-    return querystring.build(OP_DISCOVER, _encode(_DISCOVER, {"follow": follow}))
-
-
-def _sync_query(id: str | Identity, *, follow: bool | None) -> str:  # noqa: A002
-    """`services.sync?identity=…`, with `follow` only when it is true.
-
-    Omitted rather than sent false, because `false` is the op's zero value and
-    design section 5.1 rule 5 keeps a server default standing by leaving its key
-    absent.
-    """
-    return querystring.build(
-        OP_SYNC, _encode(_SYNC, {"identity": _name(id), "follow": follow or None})
-    )
+        params["reach"] = reach
+    return querystring.build(OP_DISCOVER, _encode(_DISCOVER, params))
 
 
 _encode = ModuleClient._encode
 """Every parameter through its declared spec. `ModuleClient`'s, not a copy."""
 
 
-def _name(value: str | Identity) -> str:
-    """A name argument the node resolves: an alias, `localnode`, or a hex key.
-
-    An empty string is refused: the node's resolver maps it to the zero identity
-    (`astrald/mod/dir/src/module.go:58`), so an accidental empty id syncs
-    `anyone` -- and `services.sync` mutates, so the accident costs the cached
-    services of the zero identity rather than one wasted query.
-    """
-    if isinstance(value, Identity):
-        return value.text()
-    if not isinstance(value, str):
-        raise BadArgument(
-            f"{OP_SYNC}: id must be a directory name or an Identity, got "
-            f"{type(value).__name__}"
-        )
-    if not value:
-        raise BadArgument(
-            f"{OP_SYNC}: the empty id resolves to the zero identity on the node; "
-            "pass Identity.ANYONE to mean that identity"
-        )
-    return value
-
-
-SERVICES_TYPES: Final[Sequence[type]] = (Update,)
+SERVICES_TYPES: Final[Sequence[type]] = (
+    Answer,
+    Ask,
+    Change,
+    DiscoveryRule,
+    DiscoveryScope,
+    Incomplete,
+    OfferingKey,
+    OperationsList,
+    Removed,
+    ServiceDiscoveryAction,
+    Update,
+)
 """Every wire type this module declares, for a private-registry sweep."""
 
 Services.TYPES = SERVICES_TYPES

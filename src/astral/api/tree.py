@@ -40,9 +40,11 @@ objection D-T1, filed: section 4.7's ST+follow row and the
 separator this op never sends.
 
 The row is right about its other two members and wrong only about this one:
-`services.discover` sends a separator `eos` on a nil sentinel and a second one
-at the end (`astrald/mod/services/src/op_discover.go:33`, documented as such at
-`astrald/mod/services/src/op_discover.go:17`). ST+follow is therefore a real
+`services.discover?follow=true` sends one `eos` that ends the initial attempt
+and keeps the channel open for later views and removals
+(`astrald/mod/services/src/op_discover.go:34`,
+`astrald/mod/services/src/op_discover.go:36`, sent at
+`astrald/mod/services/src/op_discover.go:199`). ST+follow is therefore a real
 mode with a real member, and `tree.get` is not in it.
 
 **A node with no value answers `nil`, not `mod.tree.err_no_value`.** astrald
@@ -104,7 +106,7 @@ Source citations name a single line each, and every one of them is read back by
 `tests/test_api_tree.py`. astrald and astral-go are moving targets, and a
 citation that has drifted by two lines costs a reader more than an absent one:
 it makes them distrust the exact ones. Line numbers are pinned to astral-go
-`5ea970b4` and astrald `e85f5da4`, the revisions `tests/reference.py` pins, and
+`3c849bf` and astrald `0c7e3109`, the revisions `tests/reference.py` pins, and
 no citation names another revision.
 """
 
@@ -143,7 +145,7 @@ ROOT: Final = "/"
 The node reads an absent `path` as the root
 (`astral-go/api/tree/client/server.go:197`), and the path walk strips one
 leading slash and skips empty segments
-(`astral-go/api/tree/node.go:33`, `astral-go/api/tree/node.go:41`). An empty
+(`astral-go/api/tree/node.go:34`, `astral-go/api/tree/node.go:42`). An empty
 path and `/` therefore address the root alike. Verified live: a missing leading
 slash (`mod/tcp/settings/listen`), a trailing slash and a doubled inner slash
 (`/mod//tcp`) all address what the plain path addresses. This module sends `/`
@@ -402,7 +404,7 @@ class Tree(ModuleClient):
         """Delete the node at a path. RR, one `ack`. **Mutates.**
 
         A node with subnodes cannot be deleted on its own: astrald answers `node
-        has subnodes` (`astrald/mod/tree/src/module.go:196`). `recursive=True`
+        has subnodes` (`astrald/mod/tree/src/module.go:204`). `recursive=True`
         descends the subtree depth-first and deletes from the leaves up
         (`astral-go/api/tree/client/server.go:173`), and it descends **through
         mounts**, where every step reaches the mounted implementation.
@@ -429,7 +431,7 @@ def _path(value: str, op: str) -> str:
     """A path argument. Never empty, because the empty path is the root.
 
     The walk strips one leading slash and skips empty segments
-    (`astral-go/api/tree/node.go:33`, `astral-go/api/tree/node.go:41`), so an
+    (`astral-go/api/tree/node.go:34`, `astral-go/api/tree/node.go:42`), so an
     empty path addresses the root exactly as `/` does. A caller that passed an
     unset variable would therefore read, write or delete the root instead of
     failing, which is the one path no caller means by accident.

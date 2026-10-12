@@ -106,7 +106,7 @@ def switch(*replies: tuple[str, bytes], mirror_eos: bool = False):  # type: igno
 
     `Batch` mirrors the terminator: "an explicit EOS input is answered with a
     final EOS, while a stream ended by EOF is not"
-    (`astral-go/astral/channel/batch.go` at `5ea970b4`). The client always sends
+    (`astral-go/astral/channel/batch.go` at `3c849bf`). The client always sends
     an explicit `eos`, so a node at the pin always answers one. `mirror_eos`
     selects that shape; it defaults off so the EOF-terminated shape, which
     design section 3.10 requires the client to accept, stays covered.
@@ -609,7 +609,7 @@ class SetTest(TreeCase):
     async def test_a_mirrored_eos_after_the_acks_is_tolerated(self):
         """The shape a node at the pin actually answers with. `channel.Batch`
         ends an explicitly terminated input stream with an `EOS` of its own
-        (`astral-go/astral/channel/batch.go` at `5ea970b4`), and every mock here
+        (`astral-go/astral/channel/batch.go` at `3c849bf`), and every mock here
         omitted it, so nothing covered the client meeting one."""
         mock = MockApphost(
             routes={OP_SET: switch(ACK_FRAME, ACK_FRAME, mirror_eos=True)}
@@ -1073,19 +1073,20 @@ class CitationTest(unittest.TestCase):
         "api/tree/client/server.go:217": "sort.Strings(names)",
         "api/tree/client/node.go:165": "go func() { _ = ch.Send(&astral.EOS{}) }()",
         "api/tree/client/node.go:168": "channel.BreakOnEOS, channel.PassErrors",
-        "api/tree/node.go:33": 'strings.TrimPrefix(path, "/")',
-        "api/tree/node.go:41": "if len(s) == 0 {",
+        "api/tree/node.go:34": 'strings.TrimPrefix(path, "/")',
+        "api/tree/node.go:42": "if len(s) == 0 {",
         "api/tree/err_no_value.go:15": 'return "mod.tree.err_no_value"',
     }
 
     ASTRALD_CITATIONS = {
         "mod/tree/src/node.go:29": "root node cannot hold a value",
         "mod/tree/src/node.go:37": "object = &astral.Nil{}",
-        "mod/tree/src/module.go:196": "return tree.ErrNodeHasSubnodes",
+        "mod/tree/src/module.go:204": "return tree.ErrNodeHasSubnodes",
         # The op that does have a separator, cited so the objection is scoped:
         # ST+follow is a real mode and `tree.get` is not in it.
-        "mod/services/src/op_discover.go:17": "snapshot/stream separator",
-        "mod/services/src/op_discover.go:33": "if update == nil {",
+        "mod/services/src/op_discover.go:34": "An eos ends the initial attempt",
+        "mod/services/src/op_discover.go:36": "with follow it carries later views",
+        "mod/services/src/op_discover.go:199": "return s.send(&astral.EOS{})",
     }
 
     def check(self, repo: str, citations: dict[str, str]) -> None:

@@ -659,7 +659,7 @@ class SeedTest(Bip137SigCase):
 
     @bounded()
     async def test_an_invalid_mnemonic_never_leaves_this_process(self):
-        """Nor does the passphrase, which is the argument astrald logs."""
+        """Nor does the passphrase, which travels as a query argument."""
         async with MockApphost() as mock:
             api = await self.api(mock)
             with self.assertRaises(ParseError) as caught:
@@ -897,15 +897,18 @@ class AstraldParityTest(unittest.TestCase):
         self.assertIn("DefaultEntropyBits = MinEntropyBits", source)
 
     def test_the_node_logs_the_query_string_of_every_routed_query(self):
-        """Why `seed_local` is the preferred form: the passphrase is a query
-        argument and every routed query string is logged at verbosity zero.
+        """The passphrase is a query argument, every routed query string is
+        logged at verbosity zero, and the logged form redacts `passphrase`.
 
-        The line number is asserted as well as the text, because both modules
-        cite `core/router.go:81` and a citation nothing reads is a citation
-        nobody re-reads. The pin is `reference.PINS`, so upstream drift is a
-        deliberate bump here rather than a red suite on somebody else's pull."""
+        The line numbers are asserted as well as the text, because the module
+        cites `core/router.go:83` and `core/query_log.go:12`, and a citation
+        nothing reads is a citation nobody re-reads. The pin is
+        `reference.PINS`, so upstream drift is a deliberate bump here rather
+        than a red suite on somebody else's pull."""
         lines = self.source(reference.ASTRALD, "core/router.go").splitlines()
-        self.assertIn('Infov(0, "%v routed in %v", q.Query, d)', lines[80])
+        self.assertIn('Infov(0, "%v routed in %v", logged, d)', lines[82])
+        redaction = self.source(reference.ASTRALD, "core/query_log.go").splitlines()
+        self.assertIn('"passphrase": true', redaction[11])
 
 
 # --- Tier C: the live node ------------------------------------------------

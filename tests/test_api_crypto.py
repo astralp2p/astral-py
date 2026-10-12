@@ -1122,9 +1122,16 @@ class AstraldParityTest(unittest.TestCase):
         """Why `sign_text` keeps its text off the query string. The hook in
         `lib/routing/op.go` is a red herring -- nothing in astrald sets
         `Op.LogFunc` -- and the real logging is the core router's, at verbosity
-        zero, which is on by default."""
-        source = self.source("core/router.go")
-        self.assertIn('Infov(0, "%v routed in %v", q.Query, d)', source)
+        zero, which is on by default. The router redacts `token` and
+        `passphrase` alone, so `text` is logged."""
+        lines = self.source("core/router.go").splitlines()
+        self.assertIn('Infov(0, "%v routed in %v", logged, d)', lines[82])
+        self.assertIn("var logged = loggedQuery(q.Query)", lines[69])
+        redaction = self.source("core/query_log.go").splitlines()
+        self.assertIn(
+            'var secretArgs = map[string]bool{"token": true, "passphrase": true}',
+            redaction[11],
+        )
 
     def test_both_sign_ops_build_their_signer_per_signature(self):
         """Read at the pin: `NewTextSigner` sits inside `signAndSend`, after the
@@ -1138,7 +1145,7 @@ class AstraldParityTest(unittest.TestCase):
         self.assertGreater(text_source.index("mod.NewTextSigner"), start)
         self.assertGreater(
             text_source.index("mod.NewTextSigner"),
-            text_source.index("mod.authorizeSigner", start),
+            text_source.index("mod.AuthorizeSigner", start),
         )
         self.assertIn("return cryptomod.ErrNodeKeyNotSignable", guard)
         self.assertIn('"cannot sign with the node\'s key"', errors)
@@ -1316,7 +1323,7 @@ class LiveCryptoTest(live_support.LiveCase):
     @bounded(30)
     async def test_an_anonymous_caller_cannot_sign_with_the_node_s_key(self):
         """The core router makes an anonymous caller the node, and the node's
-        key is refused on the self branch of `authorizeSigner`. Checked in all
+        key is refused on the self branch of `AuthorizeSigner`. Checked in all
         three forms, because each reaches the guard by a different path."""
         client = await self.client()
         try:

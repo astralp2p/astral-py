@@ -52,7 +52,7 @@ a property of astrald rather than an omission here:
 ## Authorization
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `e85f5da4` and astral-go `5ea970b4`.** An identity argument travels
+pins, astrald `0c7e3109` and astral-go `3c849bf`.** An identity argument travels
 under the key `identity` and `apphost.cancel`'s nonce under `query_id`.
 
 **`apphost.list_tokens` and `apphost.create_token` are administration, not
@@ -81,7 +81,7 @@ ops do not use it. The distinction decides who the plaintext-token paragraph
 below applies to: the router's substitution of the node identity for a missing
 caller reaches the token ops and is refused by `mayManageApps`.
 
-**The census, re-derived at `e85f5da4`.** Fourteen `op_*.go` files. Twelve
+**The census, re-derived at `0c7e3109`.** Fourteen `op_*.go` files. Twelve
 refuse a network origin; the two that do not are `whoami` and `register`. Six
 ask `mod.auth.admin_manage_apps_action` -- `create_token`, `delete_token`,
 `list_tokens`, `grant`, `list_grants`, `revoke`. One asks
@@ -488,7 +488,7 @@ class Apphost(ModuleClient):
         local process can attempt; whether it then receives the node's queries is
         astrald's business and is not asserted here. `register_service_msg` is
         the authenticated counterpart -- astrald refuses it outright from a
-        token-less guest (`mod/apphost/src/guest.go:268-270`).
+        token-less guest (`mod/apphost/src/guest.go:271-273`).
         """
         qs = querystring.build(
             OP_REGISTER_HANDLER,

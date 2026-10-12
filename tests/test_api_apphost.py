@@ -1003,7 +1003,7 @@ class SecurityNoteTest(unittest.TestCase):
             (f"{self.SRC}/authorize_admin_manage_apps.go", 19, "func (mod *Module) mayManageApps"),
             (f"{self.SRC}/authorize_admin_manage_apps.go", 24, "AdminManageAppsAction"),
             (f"{self.SRC}/guest.go", 205, "ExtraAnonymous"),
-            (f"{self.SRC}/guest.go", 268, "isAuthenticated()"),
+            (f"{self.SRC}/guest.go", 271, "isAuthenticated()"),
             ("mod/user/src/authorize_user_or_node.go", 16, "authorizeUserOrNode"),
             ("mod/user/src/authorize_user_or_node.go", 20, "mod.node.Identity()"),
             ("mod/user/src/authorize_serve_apps.go", 15, "AuthorizeServeApps"),

@@ -15,8 +15,8 @@ document states the resolution, and the resolution is binding.
 | Rank | Authority | Location |
 |---|---|---|
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
-| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `5ea970b4` (the commit the node pins) |
-| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `e85f5da4` — authoritative for session semantics the client never exercises |
+| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `3c849bf` (the commit the node pins) |
+| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `0c7e3109` — authoritative for session semantics the client never exercises |
 | 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `0040e909`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
@@ -141,7 +141,7 @@ src/astral/
     crypto.py            Tier 1. crypto.* ops + secp256k1.new + the four pure helpers.
     auth.py              Tier 1. auth.* ops, contract/permit/action types.
     objects.py           Tier 1, largest. 25 ops, the Writer protocol, the search grammar.
-    services.py          Tier 1. services.advertise/discover/sync, services.update.
+    services.py          Tier 1. services.advertise/discover, the v1 Services types.
     user.py              Tier 2. 15 ops incl. the non-EOS sync_assets stream.
     bip137sig.py         Tier 2. Four ops; local mnemonic/seed via bip39.py.
     ip.py                Tier 2. Three ops, mod.ip.ip_address.
@@ -1397,7 +1397,7 @@ Only the anonymous-safe, read-only op set is targeted:
 ```
 apphost.whoami            dir.alias_map      objects.blueprints     tree.list
 apphost.list_tokens       dir.filters        objects.repositories   tree.get (follow=false)
-apphost.list_held_objects dir.resolve        objects.new            services.discover (follow=false)
+apphost.list_held_objects dir.resolve        objects.new            services.discover (anonymous refusal)
 shell.spec                dir.get_alias      objects.probe          ip.local_addrs
                           dir.apply_filters  objects.echo           ip.public_ip_candidates
                                              objects.scan (follow=false)  ip.default_gateway
@@ -1408,7 +1408,7 @@ crypto.verify_*_signature user.* (reject code 2 on an unclaimed node — itself 
 
 Nothing that mutates state ever runs: no `dir.set_alias`, no `tree.set/delete`, no
 `objects.create/store/delete/purge/push/new_mem/register_*`, no `auth.index`, no
-`services.sync`, no `apphost.register/bind/register_handler/cancel`, no `user.*` writes, no
+`services.advertise` binding, no `apphost.register/bind/register_handler/cancel`, no `user.*` writes, no
 `nodes.*` writes, no `nat.punch`.
 
 Tier C runs with `max_concurrency=4`, every test inside `async with`, and a module-level
