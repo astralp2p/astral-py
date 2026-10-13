@@ -117,16 +117,40 @@ The 1-minute server timeout applies to `describe`, `find` and `search` alike.
 `objects.store` never send the terminating `eos` (G-10). This module sends a size
 string, sends no zone the caller did not ask for, and sends the `eos`.
 
-**The `zone` argument is not the routing zone, and on four ops it destroys it.**
-Eight ops declare a `zone` query-string argument. astrald sets the op's context
-zone from `route_query_msg.Zone` (`mod/apphost/src/guest.go:171`), and then
-`describe`, `find`, `search` and `read` *widen* it with `IncludeZone(args.Zone)`
-while `scan`, `delete`, `purge` and `load` *replace* it with `WithZone` --
-defaulting to `ZoneAll` when the argument is absent. So on those four a routing
-zone the caller set is silently discarded. This module therefore takes one
-`zone=` keyword on those eight ops and sends it **both** as the op argument and
-as the routing zone, so one argument means one scope. Everywhere else `zone`
-stays in `**kw` and means the routing zone alone, as on every other module.
+**The `zone` argument is not the routing zone.** Eight ops declare a `zone`
+query-string argument. astrald sets the op's context zone from
+`route_query_msg.Zone` (`mod/apphost/src/guest.go:171`), and the argument then
+acts on that context in one of two ways:
+
+- On `read`, `find`, `search` and `describe` the argument is a filter. The node
+  limits the routing zone to it and never widens it; an absent argument leaves
+  the routing zone standing. A query arriving from another node runs without
+  `n`, so a peer answers from its own data. Sources: astral-docs
+  `core-definitions/zone.md` and `protocols/objects/ops/objects.read.md`,
+  `objects.find.md`, `objects.search.md`, `objects.describe.md`. astrald at the
+  pin widens the routing zone with `IncludeZone` instead; the astrald
+  object-access change applies the argument with `LimitZone`, matching the
+  docs. The same zone sent as the routing zone resolves to that zone under
+  both rules.
+- On `scan`, `delete`, `purge` and `load` the argument *replaces* the routing
+  zone with `WithZone`, defaulting to `ZoneAll` when the argument is absent, so
+  on those four a routing zone the caller set is silently discarded.
+
+This module therefore takes one `zone=` keyword on those eight ops and sends it
+**both** as the op argument and as the routing zone, so one argument means one
+scope under either rule. Everywhere else `zone` stays in `**kw` and means the
+routing zone alone, as on every other module.
+
+**`objects.read` without `repo` is host-coordinated.** The node gathers candidate
+identities through its finders -- itself when a local repository holds the
+object, and swarm peers that answer `objects.contains` when the zone permits
+`n` -- and attempts every distinct candidate concurrently. The first source to
+deliver bytes supplies the read; a source failing after bytes reached the caller
+fails the read, with no resume. A short body is therefore a failed read: the
+object's `Size` bounds a complete one. With `repo` the node reads that one local
+repository directly. Source: astral-docs `protocols/objects/ops/objects.read.md`,
+the contract the astrald object-access change implements; astrald at the pin
+reads its read-default repository alone.
 
 **`in` and `out` are not arguments here.** Every op declares them; they are the
 channel formats and belong to `Client.query`'s `fmt_in`/`fmt_out`, which writes
@@ -1062,11 +1086,14 @@ def _scope(
     """Send one zone as the op argument **and** as the routing zone.
 
     The two are one scope for a caller and two levers on the wire: astrald seeds
-    the op's context from `route_query_msg.Zone` and then `scan`, `delete`,
-    `purge` and `load` overwrite it with the argument, defaulting to `ZoneAll`
-    when there is none. Setting only the routing zone on those four therefore
-    does nothing at all, and setting only the argument leaves the hop wider than
-    the caller asked for.
+    the op's context from `route_query_msg.Zone`. `scan`, `delete`, `purge` and
+    `load` overwrite it with the argument, defaulting to `ZoneAll` when there is
+    none, so setting only the routing zone on those four does nothing at all.
+    `read`, `find`, `search` and `describe` widen it with the argument at the
+    astrald pin and limit it to the argument from the astrald object-access
+    change; under both rules, setting only the argument leaves the hop wider
+    than the caller asked for. Sending both makes every rule resolve to the one
+    zone the caller named.
     """
     if zone is None:
         return

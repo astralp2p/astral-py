@@ -1569,6 +1569,66 @@ class SearchOpTest(ObjectsCase):
         self.assertEqual(mock.queries, [])
 
 
+class ZoneFilterScopeTest(ObjectsCase):
+    """`read`, `find`, `search` and `describe` send one zone as the op argument
+    and as the routing zone, and send no op argument when the caller names none.
+
+    astral-docs states the argument on these four is a filter on the routing
+    zone (`core-definitions/zone.md`, `protocols/objects/ops/objects.read.md`);
+    sending the same zone as both is what makes the filter and the hop agree.
+    """
+
+    def route(self, op: str) -> Accept:
+        return Accept(raw=b"x") if op == OP_READ else Accept(objects=[], eos=True)
+
+    async def call(self, o: Objects, op: str, **kw: object) -> None:
+        if op == OP_READ:
+            await o.read(ID_A, **kw)  # type: ignore[arg-type]
+        elif op == OP_FIND:
+            await o.find(ID_A, **kw)  # type: ignore[arg-type]
+        elif op == OP_SEARCH:
+            await o.search("hello", **kw)  # type: ignore[arg-type]
+        else:
+            await o.describe(ID_A, **kw)  # type: ignore[arg-type]
+
+    @bounded()
+    async def test_a_named_zone_is_the_op_argument_and_the_hop(self):
+        for op in (OP_READ, OP_FIND, OP_SEARCH, OP_DESCRIBE):
+            with self.subTest(op=op):
+                mock = MockApphost(routes={op: self.route(op)})
+                async with mock:
+                    o = await self.objects(mock)
+                    await self.call(o, op, zone="dv")
+                self.assertEqual(self.params(mock)[1]["zone"], "dv")
+                self.assertEqual(
+                    mock.queries[0].zone, int(Zone.DEVICE | Zone.VIRTUAL)
+                )
+
+    @bounded()
+    async def test_an_absent_zone_sends_no_argument_and_the_default_hop(self):
+        """No argument leaves the routing zone standing on the node, so the
+        client's default hop, `Zone.ALL`, is the whole scope."""
+        for op in (OP_READ, OP_FIND, OP_SEARCH, OP_DESCRIBE):
+            with self.subTest(op=op):
+                mock = MockApphost(routes={op: self.route(op)})
+                async with mock:
+                    o = await self.objects(mock)
+                    await self.call(o, op)
+                self.assertNotIn("zone", self.params(mock)[1])
+                self.assertEqual(mock.queries[0].zone, int(Zone.ALL))
+
+    @bounded()
+    async def test_a_local_only_zone_drops_the_network_bit_from_both(self):
+        for op in (OP_READ, OP_FIND, OP_SEARCH, OP_DESCRIBE):
+            with self.subTest(op=op):
+                mock = MockApphost(routes={op: self.route(op)})
+                async with mock:
+                    o = await self.objects(mock)
+                    await self.call(o, op, zone=Zone.DEVICE | Zone.VIRTUAL)
+                self.assertNotIn("n", self.params(mock)[1]["zone"])
+                self.assertFalse(mock.queries[0].zone & int(Zone.NETWORK))
+
+
 class BlueprintsOpTest(ObjectsCase):
     """`objects.blueprints`: ST, names in dependency order."""
 
