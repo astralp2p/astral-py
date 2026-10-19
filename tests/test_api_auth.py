@@ -1,4 +1,4 @@
-"""The `auth` module client, its three wire types, and the action field base.
+"""The `auth` module client, its four wire types, and the action field base.
 
 Three tiers in one file, and every Tier-A vector in it is bytes the node sent
 rather than bytes this SDK produced, so a round trip cannot agree with itself
@@ -13,10 +13,10 @@ while disagreeing with `furry-bolt`:
   `mod.auth.signed_contract` nests its embedded pointer under `"Contract"` in
   JSON and flattens it in binary, while every action type flattens its embedded
   **value** in both.
-- **Tier B** pins the two ops against `MockApphost`: the query string `index`
-  builds, the batch form's IDs on the body with an `eos` after them, and the
-  fact that `sign_contract` puts the contract on the channel **body** with an
-  `eos` after it.
+- **Tier B** pins the five ops against `MockApphost`: the query string `index`
+  builds, the batch form's IDs on the body with an `eos` after them, the fact
+  that `sign_contract` puts the contract on the channel **body** with an `eos`
+  after it, and the query strings the three authorizer ops build.
 - **Tier C** runs the read-only half against a real node: the op inventory from
   `shell.spec`, the three zero values from `objects.new`, the three blueprints
   from `objects.get_blueprint`, and the two ops' refusal shapes. Nothing in the
@@ -25,10 +25,11 @@ while disagreeing with `furry-bolt`:
   at `object not found`. `auth.sign_contract` is opened and closed with no
   contract on the body, so there is nothing for the node to sign.
 
-The two ops are the module's whole surface and neither is a read: `auth.index`
-mutates the local contract index and `auth.sign_contract` needs the node to hold
-two private keys. So the live tier exercises their **refusals** and their
-types, which is the whole of what a read-only tier is entitled to.
+Of the five ops only `auth.list_authorizers` is a read: `auth.index` mutates the
+local contract index, `auth.sign_contract` needs the node to hold two private
+keys, and the two authorizer setters change who decides. So the live tier lists
+the authorizers and exercises the other two ops' **refusals** and their types,
+which is the whole of what a read-only tier is entitled to.
 """
 
 from __future__ import annotations
@@ -48,8 +49,12 @@ from astral.api.auth import (
     AUTH_TYPES,
     Action,
     Auth,
+    AuthorizerAssignment,
     Contract,
     OP_INDEX,
+    OP_LIST_AUTHORIZERS,
+    OP_REMOVE_AUTHORIZER,
+    OP_SET_AUTHORIZER,
     OP_SIGN_CONTRACT,
     Permit,
     SignedContract,
@@ -58,6 +63,7 @@ from astral.client import Client, connect
 from astral.codec import jsoncodec
 from astral.codec.binary import object_reader, payload_bytes
 from astral.errors import (
+    BadArgument,
     BadArgumentType,
     ParseError,
     ProtocolError,
@@ -70,6 +76,7 @@ from astral.errors import QueryTimeout
 from astral.object import Bundle
 from astral.objectid import object_id
 from astral.primitives import String8
+from astral.querystring import parse
 from astral.record import record, wire
 from astral.registry import Blueprints, default_blueprints
 from astral.session import Session, flush_cancels
@@ -266,7 +273,12 @@ class AuthTypesTest(unittest.TestCase):
                 self.assertIs(registry.find(cls.ASTRAL_TYPE), cls)
         self.assertEqual(
             {cls.ASTRAL_TYPE for cls in AUTH_TYPES},
-            {"mod.auth.contract", "mod.auth.permit", "mod.auth.signed_contract"},
+            {
+                "mod.auth.authorizer_assignment",
+                "mod.auth.contract",
+                "mod.auth.permit",
+                "mod.auth.signed_contract",
+            },
         )
         self.assertEqual(Auth.TYPES, AUTH_TYPES)
 
@@ -329,6 +341,25 @@ class BlueprintParityTest(unittest.TestCase):
                 ("ExpiresAt", Primitive("time")),
             ],
         )
+
+    def test_the_authorizer_assignment_field_order_is_the_node_s(self):
+        """`objects.get_blueprint?type=mod.auth.authorizer_assignment` on an
+        isolated astrald built from `1286a469`, and the 14-byte zero payload
+        `objects.new` answered there: three empty strings around a nil flag,
+        a zero duration, and three more empty strings."""
+        self.assertEqual(
+            [(f.wire_name, f.spec) for f in AuthorizerAssignment.FIELDS],
+            [
+                ("Action", Primitive("string8")),
+                ("Actor", Ptr("identity")),
+                ("Endpoint", Primitive("string8")),
+                ("Timeout", Primitive("duration")),
+                ("TokenFile", Primitive("string8")),
+                ("TokenEnv", Primitive("string8")),
+                ("TokenValue", Primitive("string8")),
+            ],
+        )
+        self.assertEqual(payload_bytes(AuthorizerAssignment()), bytes(14))
 
     def test_the_permit_field_order_is_the_node_s(self):
         self.assertEqual(
@@ -968,6 +999,118 @@ class SignContractOpTest(AuthCase):
         self.assertIn("unsigned body", str(caught.exception))
 
 
+class AuthorizerOpTest(AuthCase):
+    """`auth.set_authorizer`, `auth.remove_authorizer` and
+    `auth.list_authorizers`: two RR writes and one ST read."""
+
+    @bounded()
+    async def test_set_sends_every_argument_under_its_own_name(self):
+        mock = MockApphost(routes={OP_SET_AUTHORIZER: Accept(objects=[ACK_FRAME])})
+        async with mock:
+            api = await self.auth(mock)
+            self.assertIsNone(
+                await api.set_authorizer(
+                    "mod.auth.see_objects_action",
+                    "https://authority.example/decide",
+                    actor=OTHER,
+                    timeout="30s",
+                    token="t0ken",
+                )
+            )
+        self.assertEqual(
+            parse(self.sent(mock)),
+            (
+                OP_SET_AUTHORIZER,
+                {
+                    "action": "mod.auth.see_objects_action",
+                    "endpoint": "https://authority.example/decide",
+                    "actor": OTHER.text(),
+                    "timeout": "30s",
+                    "token": "t0ken",
+                },
+            ),
+        )
+
+    @bounded()
+    async def test_set_with_no_actor_is_action_wide(self):
+        mock = MockApphost(routes={OP_SET_AUTHORIZER: Accept(objects=[ACK_FRAME])})
+        async with mock:
+            api = await self.auth(mock)
+            await api.set_authorizer("mod.auth.see_objects_action", "astral://localnode:x")
+        self.assertEqual(
+            parse(self.sent(mock))[1],
+            {
+                "action": "mod.auth.see_objects_action",
+                "endpoint": "astral://localnode:x",
+            },
+        )
+
+    @bounded()
+    async def test_an_empty_required_argument_never_reaches_the_node(self):
+        mock = MockApphost(routes={OP_SET_AUTHORIZER: Accept(objects=[ACK_FRAME])})
+        async with mock:
+            api = await self.auth(mock)
+            with self.assertRaises(BadArgument):
+                await api.set_authorizer("", "astral://localnode:x")
+            with self.assertRaises(BadArgument):
+                await api.set_authorizer("mod.auth.see_objects_action", "")
+            with self.assertRaises(BadArgument):
+                await api.remove_authorizer("mod.auth.see_objects_action", actor="")
+        self.assertEqual(mock.queries, [])
+
+    @bounded()
+    async def test_remove_sends_the_action_and_the_actor(self):
+        mock = MockApphost(
+            routes={OP_REMOVE_AUTHORIZER: Accept(objects=[ACK_FRAME])}
+        )
+        async with mock:
+            api = await self.auth(mock)
+            await api.remove_authorizer("mod.auth.see_objects_action", actor="somebody")
+        self.assertEqual(
+            parse(self.sent(mock)),
+            (
+                OP_REMOVE_AUTHORIZER,
+                {"action": "mod.auth.see_objects_action", "actor": "somebody"},
+            ),
+        )
+
+    @bounded()
+    async def test_a_refused_assignment_surfaces_as_a_remote_error(self):
+        mock = MockApphost(
+            routes={
+                OP_SET_AUTHORIZER: Accept(
+                    objects=[frame_error("the authority cannot be the actor")]
+                )
+            }
+        )
+        async with mock:
+            api = await self.auth(mock)
+            with self.assertRaises(RemoteError):
+                await api.set_authorizer(
+                    "mod.auth.see_objects_action", "astral://x:y", actor="x"
+                )
+
+    @bounded()
+    async def test_list_reads_assignments_to_the_eos(self):
+        listed = AuthorizerAssignment(
+            action="mod.auth.see_objects_action",
+            actor=OTHER,
+            endpoint="https://authority.example/decide",
+            token_env="AUTHORITY_TOKEN",
+        )
+        mock = MockApphost(
+            routes={
+                OP_LIST_AUTHORIZERS: Accept(
+                    objects=[(listed.ASTRAL_TYPE, payload_bytes(listed))], eos=True
+                )
+            }
+        )
+        async with mock:
+            api = await self.auth(mock)
+            self.assertEqual(await api.list_authorizers(), [listed])
+        self.assertEqual(self.sent(mock), OP_LIST_AUTHORIZERS)
+
+
 class AuthPlumbingTest(AuthCase):
     """What every op shares: the keyword set, routing, and closing the stream."""
 
@@ -1016,14 +1159,14 @@ class LiveAuthTest(live_support.LiveCase):
     Nothing here signs, stores or indexes. `auth.index` gets an empty batch and
     IDs of objects no repository holds: the op loads before it indexes and
     answers `object not found` without reaching the index
-    (`mod/auth/src/op_index.go` at astrald `0c7e3109`, `indexOne`).
+    (`mod/auth/src/op_index.go` at astrald `1286a469`, `indexOne`).
     `auth.sign_contract` is opened and closed with nothing on the body, so the
     node has nothing to sign. Both are the ops' refusal shapes and both are
     verified rather than assumed.
     """
 
     @bounded(30.0)
-    async def test_the_module_s_op_surface_is_exactly_these_two(self):
+    async def test_the_module_s_op_surface_is_exactly_these_five(self):
         """`shell.spec` is the node's own op registry, so this is the inventory
         rather than a copy of it."""
         async with await self.client() as client:
@@ -1035,8 +1178,27 @@ class LiveAuthTest(live_support.LiveCase):
         }
         self.assertEqual(
             {name for name in names if name.startswith("auth.")},
-            {OP_INDEX, OP_SIGN_CONTRACT},
+            {
+                OP_INDEX,
+                OP_LIST_AUTHORIZERS,
+                OP_REMOVE_AUTHORIZER,
+                OP_SET_AUTHORIZER,
+                OP_SIGN_CONTRACT,
+            },
         )
+        await self.assert_no_open_sockets()
+
+    @bounded(30.0)
+    async def test_listed_authorizers_carry_no_token_value(self):
+        """`auth.list_authorizers` is the one read: every assignment decodes,
+        and none carries its token value
+        (`mod/auth/src/op_list_authorizers.go`, `listedAssignments`)."""
+        async with await self.client() as client:
+            listed = await Auth(client).list_authorizers(timeout=20.0)
+        for assignment in listed:
+            with self.subTest(action=assignment.action):
+                self.assertIsInstance(assignment, AuthorizerAssignment)
+                self.assertEqual(assignment.token_value, "")
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
@@ -1126,8 +1288,8 @@ class LiveAuthTest(live_support.LiveCase):
         `type auth.Action does not implement Object and is not a supported
         container`. `5b1d282` added both, and `specFromType` probes
         `tryObjectType` ahead of its container dispatch, so the embedded field
-        now yields a `RefSpec` naming `mod.auth.action`. astrald `0c7e3109`
-        requires `3c849bf`, which is past `5b1d282`, so the SDK's own pin is
+        now yields a `RefSpec` naming `mod.auth.action`. astrald `1286a469`
+        requires `221ce52`, which is past `5b1d282`, so the SDK's own pin is
         already on this side of it.
         """
         async with await self.client() as client:
@@ -1207,10 +1369,19 @@ class DocstringTest(unittest.TestCase):
             "the module docstring and `Client` disagree about `client.auth`",
         )
 
-    def test_the_op_table_names_both_ops_and_no_others(self):
+    def test_the_op_table_names_the_five_ops_and_no_others(self):
         doc = auth_module.__doc__ or ""
         found = set(re.findall(r"`(auth\.[a-z_]+)`", doc))
-        self.assertEqual(found, {OP_INDEX, OP_SIGN_CONTRACT})
+        self.assertEqual(
+            found,
+            {
+                OP_INDEX,
+                OP_LIST_AUTHORIZERS,
+                OP_REMOVE_AUTHORIZER,
+                OP_SET_AUTHORIZER,
+                OP_SIGN_CONTRACT,
+            },
+        )
 
 
 class ReaderSourceTest(unittest.TestCase):

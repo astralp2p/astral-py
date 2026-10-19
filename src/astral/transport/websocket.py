@@ -13,15 +13,17 @@ The upgrade is an HTTP/1.1 request, so it is formatted and parsed by
 it.
 
 **A WebSocket message is not an apphost frame.** Verified against `furry-bolt`
-this session: the node's first two binary frames on `astral.binary.v1` carry one
-byte (`0x19`) and then 25 bytes (`mod.apphost.host_info_msg`) -- the length
-prefix and the type name of a single apphost frame, split across two WebSocket
-messages. astral-go's `BinarySender.Send` issues **four** `Write` calls per frame
--- `String8.WriteTo` writes the length byte and then the name, `Bytes32.WriteTo`
-the length and then the payload (`astral/channel/binary_sender.go`,
-`astral/string_types.go:21`, `astral/byte_types.go:164`) -- and
-`websocket.NetConn` maps one `Write` to one message. Frame boundaries therefore
-carry no information whatsoever. `WebSocketByteTransport` concatenates every
+on a node built before astral-go `4b2d7cf`: the node's first two binary frames
+on `astral.binary.v1` carry one byte (`0x19`) and then 25 bytes
+(`mod.apphost.host_info_msg`) -- the length prefix and the type name of a single
+apphost frame, split across two WebSocket messages. That astral-go's
+`BinarySender.Send` issued **four** `Write` calls per frame -- `String8.WriteTo`
+wrote the length byte and then the name, `Bytes32.WriteTo` the length and then
+the payload (`astral/string_types.go:21`, `astral/byte_types.go:164`) -- and
+`websocket.NetConn` maps one `Write` to one message. At the pin `Send` builds
+the whole frame and issues one `Write` (`astral/channel/binary_sender.go`), and
+neither RFC 6455 nor the apphost protocol makes one message per frame a
+contract. Frame boundaries therefore carry no information whatsoever. `WebSocketByteTransport` concatenates every
 binary payload into one byte stream and never treats a message boundary as a
 record boundary.
 
@@ -115,9 +117,10 @@ continuations adds nothing to `size` at all and can fragment for ever. Measured:
 400,000 one-byte frames are 1.2 MB on the wire and 16.9 MB of heap, and 200,000
 zero-byte frames trip nothing.
 
-4096 is far above anything the protocol produces -- astrald's sender writes a
-whole apphost frame in three `Write` calls and astral-go's writes one -- and far
-below the point where the accounting matters."""
+4096 is far above anything the protocol produces -- astral-go's
+`BinarySender`, which astrald's apphost channel uses, writes a whole apphost
+frame in one `Write` at the pin -- and far below the point where the accounting
+matters."""
 
 _MAX_CONTROL_PAYLOAD: Final = 125
 _CONNECT_TIMEOUT: Final = 5.0

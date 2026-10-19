@@ -1,9 +1,10 @@
 """`user.*` -- the swarm a node belongs to: membership, siblings, assets, bans.
 
-Tier 2 and the largest module of it: fifteen ops, ten wire types, and the one
-op in the SDK whose stream ends with a **value** instead of a terminator. Every
-op below is on the live node's `shell.spec` registry, verified this session
-against `furry-bolt` -- fifteen entries, the argument names and types read out of
+Tier 2 and the largest module of it: seventeen ops, fourteen wire types, and the
+one op in the SDK whose stream ends with a **value** instead of a terminator.
+Every op below is on the live node's `shell.spec` registry -- fifteen entries
+verified against `furry-bolt`, and the two policy setters on an isolated
+astrald built from `1286a469` -- the argument names and types read out of
 `routing.op_spec`.
 
 A node belongs to at most one user. The membership is a `mod.auth.contract`
@@ -30,6 +31,8 @@ per-op contract and is **not** discoverable from the wire):
 | `user.new_node_contract` | RR | `mod.auth.contract` \\| `error_message` | read-only |
 | `user.remove_asset` | RR | `ack` | **mutates** |
 | `user.request_membership` | RR | `mod.auth.signed_contract` \\| `error_message` | **mutates** |
+| `user.set_swarm_invite_policy` | RR | `ack` \\| `error_message` | **mutates** |
+| `user.set_swarm_join_policy` | RR | `ack` \\| `error_message` | **mutates** |
 | `user.swarm_status` | ST | `mod.users.swarm_member` x n ++ `eos` | read-only |
 | `user.sync_assets` | ST+value | `mod.user.op_update` x n ++ `uint64`, **no `eos`** | read-only |
 | `user.sync_with` | RR | `ack` \\| `error_message` | **mutates** |
@@ -49,9 +52,9 @@ The height is the poll cursor. An empty answer echoes `start` back, so the same
 value re-polls safely (`op_sync_assets.go:38`); a non-empty answer is the highest
 row's height plus one (`op_sync_assets.go:49`).
 
-**Four ops end at `eos`, ten end at a bare EOF, and one ends at a value.**
+**Four ops end at `eos`, twelve end at a bare EOF, and one ends at a value.**
 `assets`, `list_expelled`, `list_siblings` and `swarm_status` each close with
-`ch.Send(&astral.EOS{})`; the eight RR ops and the two write-and-answer ops each
+`ch.Send(&astral.EOS{})`; the ten RR ops and the two write-and-answer ops each
 send their objects and return; `sync_assets` is the value. Confirmed live for
 `assets`, `list_siblings` and `list_expelled` (`terminated_by == "eos"`, all
 three empty on this node) and for `new_node_contract` and `sync_assets`
@@ -60,8 +63,8 @@ three empty on this node) and for `new_node_contract` and `sync_assets`
 **Type names are singular for `mod.user.*` and plural for two of them.**
 `mod.users.swarm_member` and `mod.users.created_user_info` carry the plural
 segment and `mod.user.info`, `mod.user.op_update`, `mod.user.expulsion`,
-`mod.user.signed_expulsion`, `mod.user.notification` and the three action types do
-not. The names are spelled literally, as design section 5.1 rule 6 requires; both
+`mod.user.signed_expulsion`, `mod.user.notification`, the four policy types and
+the three action types do not. The names are spelled literally, as design section 5.1 rule 6 requires; both
 spellings are on the live registry, verified this session through
 `objects.blueprints`.
 
@@ -84,8 +87,8 @@ form. Verified again on astrald `26bb51d5` for `mod.user.see_swarm_action` and
 `mod.user.adopt_action` and `mod.user.expel_action` with
 `mod.user.admin_swarm_action`, and `mod.user.info_action` with
 `mod.user.see_swarm_action` (`api/user/admin_swarm_action.go` and
-`api/user/see_swarm_action.go` at astral-go `3c849bf`, the revision astrald
-`0c7e3109` pins). On `26bb51d5`, `objects.new` answers `nil` for the three old
+`api/user/see_swarm_action.go` at astral-go `221ce52`, the revision astrald
+`1286a469` pins). On `26bb51d5`, `objects.new` answers `nil` for the three old
 names and `objects.get_blueprint` answers `blueprint not found`, both verified.
 A permit naming an old type matches no action the node authorizes, so it grants
 nothing, and this module no longer declares them.
@@ -101,7 +104,7 @@ and the op's target (the node being adopted or expelled) are different nodes.
 **An empty target adopts or expels `anyone`.** `user.adopt` and `user.expel`
 tag `Identity string` with `query:"required"`, and the tag tests that the key is
 present, not that it holds a value (`lib/routing/op.go` `Op.invoke` at astral-go
-`3c849bf`). An `identity=` carrying no value therefore reaches
+`221ce52`). An `identity=` carrying no value therefore reaches
 `Dir.ResolveIdentity("")`, which maps the empty string to the zero identity
 (`astrald/mod/dir/src/module.go:58`) rather than failing, and neither op tests
 the identity it resolves. The op then signs a membership contract, or an
@@ -112,17 +115,17 @@ arguments is mandatory here and an empty name is refused client-side. Defect
 filed against astrald. Inferred from `adopt`'s and `expel`'s source, not run:
 `identity=` with no value still hands the zero identity to both.
 
-**`user.list_siblings`'s `zone` is inert on astrald `0c7e3109`.** It builds a
+**`user.list_siblings`'s `zone` is inert on astrald `1286a469`.** It builds a
 context the op then never uses -- `mod.getSiblings()` takes none
 (`astrald/mod/user/src/op_list_siblings.go:24`). It is still sent when the caller
 names one, because a declared argument is the op's own statement of its
 interface, and the value is forwarded to the routing zone too, where it is not
 inert. Defect filed against astrald.
 
-**`user.sync_with` declares no `start` on astrald `0c7e3109`.** Its argument
+**`user.sync_with` declares no `start` on astrald `1286a469`.** Its argument
 struct is an identity and an output format and nothing else, and the argument
 binder skips a key the op does not declare (`lib/query/editor.go`
-`Editor.SetMany` at astral-go `3c849bf`), so a `start` sent there is accepted and
+`Editor.SetMany` at astral-go `221ce52`), so a `start` sent there is accepted and
 ignored. It is sent only when the caller names one, because an implicit zero
 would mean "re-read the whole log" to a node that reads it.
 
@@ -147,7 +150,7 @@ more.
 The user and the swarm's members pass, and anyone else needs the permit.
 `new_node_contract`, `request_membership`, `accept_contract` and
 `accept_membership` authorize neither. Both authorizers refuse when the node has
-no active contract (`mod/user/src/op_accept_contract.go` at `0c7e3109`, the
+no active contract (`mod/user/src/op_accept_contract.go` at `1286a469`, the
 comment above `OpAcceptContract`), so the order of the checks decides which code
 an unclaimed node answers: `info`, `list_expelled`, `swarm_status`, `adopt` and
 `expel` test the contract first and reject with 2, while `assets`, `sync_assets`
@@ -186,7 +189,7 @@ two days out. Both carry the permits of a management node, which on astrald
 **`user` defaults to the node's user, and an unclaimed node has none.** The op
 substitutes the module's user identity for an absent `user` and answers
 `user id missing` when that identity is zero
-(`mod/user/src/op_new_node_contract.go` at `0c7e3109`). Verified on an unclaimed
+(`mod/user/src/op_new_node_contract.go` at `1286a469`). Verified on an unclaimed
 node: `user.new_node_contract` answers `user id missing`, and the same query with
 `user` named answers the contract.
 
@@ -210,9 +213,28 @@ them `users.`-prefixed. astral-go declares the type in `api/user`
 (`created_user_info.go`) and astrald never constructs it. It is declared here so
 the type is decodable when a peer sends one, and for nothing else.
 
+**Two policies decide who joins and whose invitation is accepted, and an app can
+be either one.** `user.request_membership` asks the swarm join policy with a
+`mod.user.swarm_join_request` and `user.accept_membership` asks the swarm invite
+policy with a `mod.user.swarm_invite_request`; each policy answers a
+`mod.user.swarm_join_decision` or `mod.user.swarm_invite_decision`, and an
+answer that does not allow, or no answer, declines
+(`mod/user/src/op_request_membership.go` and
+`mod/user/src/op_accept_membership.go`). The bundled policy accepts all.
+`user.set_swarm_join_policy` and `user.set_swarm_invite_policy` delegate one of
+them to an op of another identity: `identity` and `operation` name it,
+`timeout` bounds one question, and both names empty restore the bundled policy
+(`mod/user/src/op_set_swarm_policy.go`). The node puts the request to the
+delegate as itself and reads one object back (`api/policy/ask.go`). Both setters
+authorize `mod.auth.admin_manage_apps_action`, not
+`mod.user.admin_swarm_action`, so a node with no active contract can set its
+invite policy, and reject before accepting when it is refused. The delegate
+cannot be the node itself, and a `timeout` above ten minutes is refused
+(`api/policy/delegate.go`); both arrive as an `error_message`.
+
 Reached as `client.user`, a `functools.cached_property` on `Client` built on
 first use (design section 5.1). Every source citation resolves at astrald
-`0c7e3109` and astral-go `3c849bf`, the revisions `tests/reference.py` pins;
+`1286a469` and astral-go `221ce52`, the revisions `tests/reference.py` pins;
 `tests/test_api_user.py` reads every `path:line` back there and fails when it
 stops landing.
 """
@@ -259,12 +281,18 @@ __all__ = [
     "OP_NEW_NODE_CONTRACT",
     "OP_REMOVE_ASSET",
     "OP_REQUEST_MEMBERSHIP",
+    "OP_SET_SWARM_INVITE_POLICY",
+    "OP_SET_SWARM_JOIN_POLICY",
     "OP_SWARM_STATUS",
     "OP_SYNC_ASSETS",
     "OP_SYNC_WITH",
     "OpUpdate",
     "SeeSwarmAction",
     "SignedExpulsion",
+    "SwarmInviteDecision",
+    "SwarmInviteRequest",
+    "SwarmJoinDecision",
+    "SwarmJoinRequest",
     "SwarmMember",
     "SwarmMembershipAction",
     "USER_TYPES",
@@ -287,6 +315,8 @@ OP_LIST_SIBLINGS: Final = "user.list_siblings"
 OP_NEW_NODE_CONTRACT: Final = "user.new_node_contract"
 OP_REMOVE_ASSET: Final = "user.remove_asset"
 OP_REQUEST_MEMBERSHIP: Final = "user.request_membership"
+OP_SET_SWARM_INVITE_POLICY: Final = "user.set_swarm_invite_policy"
+OP_SET_SWARM_JOIN_POLICY: Final = "user.set_swarm_join_policy"
 OP_SWARM_STATUS: Final = "user.swarm_status"
 OP_SYNC_ASSETS: Final = "user.sync_assets"
 OP_SYNC_WITH: Final = "user.sync_with"
@@ -343,6 +373,7 @@ is effective only once the ban has propagated to the node being invited.
 _OBJECT_ID: Final[Spec] = Primitive("object_id.sha256")
 _STRING8: Final[Spec] = Primitive("string8")
 _UINT64: Final[Spec] = Primitive("uint64")
+_DURATION: Final[Spec] = Primitive("duration")
 _ZONE: Final[Spec] = Primitive("zone")
 
 
@@ -533,6 +564,48 @@ class OpUpdate:
     removed: bool = wire("Removed", Primitive("bool"))
 
 
+# --- the policy types -----------------------------------------------------
+#
+# What a swarm policy is asked and what it answers. The node sends a request to
+# a delegate and reads a decision back; no op of this module answers with one.
+# Each field order is the node's `objects.get_blueprint` answer on astrald
+# `1286a469`, and each is astral-go's `api/user/swarm_policy.go`.
+
+
+@record("mod.user.swarm_join_request")
+class SwarmJoinRequest:
+    """Whether `requester` may join this node's swarm. The join policy's question."""
+
+    requester: Identity | None = wire("Requester", Ptr("identity"))
+
+
+@record("mod.user.swarm_join_decision")
+class SwarmJoinDecision:
+    """The join policy's answer. `allow` false declines with `ERR_REQUEST_DECLINED`."""
+
+    allow: bool = wire("Allow", Primitive("bool"))
+
+
+@record("mod.user.swarm_invite_request")
+class SwarmInviteRequest:
+    """Whether this node accepts `inviter`'s invitation and the `contract` it offers.
+
+    The invite policy's question. `contract` is the unsigned membership contract
+    `user.accept_membership` read, asked after the issuer's signature on it
+    verified.
+    """
+
+    inviter: Identity | None = wire("Inviter", Ptr("identity"))
+    contract: Contract | None = wire("Contract", Ptr("mod.auth.contract"))
+
+
+@record("mod.user.swarm_invite_decision")
+class SwarmInviteDecision:
+    """The invite policy's answer. `allow` false declines with `ERR_INVITATION_DECLINED`."""
+
+    allow: bool = wire("Allow", Primitive("bool"))
+
+
 # --- the action types -----------------------------------------------------
 #
 # Each embeds `auth.Action` by value, so `Nonce` and `ActorID` come first and
@@ -548,7 +621,7 @@ class AdminSwarmAction(Action):
     `remove_asset` and `sync_with`. `subject` names the node an op adopts,
     expels or syncs with, and `object_id` the asset it adds or removes; an op
     leaves unset the one it does not name, and the node evaluates neither yet
-    (`api/user/admin_swarm_action.go` at astral-go `3c849bf`).
+    (`api/user/admin_swarm_action.go` at astral-go `221ce52`).
 
     Granted with `Delegation: 1` on a management node's contract, so the node
     can contract it out one hop to an app it hosts. The zero payload is eleven
@@ -616,18 +689,19 @@ class AssetSync(NamedTuple):
 
 
 class User(ModuleClient):
-    """The `user` module's fifteen ops, over one `Client`.
+    """The `user` module's seventeen ops, over one `Client`.
 
     Reached as `client.user`, a cached property built on first use;
     `User(client)` constructs the same object directly. The scaffolding and the
     `**kw` contract are `ModuleClient`'s.
 
-    Seven of the fifteen are read-only: `info`, `assets`, `sync_assets`,
+    Seven of the seventeen are read-only: `info`, `assets`, `sync_assets`,
     `list_siblings`, `list_expelled`, `swarm_status` and `new_node_contract`.
-    Of the other eight, `adopt`, `expel`, `accept_contract`,
+    Of the other ten, `adopt`, `expel`, `accept_contract`,
     `accept_membership` and `request_membership` change who a node belongs to,
-    `add_asset`, `remove_asset` and `sync_with` change what it holds, and
-    `expel` is irreversible.
+    `add_asset`, `remove_asset` and `sync_with` change what it holds,
+    `set_swarm_join_policy` and `set_swarm_invite_policy` change who decides,
+    and `expel` is irreversible.
     """
 
     __slots__ = ()
@@ -719,7 +793,7 @@ class User(ModuleClient):
 
         `zone` is sent as the op's argument **and** as the routing zone, the
         way `Objects` sends its one scope to both levers. The op's own
-        argument is inert on astrald `0c7e3109` -- the context built from it is
+        argument is inert on astrald `1286a469` -- the context built from it is
         never used (`mod/user/src/op_list_siblings.go:24`) -- and the routing
         zone is not.
 
@@ -885,7 +959,7 @@ class User(ModuleClient):
         for the node to resolve. `node` is mandatory here, and the op tags the
         argument required.
 
-        **`start` reaches no code on astrald `0c7e3109`.** `syncAssets` takes
+        **`start` reaches no code on astrald `1286a469`.** `syncAssets` takes
         the node and reads the height out of the tree itself
         (`mod/user/src/op_sync_with.go:39`, `mod/user/src/sync.go:30`), and the
         op declares no `start` at all, so the binder drops the key. It is
@@ -1063,6 +1137,52 @@ class User(ModuleClient):
             )
         self._expect(answers[0], Ack, OP_ACCEPT_CONTRACT)
 
+    # --- policies ---
+
+    async def set_swarm_join_policy(
+        self,
+        identity: Identity | str | None = None,
+        operation: str | None = None,
+        *,
+        timeout: Duration | str | None = None,
+        **kw: Any,
+    ) -> None:
+        """Delegate the swarm join policy, or restore the bundled one. RR, one
+        `ack`. **Mutates.**
+
+        `identity` and `operation` name the delegate's op; the node resolves
+        `identity` through its directory. Both omitted restore the bundled
+        accept-all policy, and one without the other is refused here, as the
+        node refuses it. `timeout` bounds one question in Go's duration syntax;
+        omitted, the node waits ten minutes.
+
+        Rejects before accepting when the caller lacks
+        `mod.auth.admin_manage_apps_action`. A delegate the node cannot resolve,
+        the node itself, or a `timeout` above ten minutes is an
+        `error_message` and arrives as `RemoteError`.
+        """
+        qs = _policy_query(OP_SET_SWARM_JOIN_POLICY, identity, operation, timeout)
+        self._expect(await self._c.call_one(qs, **kw), Ack, OP_SET_SWARM_JOIN_POLICY)
+
+    async def set_swarm_invite_policy(
+        self,
+        identity: Identity | str | None = None,
+        operation: str | None = None,
+        *,
+        timeout: Duration | str | None = None,
+        **kw: Any,
+    ) -> None:
+        """Delegate the swarm invite policy, or restore the bundled one. RR, one
+        `ack`. **Mutates.**
+
+        `set_swarm_join_policy`'s arguments and answers, for the policy
+        `user.accept_membership` asks.
+        """
+        qs = _policy_query(OP_SET_SWARM_INVITE_POLICY, identity, operation, timeout)
+        self._expect(
+            await self._c.call_one(qs, **kw), Ack, OP_SET_SWARM_INVITE_POLICY
+        )
+
 
 # --- the pure helpers -----------------------------------------------------
 
@@ -1079,11 +1199,11 @@ def new_node_contract_local(
     The same object `user.new_node_contract` answers with, constructed here:
     one `mod.user.swarm_membership_action` permit, plus admin-swarm and
     see-swarm permits with `Delegation: 1` for a management node, in that
-    order (`api/user/contract.go` at astral-go `3c849bf`, `NewNodeContract`).
+    order (`api/user/contract.go` at astral-go `221ce52`, `NewNodeContract`).
 
     The op passes `managementNode=true` unconditionally, so its answer always
     carries three permits; this helper defaults to `False`, which is the shape
-    astrald uses for an ordinary member (`mod/user/src/contracts.go:172`).
+    astrald uses for an ordinary member (`mod/user/src/contracts.go:178`).
 
     `expires_at` is now plus `duration`, resolved at call time.
     """
@@ -1167,6 +1287,37 @@ def _targeted(op: str, node: Identity | str) -> str:
     )
 
 
+def _policy_query(
+    op: str,
+    identity: Identity | str | None,
+    operation: str | None,
+    timeout: Duration | str | None,
+) -> str:
+    """The query string the two policy setters share.
+
+    Both names or neither: the op answers an `error_message` for one alone, so
+    that is refused before a query leaves.
+    """
+    if (identity is None) != (operation is None):
+        raise BadArgument(
+            f"{op}: identity and operation name one delegate together; pass "
+            "both, or neither to restore the bundled policy"
+        )
+    params: dict[str, Any] = {}
+    if identity is not None:
+        params["identity"] = _name(identity, op, "identity")
+        params["operation"] = operation
+    if timeout is not None:
+        params["timeout"] = Duration.parse(timeout) if isinstance(timeout, str) else timeout
+    return querystring.build(
+        op,
+        ModuleClient._encode(
+            {"identity": _STRING8, "operation": _STRING8, "timeout": _DURATION},
+            params,
+        ),
+    )
+
+
 def _height(value: int, op: str) -> int:
     """A `start` argument: a database height, non-negative and never a time.
 
@@ -1237,6 +1388,10 @@ USER_TYPES: Final[Sequence[type]] = (
     OpUpdate,
     SeeSwarmAction,
     SignedExpulsion,
+    SwarmInviteDecision,
+    SwarmInviteRequest,
+    SwarmJoinDecision,
+    SwarmJoinRequest,
     SwarmMember,
     SwarmMembershipAction,
 )

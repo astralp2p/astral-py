@@ -1,4 +1,4 @@
-"""The `user` module client: fifteen ops, ten types, one non-`eos` stream.
+"""The `user` module client: seventeen ops, fourteen types, one non-`eos` stream.
 
 Three tiers in one file, because the same claim is made at each and the three
 must agree:
@@ -12,14 +12,15 @@ must agree:
   3.10 names a third streaming shape. The fifth is from an unclaimed node at
   astrald `26bb51d5`: `user.new_node_contract` answering the three-permit
   contract that replaced the four-permit one.
-- **Tier B** pins the fifteen ops against `MockApphost`: the query string each
+- **Tier B** pins the seventeen ops against `MockApphost`: the query string each
   one builds, the answer each one accepts, the two body-input ops' frame order
   and their absent terminator, and the guards that keep an empty target from
   reaching a node that would read it as `anyone`.
 - **Tier C** runs the read-only ops against a real node. Nothing here mutates:
   `adopt`, `expel`, `add_asset`, `remove_asset`, `sync_with`,
-  `request_membership`, `accept_contract` and `accept_membership` are exercised
-  against the mock alone.
+  `request_membership`, `accept_contract`, `accept_membership`,
+  `set_swarm_join_policy` and `set_swarm_invite_policy` are exercised against
+  the mock alone.
 
 `furry-bolt` is **claimed** -- it holds an active contract issued by
 `03a40290…941d` -- so `user.info` and `user.swarm_status` answer there rather than
@@ -62,12 +63,18 @@ from astral.api.user import (
     OP_NEW_NODE_CONTRACT,
     OP_REMOVE_ASSET,
     OP_REQUEST_MEMBERSHIP,
+    OP_SET_SWARM_INVITE_POLICY,
+    OP_SET_SWARM_JOIN_POLICY,
     OP_SWARM_STATUS,
     OP_SYNC_ASSETS,
     OP_SYNC_WITH,
     OpUpdate,
     SeeSwarmAction,
     SignedExpulsion,
+    SwarmInviteDecision,
+    SwarmInviteRequest,
+    SwarmJoinDecision,
+    SwarmJoinRequest,
     SwarmMember,
     SwarmMembershipAction,
     USER_TYPES,
@@ -459,6 +466,13 @@ class BlueprintParityTest(unittest.TestCase):
             ("Alias", "primitive:string8"),
             ("Linked", "primitive:bool"),
         ],
+        "mod.user.swarm_join_request": [("Requester", "ptr:identity")],
+        "mod.user.swarm_join_decision": [("Allow", "primitive:bool")],
+        "mod.user.swarm_invite_request": [
+            ("Inviter", "ptr:identity"),
+            ("Contract", "ptr:mod.auth.contract"),
+        ],
+        "mod.user.swarm_invite_decision": [("Allow", "primitive:bool")],
         "mod.users.created_user_info": [
             ("ID", "ptr:identity"),
             ("Alias", "primitive:string8"),
@@ -547,16 +561,16 @@ class TypeRegistrationTest(unittest.TestCase):
             with self.subTest(type=kind.ASTRAL_TYPE):
                 self.assertTrue(kind.ASTRAL_TYPE.startswith(("mod.user.", "mod.users.")))
 
-    def test_the_op_names_are_the_fifteen_the_registry_reports(self):
-        """The live `shell.spec` registry answered exactly these fifteen
-        `user.*` names this session; astral-go's `api/user/module.go` declares
-        the same fifteen constants."""
+    def test_the_op_names_are_the_seventeen_the_registry_reports(self):
+        """The live `shell.spec` registry answered these `user.*` names: the
+        first fifteen on `furry-bolt`, all seventeen on an isolated astrald
+        built from `1286a469`."""
         names = sorted(
             value
             for name, value in vars(user_module).items()
             if name.startswith("OP_") and isinstance(value, str)
         )
-        self.assertEqual(len(names), 15)
+        self.assertEqual(len(names), 17)
         self.assertEqual(
             names,
             [
@@ -572,6 +586,8 @@ class TypeRegistrationTest(unittest.TestCase):
                 "user.new_node_contract",
                 "user.remove_asset",
                 "user.request_membership",
+                "user.set_swarm_invite_policy",
+                "user.set_swarm_join_policy",
                 "user.swarm_status",
                 "user.sync_assets",
                 "user.sync_with",
@@ -764,7 +780,7 @@ class ActionConstraintTest(unittest.TestCase):
         self.assertTrue(permit.allows(SwarmMembershipAction()))
 
 
-# --- Tier B: the fifteen ops against the mock ----------------------------
+# --- Tier B: the seventeen ops against the mock --------------------------
 
 
 class BodyReadingNode:
@@ -1038,7 +1054,7 @@ class ListSiblingsOpTest(UserCase):
     @bounded()
     async def test_a_zone_goes_to_the_op_argument_and_to_the_routing_zone(self):
         """One scope, two levers, as `Objects` does it. The op's own argument is
-        inert on astrald `0c7e3109` -- the context it builds is never used --
+        inert on astrald `1286a469` -- the context it builds is never used --
         and the routing zone is not, so sending only one of them is wrong
         whichever one it is."""
         api = await self.serving(
@@ -1218,7 +1234,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_sends_the_identity_and_no_height_by_default(self):
-        """`start` is undeclared on astrald `0c7e3109`, and the node reads the
+        """`start` is undeclared on astrald `1286a469`, and the node reads the
         height out of its own tree. An implicit `start=0` would mean "re-read
         the whole log" to a node that reads it, which is not what a caller who
         named no height asked for."""
@@ -1543,6 +1559,78 @@ class AcceptContractOpTest(UserCase):
         self.assertIn("without an answer", str(caught.exception))
 
 
+class SwarmPolicyOpTest(UserCase):
+    """`user.set_swarm_join_policy` and `user.set_swarm_invite_policy`: RR, one
+    `ack`, three optional arguments."""
+
+    @bounded()
+    async def test_a_delegate_travels_as_identity_and_operation(self):
+        for op, method in (
+            (OP_SET_SWARM_JOIN_POLICY, "set_swarm_join_policy"),
+            (OP_SET_SWARM_INVITE_POLICY, "set_swarm_invite_policy"),
+        ):
+            with self.subTest(op=op):
+                api = await self.serving({op: Accept(objects=[ACK_FRAME])})
+                self.assertIsNone(
+                    await getattr(api, method)(OTHER, "policy.decide", timeout="90s")
+                )
+                self.assertEqual(
+                    self.params(),
+                    (
+                        op,
+                        {
+                            "identity": OTHER.text(),
+                            "operation": "policy.decide",
+                            "timeout": "1m30s",
+                        },
+                    ),
+                )
+
+    @bounded()
+    async def test_no_delegate_restores_the_bundled_policy(self):
+        """Both names empty is the op's restore: the node clears the stored
+        delegate and answers `ack`."""
+        api = await self.serving(
+            {OP_SET_SWARM_JOIN_POLICY: Accept(objects=[ACK_FRAME])}
+        )
+        await api.set_swarm_join_policy()
+        self.assertEqual(self.sent(), OP_SET_SWARM_JOIN_POLICY)
+
+    @bounded()
+    async def test_one_name_without_the_other_never_reaches_the_node(self):
+        api = await self.serving({OP_SET_SWARM_JOIN_POLICY: Accept()})
+        with self.assertRaises(BadArgument):
+            await api.set_swarm_join_policy(OTHER)
+        with self.assertRaises(BadArgument):
+            await api.set_swarm_invite_policy(operation="policy.decide")
+        self.assertEqual(self.mock.queries, [])
+
+    @bounded()
+    async def test_a_year_unit_never_reaches_the_node(self):
+        api = await self.serving({OP_SET_SWARM_JOIN_POLICY: Accept()})
+        with self.assertRaises(ParseError):
+            await api.set_swarm_join_policy(OTHER, "policy.decide", timeout="1y")
+        self.assertEqual(self.mock.queries, [])
+
+    @bounded()
+    async def test_a_refused_delegate_surfaces_as_a_remote_error(self):
+        api = await self.serving(
+            {
+                OP_SET_SWARM_INVITE_POLICY: Accept(
+                    objects=[frame_error("the node cannot be its own delegate")]
+                )
+            }
+        )
+        with self.assertRaises(RemoteError):
+            await api.set_swarm_invite_policy(FURRY_BOLT, "policy.decide")
+
+    @bounded()
+    async def test_an_unauthorized_caller_is_a_rejection(self):
+        api = await self.serving({OP_SET_SWARM_JOIN_POLICY: Reject(2)})
+        with self.assertRaises(QueryRejected):
+            await api.set_swarm_join_policy()
+
+
 class UserPlumbingTest(UserCase):
     """What every op shares: the keyword set, routing, and closing the stream."""
 
@@ -1598,11 +1686,11 @@ async def _send_error_msg(conn: MockConn) -> None:
 class LiveUserTest(live_support.LiveCase):
     """`user` against a real node. Read-only: nothing here changes node state.
 
-    Seven of the fifteen ops are safe to run: `assets`, `list_siblings`,
+    Seven of the seventeen ops are safe to run: `assets`, `list_siblings`,
     `list_expelled`, `swarm_status`, `sync_assets`, `info` and
     `new_node_contract`, the last of which constructs and returns without
-    signing or storing. The other eight change who a node belongs to or what it
-    holds and are exercised against the mock alone.
+    signing or storing. The other ten change who a node belongs to, what it
+    holds or who decides, and are exercised against the mock alone.
 
     Whether the node under test is claimed is not this SDK's to decide, so the
     tier asks: `user.info` rejecting with code 2 is the setup-mode probe. On an
@@ -1809,7 +1897,7 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/sync.go", 30): "tree.Get[*astral.Uint64](ctx, heightNode)",
         ("mod/dir/src/module.go", 58): 'if s == "" || s == "anyone"',
         ("mod/dir/src/module.go", 107): "return identity.Fingerprint()",
-        ("mod/user/src/contracts.go", 172): "usermod.DefaultContractValidity",
+        ("mod/user/src/contracts.go", 178): "usermod.DefaultContractValidity",
     }
 
     ASTRAL_GO_LINES = {
@@ -1853,17 +1941,27 @@ class CitationTest(unittest.TestCase):
         self.assertIn("op_accept_contract.go", names)
         self.assertIn("accept_contract.go", clients)
 
-    def test_every_op_file_astrald_carries_has_an_op_constant_here(self):
+    def test_every_op_astrald_carries_has_an_op_constant_here(self):
         """A census rather than a list: an op astrald grows and this module
-        does not is a hole a reader cannot see from inside the module."""
+        does not is a hole a reader cannot see from inside the module.
+
+        Counted by `Op` method, not by file: the router names an op after its
+        method (`mod/user/src/loader.go`, `AddStructPrefix(mod, "Op")`), and
+        `op_set_swarm_policy.go` declares two.
+        """
         try:
             names = reference.listdir(reference.ASTRALD, "mod/user/src")
+            sources = [
+                reference.read(reference.ASTRALD, f"mod/user/src/{name}")
+                for name in names
+                if name.startswith("op_") and not name.endswith("_test.go")
+            ]
         except reference.Unavailable as exc:  # pragma: no cover
             self.skipTest(str(exc))
         ops = {
-            "user." + name[len("op_") : -len(".go")]
-            for name in names
-            if name.startswith("op_") and not name.endswith("_test.go")
+            "user." + re.sub(r"(?<!^)([A-Z])", r"_\1", method).lower()
+            for source in sources
+            for method in re.findall(r"^func \(mod \*Module\) Op(\w+)\(", source, re.M)
         }
         declared = {
             value
@@ -1906,14 +2004,14 @@ class ShapeDeclarationTest(unittest.TestCase):
 
     def test_the_module_declares_a_shape_for_every_op_in_its_table(self):
         """The docstring table is the module's declaration of op shape, which
-        design section 4.7 makes a per-op contract. Fifteen rows, fifteen
-        ops."""
+        design section 4.7 makes a per-op contract. Seventeen rows,
+        seventeen ops."""
         table = [
             line
             for line in (user_module.__doc__ or "").splitlines()
             if line.startswith("| `user.")
         ]
-        self.assertEqual(len(table), 15)
+        self.assertEqual(len(table), 17)
         named = {line.split("`")[1] for line in table}
         declared = {
             value

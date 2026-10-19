@@ -597,10 +597,11 @@ class ProtocolFaultTest(unittest.IsolatedAsyncioTestCase):
 class ByteTransportTest(unittest.IsolatedAsyncioTestCase):
     @bounded()
     async def test_frames_concatenate_into_one_byte_stream(self):
-        """The live shape, reproduced: `furry-bolt` sends the length prefix and
-        the type name of one apphost frame as two separate messages, because
-        `BinarySender.Send` writes a frame with four `Write` calls and
-        `websocket.NetConn` maps one `Write` to one message."""
+        """The live shape, reproduced: `furry-bolt`, built before astral-go
+        `4b2d7cf`, sent the length prefix and the type name of one apphost
+        frame as two separate messages, because `BinarySender.Send` wrote a
+        frame with four `Write` calls and `websocket.NetConn` maps one `Write`
+        to one message."""
         transport, peer = await upgraded_transport()
         peer.write(server_frame(0x2, b"\x19"))
         peer.write(server_frame(0x2, b"mod.apphost.host_info_msg"))

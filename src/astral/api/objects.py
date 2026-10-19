@@ -120,10 +120,13 @@ string, sends no zone the caller did not ask for, and sends the `eos`.
 **The `zone` argument is not the routing zone, and on four ops it destroys it.**
 Eight ops declare a `zone` query-string argument. astrald sets the op's context
 zone from `route_query_msg.Zone` (`mod/apphost/src/guest.go:171`), and then
-`describe`, `find`, `search` and `read` *widen* it with `IncludeZone(args.Zone)`
-while `scan`, `delete`, `purge` and `load` *replace* it with `WithZone` --
-defaulting to `ZoneAll` when the argument is absent. So on those four a routing
-zone the caller set is silently discarded. This module therefore takes one
+`describe`, `find`, `search` and `read` *narrow* it with `LimitZone` when the
+argument is present (`mod/objects/src/op_describe.go:40`,
+`mod/objects/src/op_find.go:32`, `mod/objects/src/op_search.go:41`,
+`mod/objects/src/op_read.go:33`) while `scan`, `delete`, `purge` and `load`
+*replace* it with `WithZone` -- defaulting to `ZoneAll` when the argument is
+absent. So on those last four a routing zone the caller set is silently
+discarded. This module therefore takes one
 `zone=` keyword on those eight ops and sends it **both** as the op argument and
 as the routing zone, so one argument means one scope. Everywhere else `zone`
 stays in `**kw` and means the routing zone alone, as on every other module.
@@ -415,7 +418,7 @@ class Probe:
     field rather than that the probe failed. Sourced: astral-go
     `api/objects/probe.go:17` at the pin, `ObjectID *astral.ObjectID`, whose
     comment at `probe.go:15-16` gives nil that meaning; astrald sets it on every
-    successful probe (`mod/objects/src/module.go:186`, `probe.ObjectID =
+    successful probe (`mod/objects/src/module.go:185`, `probe.ObjectID =
     r.ID()`, unconditional on the success path).
 
     The field is appended, so it is a compatibility break in both directions:
@@ -1505,9 +1508,11 @@ class Objects(ModuleClient):
     ) -> list[Identity]:
         """The identities that can provide an object. ST, deduplicated.
 
-        Ends at an `eos`; a bare `eos` means nobody offered, which is the
-        ordinary answer on a node with no finders -- verified live. Bounded to
-        one minute server-side.
+        Ends at an `eos`. The node registers itself as a finder
+        (`mod/objects/src/loader.go`), so it names itself for an object a local
+        repository holds -- verified on an isolated astrald built from
+        `1286a469` -- and a bare `eos` means nobody offered. Bounded to one
+        minute server-side.
 
         `id` is positional and required. astrald answers a zero or absent one
         with `error_message("id is required")` rather than rejecting the query,

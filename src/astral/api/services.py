@@ -9,7 +9,7 @@ The Services v1 wire. Two ops; `services.sync` is gone from the node.
 
 The two are the complete surface: the live `shell.spec` registry holds
 `services.advertise` and `services.discover` and nothing else under this module,
-verified on an isolated astrald built from `0c7e3109`.
+verified on an isolated astrald built from `1286a469`.
 
 **A provider binds a fixed set of services for as long as its channel is open.**
 `services.advertise?services=a,b` names the set. The op refuses a network-origin
@@ -28,7 +28,7 @@ per ask and a `services.change` whenever offerings may have changed; any other
 object, and closing the channel, ends the binding
 (`astrald/mod/services/src/op_advertise.go:65`). `advertise()` returns a
 `Binding`, the counterpart of astral-go's (`api/services/client/advertise.go` at
-astral-go `3c849bf`), and `async with` is its contract, because the open channel
+astral-go `221ce52`), and `async with` is its contract, because the open channel
 **is** the advertisement.
 
 **An answer is the complete offering of one service for one caller.** The
@@ -92,7 +92,7 @@ returns `services.update` (`astral-go/api/services/update.go:19`) -- and so do
 `mod.services.service_discovery_action`, `mod.services.discovery_scope`,
 `mod.services.discovery_rule`. Design section 5.1 rule 6 lists the exceptions.
 
-Every type here round-trips the bytes astral-go `3c849bf` writes for it,
+Every type here round-trips the bytes astral-go `221ce52` writes for it,
 `tests/test_api_services.py` `GoWireTest` holds those bytes.
 
 `Services(client)` constructs the module client, and `client.services` is the
@@ -100,7 +100,7 @@ property design section 5.1 gives every module. Registration does not wait on
 it: `astral/__init__.py` imports the whole `api` package eagerly, so whether
 `services.update` decodes never depends on which property a caller touched.
 
-Line numbers cite astrald `0c7e3109` and astral-go `3c849bf`, the revisions
+Line numbers cite astrald `1286a469` and astral-go `221ce52`, the revisions
 `tests/reference.py` pins, and `tests/test_api_services.py` reads each one back.
 """
 
@@ -508,7 +508,7 @@ class Watcher:
     Follows a discovery and keeps the available offerings, keyed by provider and
     name: an `Update` with `available` true sets one, with `available` false
     deletes it, and a `Removed` deletes the offerings it names. astral-go's
-    `Watcher` (`api/services/client/watch.go` at astral-go `3c849bf`). It has no
+    `Watcher` (`api/services/client/watch.go` at astral-go `221ce52`). It has no
     reconnect policy: once `done` is set, the app starts a new one.
 
     **The stream must be closed.** Leaving the `async with` closes it.

@@ -1,8 +1,8 @@
 """The four concrete endpoint types, codec-only: tcp, tor, gateway, kcp.
 
 Design section 0.1 excludes `tcp`, `tor`, `gateway` and `kcp` as SDK modules and
-keeps their **types**: `mod.nodes.node_info` carries a list of endpoints behind
-numeric tags and `mod.nodes.link_info` carries two in polymorphic slots, so
+keeps their **types**: `mod.nodes.node_info` carries a list of type-tagged
+endpoints and `mod.nodes.link_info` carries two in polymorphic slots, so
 neither decodes without them. Excluding a module means excluding its ops, not
 its types. **No op ships here.** `tcp.new_ephemeral_listener`,
 `kcp.set_endpoint_local_port`, `gateway.node_register` and the rest stay
@@ -51,7 +51,7 @@ does either.** `Digest.WriteTo` used to write whatever bytes it held while
 `Digest.ReadFrom` demanded exactly 35, so the zero value encoded to nothing and
 no conforming reader could consume it -- and inside a `mod.nodes.link_info` it
 moved every field after it by 35 bytes. astral-go `eeb31e3` (PR #90, in `main`
-at `3c849bf`, the revision astrald `0c7e3109` requires) makes the width
+at `221ce52`, the revision astrald `1286a469` requires) makes the width
 unconditional: `WriteTo` writes `DigestSize` bytes for every digest it accepts,
 the zero value as `DigestSize` nulls, and refuses any other length with
 `ErrInvalidDigestLength` rather than putting a short frame on the wire;
@@ -105,7 +105,7 @@ fields, because a `@record` owns its schema. `nat.endpoint` is a third of the
 same shape -- `IP` ref, `Port` uint16, `Network()` of `kcp` -- and Tier 3 can
 reuse `IPEndpoint` rather than restate it.
 
-Source citations are pinned to astral-go `3c849bf` and astrald `0c7e3109`. The
+Source citations are pinned to astral-go `221ce52` and astrald `1286a469`. The
 tor paragraphs above name the astral-go commits that made the changes they
 describe, and all three are in `main` at that pin, so every citation here
 resolves at one of the two pinned revisions.
@@ -115,9 +115,9 @@ from __future__ import annotations
 
 import base64
 import re
-from typing import Any, Final, Mapping, Sequence
+from typing import Any, Final, Sequence
 
-from ..errors import BadArgumentType, ParseError, RangeError, StreamCorrupted
+from ..errors import BadArgumentType, ParseError, RangeError
 from ..record import record, wire
 from ..registry import default_blueprints
 from ..spec import Primitive, Ptr, Ref
@@ -130,15 +130,11 @@ __all__ = [
     "GatewayEndpoint",
     "IPEndpoint",
     "KcpEndpoint",
-    "NODE_INFO_TAGS",
-    "NODE_INFO_TAG_OF",
     "TcpEndpoint",
     "TorDigest",
     "TorEndpoint",
-    "endpoint_for_tag",
     "join_host_port",
     "split_host_port",
-    "tag_for_endpoint",
 ]
 
 MAX_PORT: Final = 0xFFFF
@@ -146,17 +142,17 @@ MAX_PORT: Final = 0xFFFF
 TCP_NETWORK: Final = "tcp"
 TCP_ALIAS: Final = "inet"
 """astrald's TCP module parses and unpacks `inet` as well as `tcp`
-(`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `0c7e3109`). The
+(`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `1286a469`). The
 endpoint's own `Network()` is `tcp` and never `inet`."""
 
 KCP_NETWORK: Final = "kcp"
 TOR_NETWORK: Final = "tor"
 GATEWAY_NETWORK: Final = "gw"
-"""`mod/gateway/src/module.go` `NetworkName`, line 28 at astrald `0c7e3109`.
+"""`mod/gateway/src/module.go` `NetworkName`, line 28 at astrald `1286a469`.
 The module is `gateway` and its network is `gw`."""
 
 TOR_DEFAULT_PORT: Final = 1791
-"""`mod/tor/src/module.go` `defaultListenPort`, line 17 at astrald `0c7e3109`.
+"""`mod/tor/src/module.go` `defaultListenPort`, line 17 at astrald `1286a469`.
 astrald's tor parser supplies it for an address with no port; astral-go's
 `UnmarshalText` requires one. `TorEndpoint.parse` accepts both."""
 
@@ -320,8 +316,8 @@ def _json_string(data: Any, what: str) -> str:
 class TcpEndpoint(IPEndpoint):
     """A TCP endpoint: an IP address and a port.
 
-    Numeric tag `0` inside `mod.nodes.node_info`. Registered under `tcp` and
-    under astrald's alias `inet`; `network()` is `tcp` for both.
+    Registered under `tcp` and under astrald's alias `inet`; `network()` is
+    `tcp` for both.
     """
 
     ip: IPAddress = wire("IP", Ref("mod.ip.ip_address"))
@@ -336,10 +332,7 @@ class KcpEndpoint(IPEndpoint):
     """A KCP endpoint: an IP address and a UDP port.
 
     Identical on the wire to `mod.tcp.endpoint` and a different type: the
-    network name is what says which transport dials it. No numeric tag --
-    `mod.nodes.node_info` knows three types and this is not one of them, so a
-    node advertising KCP endpoints in an invite string cannot be encoded by
-    astral-go at all.
+    network name is what says which transport dials it.
     """
 
     ip: IPAddress = wire("IP", Ref("mod.ip.ip_address"))
@@ -515,10 +508,10 @@ default_blueprints().add(TorDigest)
 class TorEndpoint(Endpoint):
     """A Tor endpoint: a v3 service digest and a port.
 
-    Numeric tag `1` inside `mod.nodes.node_info`. The payload is the digest's 35
-    raw bytes and then a `uint16`, so **every** value is 37 bytes wide -- the
-    zero one included, which decodes back to the zero endpoint. See `TorDigest`
-    for the width rule and the revision that made it unconditional.
+    The payload is the digest's 35 raw bytes and then a `uint16`, so **every**
+    value is 37 bytes wide -- the zero one included, which decodes back to the
+    zero endpoint. See `TorDigest` for the width rule and the revision that made
+    it unconditional.
     """
 
     digest: TorDigest = wire("Digest", Ref("mod.tor.digest"))
@@ -556,7 +549,7 @@ class TorEndpoint(Endpoint):
 
         `unknown` is the zero value, which is astral-go's `UnmarshalText`. A
         missing port defaults to 1791, which is astrald's parser
-        (`mod/tor/src/parse.go` `Parse`, astrald `0c7e3109`) and is accepted
+        (`mod/tor/src/parse.go` `Parse`, astrald `1286a469`) and is accepted
         here so a string the node reads is a string this SDK reads. A port
         outside `uint16` raises rather than truncating.
         """
@@ -592,9 +585,8 @@ class TorEndpoint(Endpoint):
 class GatewayEndpoint(Endpoint):
     """A route to a target through one gateway node.
 
-    Numeric tag `2` inside `mod.nodes.node_info`. Both fields are pointers, so
-    each carries a presence byte and a zero value is the two bytes `0000` --
-    which is what `objects.new?type=mod.gateway.endpoint` answers, verified live.
+    Both fields are pointers, so each carries a presence byte and a zero value
+    is the two bytes `0000` -- which is what `objects.new?type=mod.gateway.endpoint` answers, verified live.
 
     `parse` produces identities and never `None`, so a parsed zero endpoint is
     `01` and 33 zero bytes twice where a constructed one is `0000`. Both decode
@@ -617,7 +609,7 @@ class GatewayEndpoint(Endpoint):
     through the directory, it refuses an endpoint whose gateway is its target,
     and it refuses one where either half resolves to the zero identity, which is
     what `""` and `anyone` resolve to (`mod/gateway/src/parser.go`
-    `Module.Parse`, astrald `0c7e3109`).
+    `Module.Parse`, astrald `1286a469`).
     All three need a node. A wire type has none, so `parse` is astral-go's
     `ParseEndpoint`: two identities, parsed locally, no resolution and no
     equality rule.
@@ -638,7 +630,7 @@ class GatewayEndpoint(Endpoint):
 
         An absent identity renders as 66 zeros, because astral-go's
         `Identity.String()` answers `anyoneKey` for a nil receiver
-        (`astral/identity.go`, astral-go `3c849bf`).
+        (`astral/identity.go`, astral-go `221ce52`).
         """
         return f"{_identity_text(self.gateway_id)}:{_identity_text(self.target_id)}"
 
@@ -684,63 +676,6 @@ def _identity(text: str, what: str) -> Identity:
         return Identity.parse(text)
     except ParseError as exc:
         raise ParseError(f"{what}: {text!r} is not an identity") from exc
-
-
-# --- the numeric tags `mod.nodes.node_info` carries ----------------------
-
-NODE_INFO_TAGS: Final[Mapping[int, type[Endpoint]]] = {
-    0: TcpEndpoint,
-    1: TorEndpoint,
-    2: GatewayEndpoint,
-}
-"""`uint8` tag -> endpoint class, for `mod.nodes.node_info` alone.
-
-`NodeInfo.WriteTo` writes `uint8 count` and then one `uint8` tag and one bare
-payload per endpoint, with `0 = tcp`, `1 = tor`, `2 = gateway` and an error for
-anything else (`api/nodes/node_info.go`, astral-go `3c849bf`). No other type
-uses these numbers: `mod.nodes.link_info` and `mod.nodes.endpoint_with_ttl` hold
-their endpoints in polymorphic slots, which carry the type name.
-
-The table lives here because it names concrete classes. It is the only reason a
-`kcp` endpoint cannot appear in a node invite string.
-"""
-
-NODE_INFO_TAG_OF: Final[Mapping[type, int]] = {
-    cls: tag for tag, cls in NODE_INFO_TAGS.items()
-}
-
-
-def endpoint_for_tag(tag: int) -> type[Endpoint]:
-    """The class a `mod.nodes.node_info` tag names.
-
-    An unknown tag is `StreamCorrupted` and not a soft failure: the payload that
-    follows has no length, so a reader that skipped it would resynchronise on
-    nothing. astral-go aborts the frame in the same place.
-    """
-    found = NODE_INFO_TAGS.get(tag)
-    if found is None:
-        raise StreamCorrupted(
-            f"mod.nodes.node_info: endpoint type tag {tag} is not one of "
-            f"{sorted(NODE_INFO_TAGS)}"
-        )
-    return found
-
-
-def tag_for_endpoint(endpoint: Endpoint) -> int:
-    """The `mod.nodes.node_info` tag of an endpoint.
-
-    A `mod.kcp.endpoint` has none, and so has every endpoint type a future node
-    adds. astral-go answers `unknown endpoint type` and aborts the frame; this
-    raises before a byte is written.
-    """
-    found = NODE_INFO_TAG_OF.get(type(endpoint))
-    if found is None:
-        raise StreamCorrupted(
-            f"mod.nodes.node_info: {getattr(endpoint, 'ASTRAL_TYPE', type(endpoint).__name__)} "
-            f"has no endpoint type tag; the three that do are "
-            f"{', '.join(sorted(c.ASTRAL_TYPE for c in NODE_INFO_TAGS.values()))}"  # type: ignore[attr-defined]
-        )
-    return found
 
 
 # --- registration --------------------------------------------------------

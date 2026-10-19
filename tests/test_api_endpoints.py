@@ -14,7 +14,7 @@ No ops ship in `endpoints.py`, so there is no Tier B here. What there is:
 
 The claim these types exist to support is design section 0.1's: excluding a
 module means excluding its **ops**, not its **types**. `mod.nodes.node_info`
-carries endpoints behind numeric tags and `mod.nodes.link_info` carries two in
+carries a list of type-tagged endpoints and `mod.nodes.link_info` carries two in
 polymorphic slots, so `nodes` cannot decode without all four.
 """
 
@@ -32,8 +32,6 @@ from astral.api.endpoints import (
     KCP_NETWORK,
     KcpEndpoint,
     MAX_PORT,
-    NODE_INFO_TAGS,
-    NODE_INFO_TAG_OF,
     TCP_ALIAS,
     TCP_NETWORK,
     TOR_DEFAULT_PORT,
@@ -42,10 +40,8 @@ from astral.api.endpoints import (
     TcpEndpoint,
     TorDigest,
     TorEndpoint,
-    endpoint_for_tag,
     join_host_port,
     split_host_port,
-    tag_for_endpoint,
 )
 from astral.api.exonet import Endpoint
 from astral.api.ip import IPAddress
@@ -60,7 +56,6 @@ from astral.errors import (
     ParseError,
     RangeError,
     ShortRead,
-    StreamCorrupted,
 )
 from astral.registry import default_blueprints
 from astral.spec import Primitive, Ptr, Ref
@@ -701,73 +696,6 @@ class GatewayEndpointTest(unittest.TestCase):
             unmarshal("mod.gateway.endpoint", GATEWAY.address()), GATEWAY
         )
         self.assertEqual(text_decode(text_encode(GATEWAY)), GATEWAY)
-
-
-class NodeInfoTagTest(unittest.TestCase):
-    """The numeric tags `mod.nodes.node_info` carries, and nothing else."""
-
-    def test_the_three_tags_are_the_three_astral_go_writes(self):
-        self.assertEqual(
-            {tag: cls.ASTRAL_TYPE for tag, cls in NODE_INFO_TAGS.items()},
-            {
-                0: "mod.tcp.endpoint",
-                1: "mod.tor.endpoint",
-                2: "mod.gateway.endpoint",
-            },
-        )
-        self.assertEqual(len(NODE_INFO_TAG_OF), 3)
-
-    def test_a_tag_resolves_to_its_class_and_back(self):
-        for tag, cls in NODE_INFO_TAGS.items():
-            with self.subTest(tag=tag):
-                self.assertIs(endpoint_for_tag(tag), cls)
-                self.assertEqual(tag_for_endpoint(cls()), tag)
-
-    def test_an_unknown_tag_poisons_the_stream(self):
-        """The payload that follows a tag has no length, so a reader that
-        skipped it would resynchronise on nothing. astral-go aborts the frame in
-        the same place."""
-        for tag in (3, 255, -1):
-            with self.subTest(tag=tag):
-                with self.assertRaises(StreamCorrupted):
-                    endpoint_for_tag(tag)
-
-    def test_a_kcp_endpoint_has_no_tag(self):
-        """Which is why a node advertising KCP endpoints cannot be encoded into
-        an invite string by astral-go at all."""
-        with self.assertRaises(StreamCorrupted) as caught:
-            tag_for_endpoint(KcpEndpoint())
-        self.assertIn("mod.kcp.endpoint", str(caught.exception))
-
-    def test_the_tag_table_agrees_with_the_one_node_info_reads(self):
-        """Two spellings of one table, so the two must agree byte for byte.
-
-        `api/nodes.py` keys its copy by type **name** and resolves through the
-        registry, which is what its hand-rolled `node_info` codec needs;
-        `endpoints.py` keys by **class**, which is what a writer choosing a tag
-        needs. Neither can be derived from the other without one module importing
-        the other, so the guard against silent drift is this assertion rather
-        than a shared constant.
-        """
-        try:
-            from astral.api.nodes import ENDPOINT_TAGS
-        except ImportError:  # pragma: no cover -- `nodes` is a Tier 3 module
-            self.skipTest("astral.api.nodes is not present")
-        self.assertEqual(
-            ENDPOINT_TAGS,
-            {tag: cls.ASTRAL_TYPE for tag, cls in NODE_INFO_TAGS.items()},
-        )
-
-    def test_the_tags_and_the_registry_are_different_tables(self):
-        """The registry is keyed by network name and holds four classes; the
-        tags are keyed by a byte and hold three. `kcp` is in one and not the
-        other."""
-        from astral.api.exonet import endpoint_types
-
-        self.assertEqual(len(endpoint_types().classes()), 4)
-        self.assertEqual(len(NODE_INFO_TAGS), 3)
-        self.assertIn(KcpEndpoint, endpoint_types().classes())
-        self.assertNotIn(KcpEndpoint, NODE_INFO_TAG_OF)
 
 
 class NetworkNameTest(unittest.TestCase):

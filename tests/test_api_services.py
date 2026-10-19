@@ -420,7 +420,7 @@ class ServicesTypesTest(unittest.TestCase):
 
     def test_the_module_declares_the_whole_live_op_surface(self):
         """Two ops, which is the whole of `services` in the registry of a node
-        built from astrald `0c7e3109`; `services.sync` is gone.
+        built from astrald `1286a469`; `services.sync` is gone.
         `LiveServicesTest` asserts the same set against the node itself."""
         ops = {
             value

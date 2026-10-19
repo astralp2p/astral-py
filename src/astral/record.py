@@ -31,9 +31,9 @@ nesting then fall out of the existing rules.
 
 The escape hatch: a record that defines `write_payload` / `read_payload` in its
 own body keeps them. `FIELDS` then serves JSON only and `DERIVABLE` is `False`.
-Four wire types need it and no others are permitted without amending the design:
-`mod.tor.endpoint`, `mod.nodes.node_info`, `bip137sig.entropy` and
-`mod.ip.ip_address`.
+Design section 2.5 lists four wire types that need it and permits no others;
+section 11.7 removes `mod.nodes.node_info`, which astral-go now encodes through
+`astral.Objectify`.
 """
 
 from __future__ import annotations
