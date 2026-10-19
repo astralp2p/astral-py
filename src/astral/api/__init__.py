@@ -34,12 +34,14 @@ next reader looking. `tests/test_client.py::ModuleClientAttachmentTest` globs
 this directory and asserts every module carries a `functools.cached_property` of
 its own name on `Client` and that the property caches.
 
-**A module that declares no op has no property, and the walk skips it.** Two do:
-`exonet` is an abstract base class and a registry, `endpoints` is four wire
-types, and design section 0.1 puts both in this package for the same reason --
-excluding a module means excluding its ops, not its types, and
-`mod.nodes.node_info` cannot decode without `mod.tcp.endpoint`. A `client.exonet`
-would name a set of ops that does not exist. The walks identify such a module by
+**A module that declares no op has no property, and the walk skips it.** Three
+do. `exonet` is an abstract base class and a registry and `endpoints` is four
+wire types, and design section 0.1 puts both in this package for the same reason
+-- excluding a module means excluding its ops, not its types, and
+`mod.nodes.node_info` cannot decode without `mod.tcp.endpoint`. `policy` is
+`policy.delegate`, astral-go's `api/policy` type that `apphost` and `user` both
+store, and no astrald module is named `policy`. A `client.exonet` would name a
+set of ops that does not exist. The walks identify such a module by
 what it declares rather than by a list: no subclass of `base.ModuleClient`, no
 property.
 
@@ -68,6 +70,7 @@ from . import ip
 from . import nat
 from . import nodes
 from . import objects
+from . import policy
 from . import services
 from . import shell
 from . import tree
@@ -137,6 +140,7 @@ __all__ = [
     "nodes",
     "objects",
     "parse_endpoint",
+    "policy",
     "services",
     "shell",
     "tree",

@@ -147,6 +147,8 @@ src/astral/
     ip.py                Tier 2. Three ops, mod.ip.ip_address.
     exonet.py            Tier 2. Endpoint ABC + endpoint type registry.
     endpoints.py         Codec-only tcp/tor/gateway/kcp endpoint types (no dialing).
+    policy.py            Codec-only policy.delegate, the admission delegate apphost
+                         and user store (no ops).
     nodes.py             Tier 3, gated. Seven ops, link/session info, node_info base62.
     nat.py               Tier 3, gated. Three of five ops (see §4.7).
     shell.py             shell.spec -> routing.op_spec. Introspection helper.
@@ -1168,8 +1170,8 @@ Rules every module client obeys:
    `mod.` is never part of an op name. Exceptions to the prefix rule that must be spelled
    literally: `apphost.access_token`, `services.update`, `objects.search_query`,
    `objects.query_tag`, `nat.hole`, `nat.endpoint`, `bip137sig.entropy`, `bip137sig.seed`,
-   and the plural `mod.users.swarm_member` / `mod.users.created_user_info` alongside the
-   singular `mod.user.*`.
+   `policy.delegate`, and the plural `mod.users.swarm_member` /
+   `mod.users.created_user_info` alongside the singular `mod.user.*`.
 7. **Never port an astral-go client bug.** The known set: `dir.apply_filters` queries
    `dir.set_alias`; `objects.new_mem` sends `size` as an int64 where the op wants a size
    string; `objects.read` hardcodes `zone=dvn`; `objects.register_blueprint` and

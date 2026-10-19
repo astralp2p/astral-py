@@ -1,18 +1,25 @@
-"""The `apphost` module client, its two data types, and the eager-import rule.
+"""The `apphost` module client, its data types, and the eager-import rule.
 
 Three tiers in one file, because they assert three different things about the
 same ten ops:
 
 - **Tier A** pins the wire: `apphost.access_token` byte for byte, the missing
   `mod.` prefix that would make every token frame undecodable, and the registry
-  contents -- including the one type that must *not* be there.
+  contents -- including the one type that must *not* be there. The two app
+  registration policy types are pinned against **astral-go's own output**:
+  every vector in `POLICY_GO_VECTORS` was produced by a Go program linked
+  against astral-go `221ce52`, printing `hex.EncodeToString` of what `WriteTo`
+  wrote, `json.Marshal` of the value, the line `channel.TextSender` wrote, and
+  `astral.ResolveObjectID`.
 - **Tier B** pins the query strings and the shapes against `MockApphost`. A
   module client is argument marshalling plus one call, so the marshalling is
   what can be wrong: a capitalised key is silently dropped by the node, an
   omitted parameter and an empty one are different things, and an op's mode is a
   declaration that a test has to make as well.
 - **Tier C** asks the node, and only through the three read-only anonymous-safe
-  ops. Skipped with a reason when `ASTRAL_TEST_ENDPOINT` is unset.
+  ops and the read-only `objects.get_blueprint`, `objects.new` and
+  `objects.echo` for the two policy types. Skipped with a reason when
+  `ASTRAL_TEST_ENDPOINT` is unset.
 
 The assertion that is not about apphost at all: **importing `astral.api` imports
 every module in the package.** Wire-type registration is a side effect of import,
@@ -25,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import pathlib
 import sys
 import unittest
@@ -45,12 +53,20 @@ from astral.api.apphost import (
     AccessToken,
     APPHOST_TYPES,
     Apphost,
+    AppRegisterDecision,
+    AppRegisterRequest,
     _duration,
     _object_id,
     apphost_types,
 )
+from astral.api.auth import AuthorizerAssignment, Permit
+from astral.blueprint import of as blueprint_of
+from astral.blueprint import spec_of
 from astral.client import Client, connect
-from astral.codec import decode, encode
+from astral.codec import decode, encode, jsoncodec
+from astral.codec.binary import object_reader, payload_bytes
+from astral.codec.text import decode as text_decode
+from astral.codec.text import encode as text_encode
 from astral.errors import (
     BadArgumentType,
     ProtocolError,
@@ -59,9 +75,10 @@ from astral.errors import (
     RemoteError,
 )
 from astral.object import Ack
+from astral.objectid import object_id
 from astral.registry import default_blueprints
 from astral.session import Session, flush_cancels
-from astral.spec import Primitive
+from astral.spec import Primitive, Slice
 from astral.transport import Transport
 from astral.types import Duration, Identity, Nonce, ObjectID, Time, Zone
 from astral.wire import Writer
@@ -76,6 +93,7 @@ from mock_apphost import (
     MockApphost,
     Reject,
     bounded,
+    frame,
     socket_fds,
     until,
 )
@@ -117,6 +135,101 @@ def access_token_payload(
 
 
 TOKEN_FRAME = ("apphost.access_token", access_token_payload())
+
+GRANT = Permit(action="mod.objects.read_object_action")
+CONTRACT_PERMIT = Permit(action="mod.auth.see_objects_action", delegation=1)
+REGISTER_REQUEST = AppRegisterRequest(
+    origin="https://app.example",
+    name="chat",
+    grant_permits=[GRANT],
+    contract_permits=[CONTRACT_PERMIT],
+)
+REGISTER_DECISION = AppRegisterDecision(
+    allow=True,
+    grant_permits=[GRANT],
+    contract_permits=[CONTRACT_PERMIT],
+    authorizers=[
+        AuthorizerAssignment(
+            action="mod.auth.see_objects_action",
+            endpoint="astral://control-plane:control.authorize",
+            timeout=Duration(30 * 10**9),
+        )
+    ],
+)
+
+# Name -> (value, payload hex, JSON, text line, ObjectID), each string astral-go
+# `221ce52`'s output for the Go struct literal the value mirrors.
+POLICY_GO_VECTORS: dict[str, tuple[object, str, str, str, str]] = {
+    "app_register_request_full": (
+        REGISTER_REQUEST,
+        "13" "68747470733a2f2f6170702e6578616d706c65"
+        "04" "63686174"
+        "00000001" "01" "1e" "6d6f642e6f626a656374732e726561645f6f626a6563745f616374696f6e"
+        "00" "00"
+        "00000001" "01" "1b" "6d6f642e617574682e7365655f6f626a656374735f616374696f6e"
+        "00" "01",
+        '{"ContractPermits":[{"Action":"mod.auth.see_objects_action","Constraints":null,'
+        '"Delegation":1}],"GrantPermits":[{"Action":"mod.objects.read_object_action",'
+        '"Constraints":null,"Delegation":0}],"Name":"chat","Origin":"https://app.example"}',
+        "#[mod.apphost.app_register_request]:E2h0dHBzOi8vYXBwLmV4YW1wbGUEY2hhdAAAAAEBHm1v"
+        "ZC5vYmplY3RzLnJlYWRfb2JqZWN0X2FjdGlvbgAAAAAAAQEbbW9kLmF1dGguc2VlX29iamVjdHNf"
+        "YWN0aW9uAAE=",
+        "data1ex864ipz7mw8uimywtgieujgriwmugom1o4x5kfeuf8msubtjjfxb",
+    ),
+    "app_register_request_zero": (
+        AppRegisterRequest(),
+        "00" "00" "00000000" "00000000",
+        '{"ContractPermits":[],"GrantPermits":[],"Name":"","Origin":""}',
+        "#[mod.apphost.app_register_request]:AAAAAAAAAAAAAA==",
+        "data1n99e6c1kabwtx5dbifp44mqw5c9qictecizqpe9ok8kxytxmqk4wo",
+    ),
+    "app_register_decision_full": (
+        REGISTER_DECISION,
+        "01"
+        "00000001" "01" "1e" "6d6f642e6f626a656374732e726561645f6f626a6563745f616374696f6e"
+        "00" "00"
+        "00000001" "01" "1b" "6d6f642e617574682e7365655f6f626a656374735f616374696f6e"
+        "00" "01"
+        "00000001" "01" "1b" "6d6f642e617574682e7365655f6f626a656374735f616374696f6e"
+        "00"
+        "28" "61737472616c3a2f2f636f6e74726f6c2d706c616e653a636f6e74726f6c2e617574686f72697a65"
+        "00000006fc23ac00" "00" "00" "00",
+        '{"Allow":true,"Authorizers":[{"Action":"mod.auth.see_objects_action","Actor":null,'
+        '"Endpoint":"astral://control-plane:control.authorize","Timeout":30000000000,'
+        '"TokenEnv":"","TokenFile":"","TokenValue":""}],"ContractPermits":[{"Action":'
+        '"mod.auth.see_objects_action","Constraints":null,"Delegation":1}],"GrantPermits":'
+        '[{"Action":"mod.objects.read_object_action","Constraints":null,"Delegation":0}]}',
+        "#[mod.apphost.app_register_decision]:AQAAAAEBHm1vZC5vYmplY3RzLnJlYWRfb2JqZWN0X2Fj"
+        "dGlvbgAAAAAAAQEbbW9kLmF1dGguc2VlX29iamVjdHNfYWN0aW9uAAEAAAABARttb2QuYXV0aC5z"
+        "ZWVfb2JqZWN0c19hY3Rpb24AKGFzdHJhbDovL2NvbnRyb2wtcGxhbmU6Y29udHJvbC5hdXRob3Jp"
+        "emUAAAAG/COsAAAAAA==",
+        "data1ccwokrd8kr4k4i317uqioct7wnrkjzhkcxp49jx6aq8kktby7nk48",
+    ),
+    "app_register_decision_zero": (
+        AppRegisterDecision(),
+        "00" "00000000" "00000000" "00000000",
+        '{"Allow":false,"Authorizers":[],"ContractPermits":[],"GrantPermits":[]}',
+        "#[mod.apphost.app_register_decision]:AAAAAAAAAAAAAAAAAA==",
+        "data1d8d7596ja3jxebk333ugycds9s514bno1idw7gfaxfjnq3si38d1b",
+    ),
+}
+
+# `objects.get_blueprint?type=<name>` on an isolated astrald built from
+# `1286a469`, decoded.
+POLICY_BLUEPRINTS = {
+    "mod.apphost.app_register_request": [
+        ("Origin", Primitive("string8")),
+        ("Name", Primitive("string8")),
+        ("GrantPermits", Slice("mod.auth.permit")),
+        ("ContractPermits", Slice("mod.auth.permit")),
+    ],
+    "mod.apphost.app_register_decision": [
+        ("Allow", Primitive("bool")),
+        ("GrantPermits", Slice("mod.auth.permit")),
+        ("ContractPermits", Slice("mod.auth.permit")),
+        ("Authorizers", Slice("mod.auth.authorizer_assignment")),
+    ],
+}
 
 
 def error_frame(message: str) -> tuple[str, bytes]:
@@ -182,6 +295,96 @@ class AccessTokenTest(unittest.TestCase):
         )
         self.assertTrue(past.expired)
         self.assertFalse(future.expired)
+
+
+class AppRegisterPolicyTypesTest(unittest.TestCase):
+    """The app registration policy's question and answer, against astral-go."""
+
+    def test_every_value_encodes_to_the_go_bytes(self):
+        for name, (value, payload, _, _, _) in POLICY_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                self.assertEqual(payload_bytes(value).hex(), payload)
+
+    def test_the_go_bytes_decode_to_every_value(self):
+        for name, (value, payload, _, _, _) in POLICY_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                got = type(value).read_payload(object_reader(bytes.fromhex(payload)))
+                self.assertEqual(got, value)
+
+    def test_the_go_json_decodes_to_every_value(self):
+        for name, (value, _, go_json, _, _) in POLICY_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                got = jsoncodec.unmarshal(value.ASTRAL_TYPE, json.loads(go_json))
+                self.assertEqual(got, value)
+
+    def test_a_populated_value_marshals_to_the_go_json(self):
+        for name in ("app_register_request_full", "app_register_decision_full"):
+            value, _, go_json, _, _ = POLICY_GO_VECTORS[name]
+            with self.subTest(vector=name):
+                self.assertEqual(jsoncodec.marshal(value), json.loads(go_json))
+
+    def test_an_empty_list_marshals_to_null_where_go_sends_an_array(self):
+        """The divergence `test_api_auth.DivergenceTest` pins for
+        `mod.auth.contract`'s `Permits`: the SDK's JSON codec maps an empty
+        container to `null`, astral-go `Objectify` emits `[]`, and each side
+        reads the other's form back to the same value."""
+        for name in ("app_register_request_zero", "app_register_decision_zero"):
+            value, _, go_json, _, _ = POLICY_GO_VECTORS[name]
+            with self.subTest(vector=name):
+                theirs = json.loads(go_json)
+                mine = jsoncodec.marshal(value)
+                lists = {key for key, item in theirs.items() if item == []}
+                self.assertTrue(lists)
+                self.assertEqual({key: mine[key] for key in lists}, dict.fromkeys(lists))
+                self.assertEqual(
+                    {k: v for k, v in mine.items() if k not in lists},
+                    {k: v for k, v in theirs.items() if k not in lists},
+                )
+
+    def test_the_text_line_is_the_go_line_both_ways(self):
+        for name, (value, _, _, line, _) in POLICY_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                self.assertEqual(text_encode(value), line)
+                self.assertEqual(text_decode(line), value)
+
+    def test_every_object_id_is_the_go_object_id(self):
+        for name, (value, _, _, _, oid) in POLICY_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                self.assertEqual(str(object_id(value)), oid)
+
+    def test_every_field_declaration_matches_the_node_s_blueprint(self):
+        for cls in (AppRegisterRequest, AppRegisterDecision):
+            with self.subTest(type=cls.ASTRAL_TYPE):
+                expected = POLICY_BLUEPRINTS[cls.ASTRAL_TYPE]
+                self.assertEqual([(f.wire_name, f.spec) for f in cls.FIELDS], expected)
+                got = blueprint_of(cls)
+                self.assertEqual([(f.name, spec_of(f.spec)) for f in got.fields], expected)
+
+    def test_every_anchor_lands_on_its_claim(self):
+        """The `path:line` citations in the two docstrings, read at the pins."""
+        cites = (
+            (reference.ASTRAL_GO, "api/apphost/app_register_policy.go", 12,
+             "AppRegisterRequest is what the app registration policy decides on"),
+            (reference.ASTRAL_GO, "api/apphost/app_register_policy.go", 26, "}"),
+            (reference.ASTRAL_GO, "api/apphost/app_register_policy.go", 46,
+             "AppRegisterDecision is the app registration policy's answer"),
+            (reference.ASTRAL_GO, "api/apphost/app_register_policy.go", 57,
+             "Authorizers []*auth.AuthorizerAssignment"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 50,
+             "carries ServeApps whatever the app asked for"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 51,
+             "serveAppsGrantRequest"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 83, "dec.Validate()"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 85,
+             "ErrRegistrationDeclined"),
+        )
+        for repo, path, number, fragment in cites:
+            with self.subTest(citation=f"{path}:{number}"):
+                try:
+                    line = reference.cited_line(repo, path, number)
+                except reference.Unavailable as exc:  # pragma: no cover
+                    self.skipTest(str(exc))
+                self.assertIn(fragment, line)
 
 
 class RegistryTest(unittest.TestCase):
@@ -798,6 +1001,57 @@ class LiveApphostTest(live_support.LiveCase):
                     pass
                 self.assertEqual(s.terminated_by, "eos")
                 self.assertTrue(s.saw_eos)
+        await self.assert_no_open_sockets()
+
+
+class LiveAppRegisterPolicyTypesTest(live_support.LiveCase):
+    """The node's own layout, zero value and codec for the two policy types.
+
+    Read-only. `objects.get_blueprint` describes a type, `objects.new` builds a
+    zero value server-side and `objects.echo` sends back what it decoded;
+    none writes anything.
+    """
+
+    @bounded(30.0)
+    async def test_the_node_derives_the_blueprint_this_module_derives(self):
+        async with await self.client() as client:
+            for name, fields in POLICY_BLUEPRINTS.items():
+                with self.subTest(type=name):
+                    got = await client.call_one(
+                        f"objects.get_blueprint?type={name}", timeout=20.0
+                    )
+                    self.assertEqual(str(got.type), name)
+                    self.assertEqual(
+                        [(str(f.name), spec_of(f.spec)) for f in got.fields], fields
+                    )
+        await self.assert_no_open_sockets()
+
+    @bounded(30.0)
+    async def test_the_node_builds_the_zero_value_this_module_builds(self):
+        async with await self.client() as client:
+            for cls in (AppRegisterRequest, AppRegisterDecision):
+                with self.subTest(type=cls.ASTRAL_TYPE):
+                    body = await client.call_raw(
+                        f"objects.new?type={cls.ASTRAL_TYPE}", timeout=20.0
+                    )
+                    self.assertEqual(body, frame(cls.ASTRAL_TYPE, payload_bytes(cls())))
+        await self.assert_no_open_sockets()
+
+    @bounded(30.0)
+    async def test_a_populated_value_survives_the_node_s_own_codec(self):
+        """`objects.echo?strict=true` decodes the frame through the node's
+        registry and re-encodes it from the decoded value."""
+        async with await self.client() as client:
+            for value in (REGISTER_REQUEST, REGISTER_DECISION):
+                with self.subTest(type=value.ASTRAL_TYPE):
+                    async with client.stream(
+                        "objects.echo?strict=true", timeout=20.0
+                    ) as stream:
+                        await stream.send(value)
+                        await stream.send_eos()
+                        got = [obj async for obj in stream]
+                    self.assertEqual(got, [value])
+                    self.assertEqual(payload_bytes(got[0]), payload_bytes(value))
         await self.assert_no_open_sockets()
 
 
