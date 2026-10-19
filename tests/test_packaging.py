@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import importlib
 import pathlib
+import pkgutil
 import re
 import tomllib
 import unittest
@@ -62,6 +63,16 @@ class FacadeTest(unittest.TestCase):
         for name in astral.__all__:
             with self.subTest(name=name):
                 self.assertTrue(hasattr(astral, name))
+
+    def test_every_modules_all_names_only_what_it_defines(self):
+        """`astral.api.apphost.__all__` kept `OP_NEW_APP_CONTRACT` and
+        `OP_SIGN_APP_CONTRACT` after `a332e73` retired both, so
+        `from astral.api.apphost import *` raised `AttributeError`."""
+        for info in pkgutil.walk_packages(astral.__path__, "astral."):
+            module = importlib.import_module(info.name)
+            for name in getattr(module, "__all__", ()):
+                with self.subTest(module=info.name, name=name):
+                    self.assertTrue(hasattr(module, name))
 
     def test_the_exception_hierarchy_is_complete_and_rooted(self):
         """`except astral.AstralError` is the documented catch-all, so every
