@@ -255,6 +255,7 @@ from ..types import Duration, Identity, Nonce, ObjectID, Time, Zone
 from .auth import Action, Contract, Permit, SignedContract
 from .base import ModuleClient
 from .crypto import Signature
+from .policy import setter_query
 
 __all__ = [
     "AdminSwarmAction",
@@ -374,7 +375,6 @@ is effective only once the ban has propagated to the node being invited.
 _OBJECT_ID: Final[Spec] = Primitive("object_id.sha256")
 _STRING8: Final[Spec] = Primitive("string8")
 _UINT64: Final[Spec] = Primitive("uint64")
-_DURATION: Final[Spec] = Primitive("duration")
 _ZONE: Final[Spec] = Primitive("zone")
 
 
@@ -1162,7 +1162,7 @@ class User(ModuleClient):
         the node itself, or a `timeout` above ten minutes is an
         `error_message` and arrives as `RemoteError`.
         """
-        qs = _policy_query(OP_SET_SWARM_JOIN_POLICY, identity, operation, timeout)
+        qs = setter_query(OP_SET_SWARM_JOIN_POLICY, identity, operation, timeout)
         self._expect(await self._c.call_one(qs, **kw), Ack, OP_SET_SWARM_JOIN_POLICY)
 
     async def set_swarm_invite_policy(
@@ -1179,7 +1179,7 @@ class User(ModuleClient):
         `set_swarm_join_policy`'s arguments and answers, for the policy
         `user.accept_membership` asks.
         """
-        qs = _policy_query(OP_SET_SWARM_INVITE_POLICY, identity, operation, timeout)
+        qs = setter_query(OP_SET_SWARM_INVITE_POLICY, identity, operation, timeout)
         self._expect(
             await self._c.call_one(qs, **kw), Ack, OP_SET_SWARM_INVITE_POLICY
         )
@@ -1285,37 +1285,6 @@ def _targeted(op: str, node: Identity | str) -> str:
     """`<op>?identity=<name>`, the query string `adopt` and `expel` share."""
     return querystring.build(
         op, {"identity": _param(_STRING8, _name(node, op, "identity"))}
-    )
-
-
-def _policy_query(
-    op: str,
-    identity: Identity | str | None,
-    operation: str | None,
-    timeout: Duration | str | None,
-) -> str:
-    """The query string the two policy setters share.
-
-    Both names or neither: the op answers an `error_message` for one alone, so
-    that is refused before a query leaves.
-    """
-    if (identity is None) != (operation is None):
-        raise BadArgument(
-            f"{op}: identity and operation name one delegate together; pass "
-            "both, or neither to restore the bundled policy"
-        )
-    params: dict[str, Any] = {}
-    if identity is not None:
-        params["identity"] = _name(identity, op, "identity")
-        params["operation"] = operation
-    if timeout is not None:
-        params["timeout"] = Duration.parse(timeout) if isinstance(timeout, str) else timeout
-    return querystring.build(
-        op,
-        ModuleClient._encode(
-            {"identity": _STRING8, "operation": _STRING8, "timeout": _DURATION},
-            params,
-        ),
     )
 
 

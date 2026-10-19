@@ -3,8 +3,8 @@
 apphost is the node module the IPC protocol is named after: it owns the guest
 sessions, the access tokens that authenticate them, the inbound-handler
 registrations, and the object holds a local app uses to keep an object from
-being collected. Ten ops have a client below, all of them confirmed present on
-the live node's `shell.spec` registry. astrald's apphost registry holds more
+being collected. Eleven ops have a client below, all of them confirmed present
+on the live node's `shell.spec` registry. astrald's apphost registry holds more
 than this SDK drives; *Authorization* counts it at a named revision.
 
 | Op | Mode | Answer | Notes |
@@ -13,7 +13,8 @@ than this SDK drives; *Authorization* counts it at a named revision.
 | `apphost.list_tokens` | ST | `apphost.access_token`* + `eos` | local-only, admin action, see below |
 | `apphost.list_held_objects` | ST | `object_id.sha256`* + `eos` | local-only, per caller |
 | `apphost.create_token` | RR | `apphost.access_token` | local-only, admin action, see below |
-| `apphost.register` | RR | `apphost.access_token` | policy-gated |
+| `apphost.register` | RR | `apphost.access_token` \\| `error_message` | policy-gated, **mutates** |
+| `apphost.set_app_register_policy` | RR | `ack` \\| `error_message` | admin action, **mutates** |
 | `apphost.hold_object` | RR | `ack` | local-only, needs a caller |
 | `apphost.unhold_object` | RR | `ack` | local-only, needs a caller |
 | `apphost.register_handler` | RR | `ack` | local-only, `serve_apps` |
@@ -90,12 +91,23 @@ and `set_app_register_policy`. One asks `mod.auth.serve_apps_action`:
 
 **`apphost.set_app_register_policy` delegates the decision on every
 `apphost.register` to an op of another identity**, or with no delegate named
-restores the bundled accept-all policy (`op_set_app_register_policy.go`). It has
-no client here, as the grant surface has none. It asks the action before it
+restores the bundled accept-all policy (`op_set_app_register_policy.go:38-44`);
+`set_app_register_policy()` below is its client. It asks the action before it
 accepts and refuses no origin, so a network caller holding the permit reaches
-it. The node stores the delegate as a `policy.delegate` (`astral.api.policy`),
-asks it with a `mod.apphost.app_register_request` and reads a
+it (`op_set_app_register_policy.go:31-35`). The node stores the delegate as a
+`policy.delegate` (`astral.api.policy`), asks it with a
+`mod.apphost.app_register_request` and reads a
 `mod.apphost.app_register_decision` back; both are declared below.
+
+**`apphost.register` takes three arguments, and the policy reads all three.**
+`grant_permits` and `contract_permits` are each one comma-separated string of
+action names, and `name` is the app's own unverified claim
+(`op_register.go:23-39`). The node splits each list on every comma, trims
+each piece, and drops a blank one (`parse_permits.go:12-17`). The grant
+request always opens with `mod.auth.serve_apps_action`
+(`register_serve_apps.go:15-17`), and the trusted-web-origin permits precede
+the asked contract permits (`op_register.go:56`). The bundled policy answers
+with both lists as asked (`mod/apphost/register_policy.go:33-38`).
 
 **A local caller holding no token passes the action check, because it arrives
 wearing the node's identity.** `mod/user/src/authorize_user_or_node.go:16-21`
@@ -121,10 +133,10 @@ from __future__ import annotations
 
 import asyncio
 import datetime as _dt
-from typing import Any, Final, Sequence
+from typing import Any, Final, Iterable, Sequence
 
 from .. import querystring
-from ..errors import BadArgumentType, ProtocolError
+from ..errors import BadArgument, BadArgumentType, ProtocolError
 from ..object import Ack
 from ..record import record, wire
 from ..session import (
@@ -153,6 +165,7 @@ from ..stream import Stream
 from ..types import Duration, Identity, Nonce, ObjectID, Time, Zone
 from .auth import AuthorizerAssignment, Permit
 from .base import ModuleClient
+from .policy import setter_query
 
 __all__ = [
     "AccessToken",
@@ -165,6 +178,7 @@ __all__ = [
     "AuthSuccessMsg",
     "AuthTokenMsg",
     "BindMsg",
+    "ERR_REGISTRATION_DECLINED",
     "ErrorMsg",
     "HandleQueryMsg",
     "HostInfoMsg",
@@ -177,6 +191,7 @@ __all__ = [
     "OP_LIST_TOKENS",
     "OP_REGISTER",
     "OP_REGISTER_HANDLER",
+    "OP_SET_APP_REGISTER_POLICY",
     "OP_UNHOLD_OBJECT",
     "OP_WHOAMI",
     "PingMsg",
@@ -198,7 +213,17 @@ OP_HOLD_OBJECT: Final = "apphost.hold_object"
 OP_LIST_HELD_OBJECTS: Final = "apphost.list_held_objects"
 OP_LIST_TOKENS: Final = "apphost.list_tokens"
 OP_REGISTER: Final = "apphost.register"
+OP_SET_APP_REGISTER_POLICY: Final = "apphost.set_app_register_policy"
 OP_UNHOLD_OBJECT: Final = "apphost.unhold_object"
+
+ERR_REGISTRATION_DECLINED: Final = "registration declined"
+"""`register`: the register policy refused, or could not decide.
+
+The node accepts the query before its policy decides and then sends this as
+an `error_message`, which surfaces as `RemoteError` with this `message`
+(`api/apphost/errors.go:5-7` at astral-go `221ce52`, sent at
+`mod/apphost/src/op_register.go:75-86`).
+"""
 
 
 # --- parameter specs -----------------------------------------------------
@@ -236,6 +261,17 @@ _CANCEL: Final[dict[str, Spec]] = {
     "query_id": Primitive("nonce64"),
     "cause": Primitive("string8"),
 }
+# `routing.op_spec` reports a Go `string` argument as `string8`
+# (`lib/query/field_editor.go:41-42` at astral-go `221ce52`); the node binds the
+# whole value to the field, so the joined permit list carries no 255-byte bound.
+_REGISTER: Final[dict[str, Spec]] = {
+    "grant_permits": Primitive("string8"),
+    "contract_permits": Primitive("string8"),
+    "name": Primitive("string8"),
+}
+
+_STRING8_MAX: Final = 255
+"""The longest `string8` astral-go writes (`astral/string_types.go:25-27`)."""
 
 
 # --- the data types -------------------------------------------------------
@@ -357,6 +393,72 @@ def _duration(value: Duration | int | _dt.timedelta | None) -> Duration | None:
     return Duration(int(value))
 
 
+def _permits(values: Iterable[str] | None, key: str) -> str | None:
+    """A permit-list argument of `apphost.register`, joined as the node splits it.
+
+    `None` and an empty list send no argument, as astral-go's client does
+    (`api/apphost/client/register.go:70-73`). The node splits on every comma and
+    trims each piece (`parse_permits.go:12-17`), so a name that carries a comma,
+    is blank, or has surrounding whitespace would be read as an action the
+    caller did not name; each is refused. An action name is a `string8` in
+    `mod.auth.permit`, and the node fails the registration after minting the
+    identity when it cannot encode one (`op_register.go:137-141`), so a name
+    over 255 UTF-8 bytes is refused too. A bare `str` is refused rather than
+    iterated character by character.
+    """
+    if values is None:
+        return None
+    if isinstance(values, (str, bytes)):
+        raise BadArgumentType(
+            f"{OP_REGISTER}: {key} expects a list of action names, got "
+            f"{type(values).__name__}"
+        )
+    names = list(values)
+    for name in names:
+        if not isinstance(name, str):
+            raise BadArgumentType(
+                f"{OP_REGISTER}: {key} expects action names, got "
+                f"{type(name).__name__}"
+            )
+        if "," in name:
+            raise BadArgument(
+                f"{OP_REGISTER}: {key} entry {name!r} contains a comma; the node "
+                "splits the list on commas and would read two actions"
+            )
+        if not name or name != name.strip():
+            raise BadArgument(
+                f"{OP_REGISTER}: {key} entry {name!r} is blank or padded; the "
+                "node trims every entry and drops a blank one"
+            )
+        if len(name.encode("utf-8")) > _STRING8_MAX:
+            raise BadArgument(
+                f"{OP_REGISTER}: {key} entry is {len(name.encode('utf-8'))} bytes; "
+                f"an action name is a string8 of at most {_STRING8_MAX}"
+            )
+    return ",".join(names) if names else None
+
+
+def _app_name(value: str | None) -> str | None:
+    """`apphost.register`'s `name`: a `string8` in the request the policy reads.
+
+    A name over 255 UTF-8 bytes fails to encode when the node puts the request
+    to a delegate, and the node then declines the registration
+    (`op_register.go:69-78`), so it is refused here.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise BadArgumentType(
+            f"{OP_REGISTER}: name expects a str, got {type(value).__name__}"
+        )
+    if len(value.encode("utf-8")) > _STRING8_MAX:
+        raise BadArgument(
+            f"{OP_REGISTER}: name is {len(value.encode('utf-8'))} bytes; it is a "
+            f"string8 of at most {_STRING8_MAX}"
+        )
+    return value
+
+
 # One implementation, on `ModuleClient`. These names stay because the call sites
 # and the tests spell them, but the bodies are the base class's: four spellings
 # of one encoder across six modules is how thirteen dialects start.
@@ -468,18 +570,77 @@ class Apphost(ModuleClient):
         qs = querystring.build(OP_CREATE_TOKEN, _encode(_IDENTITY, params))
         return self._expect(await self._c.call_one(qs, **kw), AccessToken, OP_CREATE_TOKEN)
 
-    async def register(self, **kw: Any) -> AccessToken:
-        """Provision a fresh guest identity and a token for it. RR.
+    async def register(
+        self,
+        grant_permits: Iterable[str] | None = None,
+        contract_permits: Iterable[str] | None = None,
+        *,
+        name: str | None = None,
+        **kw: Any,
+    ) -> AccessToken:
+        """Provision a fresh guest identity and a token for it. RR, one object,
+        then EOF. **Mutates.**
 
         The node generates a key pair, signs an app contract for it and answers
         with the token, so this is the bootstrap an app with no credentials
-        starts from. Gated by the node's register policy and by the trusted-web-
-        origin table: a node that declines answers `query_rejected_msg{1}`, which
-        arrives as `QueryRejected`.
+        starts from. The token and every permit written expire after ten years
+        (`op_register.go:17,132,182`).
 
-        Absent from astral-go entirely; the docs are ahead of it here.
+        `grant_permits` names the actions to hold as node-local grants and
+        `contract_permits` the actions to hold in a signed node-to-app contract;
+        `name` is shown to a delegated policy and the node does not verify it.
+        Asking is not receiving: the node's register policy decides what is
+        written, on which rail, and the answer carries the token alone. Each
+        list travels as one comma-joined argument, and an omitted or empty list
+        sends none. An action name that carries a comma, is blank, has
+        surrounding whitespace, or exceeds 255 UTF-8 bytes raises `BadArgument`
+        before a query leaves, as does a `name` over 255 bytes.
+
+        The node accepts the query before its register policy decides, so a
+        refusal is an `error_message` reading `ERR_REGISTRATION_DECLINED` and
+        arrives as `RemoteError` (`op_register.go:58-60,75-86`).
+
+        astral-go's `Register(ctx, permits...)` sends `grant_permits` alone
+        (`api/apphost/client/register.go:38-82`).
         """
-        return self._expect(await self._c.call_one(OP_REGISTER, **kw), AccessToken, OP_REGISTER)
+        params = {
+            "grant_permits": _permits(grant_permits, "grant_permits"),
+            "contract_permits": _permits(contract_permits, "contract_permits"),
+            "name": _app_name(name),
+        }
+        qs = querystring.build(OP_REGISTER, _encode(_REGISTER, params))
+        return self._expect(await self._c.call_one(qs, **kw), AccessToken, OP_REGISTER)
+
+    async def set_app_register_policy(
+        self,
+        identity: Identity | str | None = None,
+        operation: str | None = None,
+        *,
+        timeout: Duration | str | None = None,
+        **kw: Any,
+    ) -> None:
+        """Delegate the app register policy, or restore the bundled one. RR, one
+        `ack`. **Mutates.**
+
+        `identity` and `operation` name the delegate's op; the node resolves
+        `identity` through its directory. Both omitted restore the bundled
+        accept-all policy, and one without the other is refused here, as the
+        node refuses it. `timeout` bounds one question in Go's duration syntax;
+        omitted, the node waits ten minutes (`op_set_app_register_policy.go:13-23`).
+
+        Rejects before accepting when the caller lacks
+        `mod.auth.admin_manage_apps_action`, and refuses no origin
+        (`op_set_app_register_policy.go:31-35`). A delegate the node cannot
+        resolve, the node itself, or a `timeout` above ten minutes is an
+        `error_message` and arrives as `RemoteError`
+        (`op_set_app_register_policy.go:46-49,61-71`).
+
+        astral-go `221ce52` has no client for this op.
+        """
+        qs = setter_query(OP_SET_APP_REGISTER_POLICY, identity, operation, timeout)
+        self._expect(
+            await self._c.call_one(qs, **kw), Ack, OP_SET_APP_REGISTER_POLICY
+        )
 
     # --- object holds ---
 

@@ -174,6 +174,11 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/swarm_policy.go", 12): '"/mod/user/policy"',
         ("mod/user/src/swarm_policy.go", 17): "SwarmJoin   tree.Value[*policy.Delegate]",
         ("mod/user/src/swarm_policy.go", 18): "SwarmInvite tree.Value[*policy.Delegate]",
+        ("mod/apphost/src/op_set_app_register_policy.go", 13):
+            "type opSetAppRegisterPolicyArgs struct",
+        ("mod/apphost/src/op_set_app_register_policy.go", 23): "}",
+        ("mod/user/src/op_set_swarm_policy.go", 14): "type opSetSwarmPolicyArgs struct",
+        ("mod/user/src/op_set_swarm_policy.go", 24): "}",
     }
 
     def assert_lands(self, repo: str, anchors: dict) -> None:

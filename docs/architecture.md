@@ -148,7 +148,8 @@ src/astral/
     exonet.py            Tier 2. Endpoint ABC + endpoint type registry.
     endpoints.py         Codec-only tcp/tor/gateway/kcp endpoint types (no dialing).
     policy.py            Codec-only policy.delegate, the admission delegate apphost
-                         and user store (no ops).
+                         and user store, and the query string their setters share
+                         (no ops).
     nodes.py             Tier 3, gated. Seven ops, link/session info, node_info base62.
     nat.py               Tier 3, gated. Three of five ops (see §4.7).
     shell.py             shell.spec -> routing.op_spec. Introspection helper.
@@ -1410,8 +1411,8 @@ crypto.verify_*_signature user.* (reject code 2 on an unclaimed node — itself 
 
 Nothing that mutates state ever runs: no `dir.set_alias`, no `tree.set/delete`, no
 `objects.create/store/delete/purge/push/new_mem/register_*`, no `auth.index`, no
-`services.advertise` binding, no `apphost.register/bind/register_handler/cancel`, no `user.*` writes, no
-`nodes.*` writes, no `nat.punch`.
+`services.advertise` binding, no `apphost.register/set_app_register_policy/bind/register_handler/cancel`,
+no `user.*` writes, no `nodes.*` writes, no `nat.punch`.
 
 Tier C runs with `max_concurrency=4`, every test inside `async with`, and a module-level
 teardown that asserts zero live streams — because a leaked stream burns a node worker
