@@ -224,8 +224,9 @@ answer that does not allow, or no answer, declines
 `user.set_swarm_join_policy` and `user.set_swarm_invite_policy` delegate one of
 them to an op of another identity: `identity` and `operation` name it,
 `timeout` bounds one question, and both names empty restore the bundled policy
-(`mod/user/src/op_set_swarm_policy.go`). The node puts the request to the
-delegate as itself and reads one object back (`api/policy/ask.go`). Both setters
+(`mod/user/src/op_set_swarm_policy.go`). The node stores each delegate as a
+`policy.delegate` (`astral.api.policy`), puts the request to it as itself and
+reads one object back (`api/policy/ask.go`). Both setters
 authorize `mod.auth.admin_manage_apps_action`, not
 `mod.user.admin_swarm_action`, so a node with no active contract can set its
 invite policy, and reject before accepting when it is refused. The delegate

@@ -93,7 +93,9 @@ and `set_app_register_policy`. One asks `mod.auth.serve_apps_action`:
 restores the bundled accept-all policy (`op_set_app_register_policy.go`). It has
 no client here, as the grant surface has none. It asks the action before it
 accepts and refuses no origin, so a network caller holding the permit reaches
-it.
+it. The node stores the delegate as a `policy.delegate` (`astral.api.policy`),
+asks it with a `mod.apphost.app_register_request` and reads a
+`mod.apphost.app_register_decision` back; both are declared below.
 
 **A local caller holding no token passes the action check, because it arrives
 wearing the node's identity.** `mod/user/src/authorize_user_or_node.go:16-21`
@@ -146,15 +148,18 @@ from ..session import (
     RejectIncomingMsg,
     RouteQueryMsg,
 )
-from ..spec import Primitive, Ptr, Spec
+from ..spec import Primitive, Ptr, Slice, Spec
 from ..stream import Stream
 from ..types import Duration, Identity, Nonce, ObjectID, Time, Zone
+from .auth import AuthorizerAssignment, Permit
 from .base import ModuleClient
 
 __all__ = [
     "AccessToken",
     "APPHOST_TYPES",
     "Apphost",
+    "AppRegisterDecision",
+    "AppRegisterRequest",
     "apphost_types",
     "AttachQueryMsg",
     "AuthSuccessMsg",
@@ -233,7 +238,7 @@ _CANCEL: Final[dict[str, Spec]] = {
 }
 
 
-# --- the two data types --------------------------------------------------
+# --- the data types -------------------------------------------------------
 
 
 @record("apphost.access_token")
@@ -265,6 +270,56 @@ class AccessToken:
     def expired(self) -> bool:
         """Whether `ExpiresAt` has passed. **The node does not check this.**"""
         return int(self.expires_at) <= Time.now()
+
+
+# --- the app registration policy types --------------------------------------
+#
+# What the app registration policy is asked and what it answers. The node sends
+# a request to a delegate and reads a decision back; no op of this module
+# answers with one. Each field order is the node's `objects.get_blueprint`
+# answer on astrald `1286a469`, and each is astral-go's
+# `api/apphost/app_register_policy.go`.
+
+
+@record("mod.apphost.app_register_request")
+class AppRegisterRequest:
+    """One `apphost.register`, as the policy sees it.
+
+    `origin` is the caller's web origin, empty for a local IPC caller. `name`
+    is the app's own claim and the node does not verify it. `grant_permits`
+    are the permits the app asked to hold as node-local grants, and
+    `contract_permits` the permits it asked to hold in a signed node-to-app
+    contract, with the origin's trusted-source entitlement already joined
+    (`api/apphost/app_register_policy.go:12-26`). The grant request always
+    carries `mod.auth.serve_apps_action` (`mod/apphost/src/op_register.go:49-51`).
+    """
+
+    origin: str = wire("Origin", Primitive("string8"))
+    name: str = wire("Name", Primitive("string8"))
+    grant_permits: list[Permit | None] = wire("GrantPermits", Slice("mod.auth.permit"))
+    contract_permits: list[Permit | None] = wire("ContractPermits", Slice("mod.auth.permit"))
+
+
+@record("mod.apphost.app_register_decision")
+class AppRegisterDecision:
+    """The app registration policy's answer.
+
+    `allow` false refuses the registration and the node ignores the other
+    fields. Otherwise the node writes exactly the permits listed, on the rail
+    each list names, and records `authorizers` for the new identity
+    (`api/apphost/app_register_policy.go:46-58`). An assignment that is nil,
+    invalid, or names an `actor` fails astral-go's
+    `AppRegisterDecision.Validate`, and the node refuses the registration on it
+    (`mod/apphost/src/op_register.go:83-86`): the delegate names the authorizer
+    and the node names the actor.
+    """
+
+    allow: bool = wire("Allow", Primitive("bool"))
+    grant_permits: list[Permit | None] = wire("GrantPermits", Slice("mod.auth.permit"))
+    contract_permits: list[Permit | None] = wire("ContractPermits", Slice("mod.auth.permit"))
+    authorizers: list[AuthorizerAssignment | None] = wire(
+        "Authorizers", Slice("mod.auth.authorizer_assignment")
+    )
 
 
 # --- argument coercion ---------------------------------------------------
@@ -606,6 +661,8 @@ class Apphost(ModuleClient):
 
 APPHOST_TYPES: Final[Sequence[type]] = (
     AccessToken,
+    AppRegisterDecision,
+    AppRegisterRequest,
     AttachQueryMsg,
     AuthSuccessMsg,
     AuthTokenMsg,
