@@ -1,7 +1,8 @@
 """`auth`: contracts, permits and actions -- the node's authorization vocabulary.
 
-Tier 1, two ops, three wire types and one field base. The ops are the smallest
-surface of any module in this SDK; the types are the largest part of it, because
+Tier 1, five ops, four wire types and one field base. Two ops sign and index
+contracts and three administer external authorizers; the types are the largest
+part of the module, because
 `mod.auth.contract` and `mod.auth.signed_contract` are what two other modules
 exchange -- `user.accept_contract`, `user.accept_membership`, `user.adopt`,
 `user.request_membership` and `user.new_node_contract` all answer with one or
@@ -13,22 +14,39 @@ a per-op contract and is not discoverable from the wire):
 | Op | Mode | Answer | Effect |
 |---|---|---|---|
 | `auth.index` | RR, BD with no `id` | `ack` \\| `error_message`, one per input | **mutates** the local contract index |
+| `auth.list_authorizers` | ST | `mod.auth.authorizer_assignment` x n ++ `eos` | read-only |
+| `auth.remove_authorizer` | RR | `ack` \\| `error_message` | **mutates** |
+| `auth.set_authorizer` | RR | `ack` \\| `error_message` | **mutates** |
 | `auth.sign_contract` | WA | `mod.auth.signed_contract` \\| `error_message`, one per input | privileged, no state written |
 
-Both are the whole of the module. `shell.spec` on `furry-bolt` lists exactly
-`auth.index` and `auth.sign_contract`, verified this session, and astral-go's
-`api/auth/module.go` declares the same two constants. The same two, and no
-others, on astrald `26bb51d5`, verified.
+The five are the whole of the module. `shell.spec` on an isolated astrald built
+from `1286a469` lists exactly these five, verified; `furry-bolt` and astrald
+`26bb51d5` listed `auth.index` and `auth.sign_contract` alone, and astral-go's
+`api/auth/module.go` declares those two constants and no others.
+
+**An external authorizer is the last word on one action type.** The node asks
+its handlers, then the contract chain, and then the authorizer assigned to the
+action type -- the actor's own assignment when one exists, otherwise the
+action-wide one (`astrald/mod/auth/src/authorize.go`). `auth.set_authorizer`
+creates or replaces the assignment for an `action` and an optional `actor`,
+`auth.remove_authorizer` removes it and succeeds on an absent one, and
+`auth.list_authorizers` streams every persisted assignment with its token value
+blanked (`astrald/mod/auth/src/op_list_authorizers.go`). The `endpoint` is an
+`http://` or `https://` URL or `astral://<identity-or-alias>:<op>`, and an
+astral endpoint naming the actor itself is refused
+(`astrald/mod/auth/src/authorizer_assignments.go`). All three authorize
+`mod.auth.admin_manage_apps_action` and reject before accepting when it is
+refused.
 
 **`auth.index` takes its object ID in the query string or its object IDs on the
 body.** `opIndexArgs.ID` is optional (`mod/auth/src/op_index.go` at astrald
-`0c7e3109`), and an omitted `id` makes the op read `object_id.sha256` objects
+`1286a469`), and an omitted `id` makes the op read `object_id.sha256` objects
 off the channel until `eos` or EOF, answering one `ack` or `error_message` per
 input and carrying on past a failed one -- the RR/BD hybrid `objects.contains`,
 `objects.delete`, `objects.load` and `objects.probe` already have. The batch
 goes through astral-go's `channel.Batch`, which answers an explicit `eos` with a
 final `eos` and ends silently after EOF (`astral/channel/batch.go` at astral-go
-`3c849bf`). `index()` is the single form and `index_many()` the batch. Verified
+`221ce52`). `index()` is the single form and `index_many()` the batch. Verified
 on astrald `26bb51d5`: the spec flags `id` `"Required":false`, a bare `eos` on
 the body answers a bare `eos`, two IDs no repository holds answer two `object
 not found` and an `eos`, and the single form answers `object not found` and EOF.
@@ -72,7 +90,7 @@ batch form uses: it reads contracts until `eos` or EOF, answers one
 `mod.auth.signed_contract` or `error_message` per input in input order, and
 **mirrors the input stream's terminator** -- an explicit `eos` is answered with a
 final `eos`, a stream ended by EOF is not (`astral/channel/batch.go` at astral-go
-`3c849bf`). A body-input op whose reader omits an `eos` branch answers the same
+`221ce52`). A body-input op whose reader omits an `eos` branch answers the same
 terminator with an `error_message`
 (`astral-go/astral/channel/switch.go:101`), so the terminator is a per-op
 contract rather than a protocol rule.
@@ -106,12 +124,12 @@ promotes anonymous fields. The nesting is astral-go's rule; the flattening is
 Go's default showing through a gap.
 
 **`auth.Action` is a registered astral object at the pin.**
-`api/auth/action.go` at astral-go `3c849bf` declares
+`api/auth/action.go` at astral-go `221ce52` declares
 `func (Action) ObjectType() string { return "mod.auth.action" }` (line 22) and
 registers it with `astral.MustAdd(&Action{})` (line 55).
 
 That changes what astral-go can derive. `specFromType` probes `tryObjectType`
-ahead of its container dispatch (`astral/blueprint_reflect.go` at `3c849bf`), so
+ahead of its container dispatch (`astral/blueprint_reflect.go` at `221ce52`), so
 an embedded `auth.Action` field now yields a `RefSpec` naming
 `mod.auth.action` rather than failing -- inferred from those two sources, with
 no run behind it.
@@ -174,32 +192,45 @@ import dataclasses
 from typing import Any, Final, Iterable, Sequence
 
 from .. import querystring
-from ..errors import BadArgumentType, ProtocolError
+from ..errors import BadArgument, BadArgumentType, ProtocolError
 from ..object import Ack, Bundle
 from ..objectid import object_id
 from ..record import record, wire
 from ..spec import Primitive, Ptr, Slice, Spec
-from ..types import Identity, Nonce, ObjectID, Time
+from ..types import Duration, Identity, Nonce, ObjectID, Time
 from .base import ModuleClient
 
 __all__ = [
     "AUTH_TYPES",
     "Action",
     "Auth",
+    "AuthorizerAssignment",
     "Contract",
     "OP_INDEX",
+    "OP_LIST_AUTHORIZERS",
+    "OP_REMOVE_AUTHORIZER",
+    "OP_SET_AUTHORIZER",
     "OP_SIGN_CONTRACT",
     "Permit",
     "SignedContract",
 ]
 
 OP_INDEX: Final = "auth.index"
+OP_LIST_AUTHORIZERS: Final = "auth.list_authorizers"
+OP_REMOVE_AUTHORIZER: Final = "auth.remove_authorizer"
+OP_SET_AUTHORIZER: Final = "auth.set_authorizer"
 OP_SIGN_CONTRACT: Final = "auth.sign_contract"
 
 # The parameter specs, so every value travels as the bare payload half of its
 # type's text encoding and nothing re-derives one (design section 5.1, rule 2).
-# `auth.index` declares the module's only parameter.
 _INDEX: Final[dict[str, Spec]] = {"id": Primitive("object_id.sha256")}
+_AUTHORIZER: Final[dict[str, Spec]] = {
+    "action": Primitive("string8"),
+    "endpoint": Primitive("string8"),
+    "actor": Primitive("string8"),
+    "timeout": Primitive("duration"),
+    "token": Primitive("string8"),
+}
 
 
 # --- the action field base ------------------------------------------------
@@ -406,11 +437,36 @@ class SignedContract:
         return self.issuer_sig is not None and self.subject_sig is not None
 
 
+@record("mod.auth.authorizer_assignment")
+class AuthorizerAssignment:
+    """The external authorizer the node asks about one action type.
+
+    `actor` absent makes the assignment action-wide; an assignment naming an
+    actor answers for that actor alone and takes precedence. `endpoint` selects
+    the transport by scheme, and an http endpoint authenticates with at most one
+    of `token_file`, `token_env` and `token_value`. `timeout` bounds one
+    question, and zero takes the node's default. Field order is the node's
+    `objects.get_blueprint` answer on astrald `1286a469` and astral-go's
+    `api/auth/authorizer_assignment.go`.
+
+    `token_value` is a bearer credential. `auth.list_authorizers` never sends
+    one; nothing here redacts a value a caller sets, and `repr` prints it.
+    """
+
+    action: str = wire("Action", Primitive("string8"))
+    actor: Identity | None = wire("Actor", Ptr("identity"))
+    endpoint: str = wire("Endpoint", Primitive("string8"))
+    timeout: Duration = wire("Timeout", Primitive("duration"))
+    token_file: str = wire("TokenFile", Primitive("string8"))
+    token_env: str = wire("TokenEnv", Primitive("string8"))
+    token_value: str = wire("TokenValue", Primitive("string8"))
+
+
 # --- the client -----------------------------------------------------------
 
 
 class Auth(ModuleClient):
-    """The `auth` module's two ops, over one `Client`.
+    """The `auth` module's five ops, over one `Client`.
 
     Constructed as `Auth(client)`. The scaffolding and the `**kw` contract are
     `ModuleClient`'s.
@@ -517,6 +573,78 @@ class Auth(ModuleClient):
             )
         return self._expect(answers[0], SignedContract, OP_SIGN_CONTRACT)
 
+    # --- external authorizers ---
+
+    async def list_authorizers(self, **kw: Any) -> list[AuthorizerAssignment]:
+        """Every persisted external authorizer assignment. ST, ends at `eos`.
+
+        Each assignment's `token_value` arrives empty; a token file or variable
+        arrives by name. Rejects before accepting when the caller lacks
+        `mod.auth.admin_manage_apps_action`.
+        """
+        return [
+            self._expect(obj, AuthorizerAssignment, OP_LIST_AUTHORIZERS)
+            for obj in await self._c.call(OP_LIST_AUTHORIZERS, **kw)
+        ]
+
+    async def set_authorizer(
+        self,
+        action: str,
+        endpoint: str,
+        *,
+        actor: Identity | str | None = None,
+        timeout: Duration | str | None = None,
+        token: str | None = None,
+        **kw: Any,
+    ) -> None:
+        """Create or replace the authorizer for an action type. RR, one `ack`.
+        **Mutates.**
+
+        `action` is the action's object type name and `endpoint` the
+        authorizer's address; both are required by the op. `actor` scopes the
+        assignment to one identity or alias the node resolves, and omitted it
+        is action-wide. `timeout` is Go's duration syntax. `token` is the bearer
+        token for an http endpoint and travels in the query string.
+
+        Rejects before accepting when the caller lacks
+        `mod.auth.admin_manage_apps_action`. An assignment the node cannot
+        build, an unknown actor, or an astral endpoint naming the actor is an
+        `error_message` and arrives as `RemoteError`.
+        """
+        params: dict[str, Any] = {
+            "action": _required(action, "action", OP_SET_AUTHORIZER),
+            "endpoint": _required(endpoint, "endpoint", OP_SET_AUTHORIZER),
+        }
+        if actor is not None:
+            params["actor"] = _actor(actor, OP_SET_AUTHORIZER)
+        if timeout is not None:
+            params["timeout"] = Duration.parse(timeout) if isinstance(timeout, str) else timeout
+        if token is not None:
+            params["token"] = token
+        qs = querystring.build(
+            OP_SET_AUTHORIZER, querystring.encode_params(_AUTHORIZER, params)
+        )
+        self._expect(await self._c.call_one(qs, **kw), Ack, OP_SET_AUTHORIZER)
+
+    async def remove_authorizer(
+        self, action: str, *, actor: Identity | str | None = None, **kw: Any
+    ) -> None:
+        """Remove the authorizer for an action type. RR, one `ack`. **Mutates.**
+
+        `actor` names an actor-specific assignment, and omitted the action-wide
+        one is removed. Removing an absent assignment answers `ack`. Removing an
+        actor's assignment makes the action-wide one apply to it again.
+        """
+        params: dict[str, Any] = {
+            "action": _required(action, "action", OP_REMOVE_AUTHORIZER)
+        }
+        if actor is not None:
+            params["actor"] = _actor(actor, OP_REMOVE_AUTHORIZER)
+        qs = querystring.build(
+            OP_REMOVE_AUTHORIZER, querystring.encode_params(_AUTHORIZER, params)
+        )
+        self._expect(await self._c.call_one(qs, **kw), Ack, OP_REMOVE_AUTHORIZER)
+
 
 # --- argument discipline --------------------------------------------------
 
@@ -524,6 +652,31 @@ class Auth(ModuleClient):
 def _object_id(value: ObjectID | str, op: str = OP_INDEX) -> ObjectID:
     """An `object_id.sha256` parameter, naming the op that refused it."""
     return ModuleClient._object_id(value, op)
+
+
+def _required(value: str, key: str, op: str) -> str:
+    """A required string argument. Empty is refused: the op requires a value."""
+    if not isinstance(value, str):
+        raise BadArgumentType(f"{op}: {key} expects a str, got {type(value).__name__}")
+    if not value:
+        raise BadArgument(f"{op}: {key} is required and empty")
+    return value
+
+
+def _actor(value: Identity | str, op: str) -> str:
+    """An `actor` argument the node resolves: an identity or a name.
+
+    Empty is refused: the op reads an empty actor as action-wide, which is what
+    omitting the argument says.
+    """
+    if isinstance(value, Identity):
+        return value.text()
+    if not value:
+        raise BadArgument(
+            f"{op}: an empty actor means the action-wide assignment; omit actor "
+            "to name that one"
+        )
+    return value
 
 
 def _identity_text(value: Identity | None) -> str:
@@ -536,11 +689,17 @@ def _identity_text(value: Identity | None) -> str:
     return Identity.ANYONE.text() if value is None else value.text()
 
 
-AUTH_TYPES: Final[Sequence[type]] = (Contract, Permit, SignedContract)
+AUTH_TYPES: Final[Sequence[type]] = (
+    AuthorizerAssignment,
+    Contract,
+    Permit,
+    SignedContract,
+)
 """Every wire type this module declares, for a private-registry sweep.
 
 `Action` is absent because it is a field base rather than a type, and
-`mod.auth.sudo_action` because it belongs to astrald.
+`mod.auth.sudo_action` and `mod.auth.authorizer_assignments` because they
+belong to astrald.
 """
 
 Auth.TYPES = AUTH_TYPES

@@ -24,8 +24,8 @@ claim is made at each and the three must agree:
 exercised against the mock only; Tier C is the read-only subset of design
 section 13's anonymous safe list. `objects.new` is never swept over type names.
 `mod.nodes.node_info` is sent like any other name: the supported astral-go
-substitutes the zero identity in `NodeInfo.WriteTo`, and the one live test that
-names that type asserts the node answers its zero value.
+encodes its nil `*Identity` as an absent presence flag, and the one live test
+that names that type asserts the node answers its zero value.
 """
 
 from __future__ import annotations
@@ -810,7 +810,7 @@ class SearchGrammarTest(unittest.TestCase):
         """A query built rather than parsed can hold what the grammar cannot
         spell, and the text channel loses it silently -- `bin`, `json` and
         `canonical` all carry it exactly. The loss is astral-go's
-        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 3c849bf),
+        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 221ce52),
         which a registered searcher parses the same query with, so the SDK
         matching it is what keeps the two agreeing about the question.
 
@@ -1768,8 +1768,9 @@ class NewOpTest(ObjectsCase):
     @bounded()
     async def test_the_node_info_type_is_sent(self):
         """`mod.nodes.node_info`'s zero value holds a nil `*Identity`, and the
-        supported astral-go substitutes the zero identity for it in `WriteTo`
-        (`api/nodes/node_info.go`), so the name is sent like any other."""
+        supported astral-go encodes it through `astral.Objectify` as an absent
+        presence flag (`api/nodes/node_info.go`), so the name is sent like any
+        other."""
         mock = MockApphost(routes={OP_NEW: Accept(objects=[framed(Nil())])})
         async with mock:
             o = await self.objects(mock)
@@ -2593,7 +2594,7 @@ class LiveObjectsTest(live_support.LiveCase):
 
     async def test_new_answers_the_node_info_zero_value(self):
         """`mod.nodes.node_info`'s zero value holds a nil `*Identity`, and the
-        supported astral-go substitutes the zero identity in `WriteTo`. The node
+        supported astral-go encodes it as an absent presence flag. The node
         answers that zero value and keeps serving."""
         self.assertEqual(
             await self.objects.new("mod.nodes.node_info", timeout=20), NodeInfo()
@@ -2676,7 +2677,7 @@ class CitationTest(unittest.TestCase):
         (
             reference.ASTRALD,
             "mod/objects/src/module.go",
-            186,
+            185,
             "probe.ObjectID = r.ID()",
         ),
         (
@@ -2691,6 +2692,10 @@ class CitationTest(unittest.TestCase):
             171,
             "ctx = ctx.WithZone(msg.Zone)",
         ),
+        (reference.ASTRALD, "mod/objects/src/op_describe.go", 40, "ctx = ctx.LimitZone(*args.Zone)"),
+        (reference.ASTRALD, "mod/objects/src/op_find.go", 32, "ctx = ctx.LimitZone(*args.Zone)"),
+        (reference.ASTRALD, "mod/objects/src/op_search.go", 41, "ctx = ctx.LimitZone(*args.Zone)"),
+        (reference.ASTRALD, "mod/objects/src/op_read.go", 33, "ctx = ctx.LimitZone(*args.Zone)"),
         # The repository_info group fields, readable at the pins since the
         # astral-go pin moved onto 02ba1c1. They were the one type this tree
         # read past the pins, on a byte corpus rather than a citation.

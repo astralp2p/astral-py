@@ -8,10 +8,9 @@ must agree:
   `astral-go/api/nodes` at `5c18d9c`, printing
   `hex.EncodeToString` of what `WriteTo` wrote; the base62 strings are what
   `MarshalText` returned. So a round trip through them cannot agree with itself
-  while disagreeing with the reference. `mod.nodes.node_info` is the type that
-  needs it: it is hand-rolled on both sides, its identity is flat where every
-  other `*astral.Identity` field carries a presence byte, and its endpoint tags
-  are numeric where every other polymorphic field carries a type name.
+  while disagreeing with the reference. The three `node_info` vectors and their
+  base62 strings were regenerated the same way at astral-go `221ce52`, where
+  `NodeInfo` encodes through `astral.Objectify`.
 - **Tier B** pins the seven ops against `MockApphost`: the query string each one
   builds, the answer each one accepts, and the gate refusing every one of them
   before a byte reaches the node.
@@ -19,10 +18,10 @@ must agree:
   mutates: no `add_endpoint`, no `close_link`, no `new_link`, no
   `migrate_session`, per design section 7.3.
 
-**A zero `mod.nodes.node_info` is safe to ask the node for.** `WriteTo`
-substitutes the zero identity for the nil `*astral.Identity` the registry's zero
-value holds, so the query answers rather than dereferencing nil. The zero value
-is asserted from the vector, and `ReferenceClaimTest` re-reads the source.
+**A zero `mod.nodes.node_info` encodes.** `WriteTo` hands the nil
+`*astral.Identity` the registry's zero value holds to `astral.Objectify`, which
+writes it as an absent presence flag. The zero value is asserted from the vector,
+and `ReferenceClaimTest` re-reads the source.
 """
 
 from __future__ import annotations
@@ -33,9 +32,9 @@ import unittest
 import astral
 from astral.api.endpoints import GatewayEndpoint, KcpEndpoint, TcpEndpoint, TorDigest, TorEndpoint
 from astral.api.ip import IPAddress
+from astral.api.nat import Endpoint as NatEndpoint
 from astral.api.nodes import (
     BASE62_ALPHABET,
-    ENDPOINT_TAGS,
     NODES_TYPES,
     OP_ADD_ENDPOINT,
     OP_CLOSE_LINK,
@@ -66,13 +65,12 @@ from astral.errors import (
     FeatureUnavailable,
     ParseError,
     ProtocolError,
-    SchemaError,
     StreamCorrupted,
-    ValueTooLarge,
 )
 from astral.querystring import parse
 from astral.registry import default_blueprints
 from astral.session import Session, flush_cancels
+from astral.spec import Primitive, Ptr, Slice
 from astral.types import Duration, Identity, Nonce
 
 import live_support
@@ -105,24 +103,30 @@ TCP_EP = TcpEndpoint(ip=ip("10.21.0.5"), port=1791)
 TOR_EP = TorEndpoint(digest=TorDigest(TOR_DIGEST), port=1791)
 GW_EP = GatewayEndpoint(gateway_id=FURRY_BOLT, target_id=OTHER)
 KCP_EP = KcpEndpoint(ip=ip("10.21.0.5"), port=1792)
+NAT_EP = NatEndpoint(ip=ip("10.21.0.5"), port=1793)
 
 # Every string below is astral-go's own output, printed by a Go program linked
-# against `api/nodes` at astral-go `5c18d9c`.
+# against `api/nodes` at astral-go `5c18d9c`; the three `node_info` vectors at
+# astral-go `221ce52`.
 GO_VECTORS = {
     "node_info_full": (
         "0a66757272792d626f6c74"
-        "03b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae1"
-        "03"
-        "00" "040a15000506ff"
-        "01" "e931ffbc1e28eab1b17223cc87060b590d85b0206f03b4666ad4e293bb68abe27ca20306ff"
-        "02" "0103b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae1"
-             "010279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        "01" "03b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae1"
+        "00000005"
+        "106d6f642e7463702e656e64706f696e74" "040a15000506ff"
+        "106d6f642e746f722e656e64706f696e74"
+        "e931ffbc1e28eab1b17223cc87060b590d85b0206f03b4666ad4e293bb68abe27ca20306ff"
+        "146d6f642e676174657761792e656e64706f696e74"
+        "0103b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae1"
+        "010279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        "106d6f642e6b63702e656e64706f696e74" "040a1500050700"
+        "0c6e61742e656e64706f696e74" "040a1500050701"
     ),
-    "node_info_zero": "00" + "00" * 33 + "00",
+    "node_info_zero": "00" "00" "00000000",
     "node_info_alias_only": (
         "0a66757272792d626f6c74"
-        "03b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae1"
-        "00"
+        "01" "03b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae1"
+        "00000000"
     ),
     "link_info": (
         "0102030405060708"
@@ -166,13 +170,15 @@ GO_VECTORS = {
 # `base62.Encode` of each blob above, as astral-go's `MarshalText` returned it.
 GO_BASE62 = {
     "node_info_full": (
-        "YeC8tYrAlPrsRx5W2mfbKwBLcozVKGoVx6ucnvfMz38EIgw1r3CjAfNeyRpatlyfySpae76D4rm3"
-        "YZeAG5yuIlEcyOQAC8vBDIKfEfqot7kiTtamR7AvBCsF2QWLYwhMPicxGr6o4BvfPm0D4fGUAAVo"
-        "ABAMQ461bhRgfGvcUqWbp8XWKVzvrPgvaeGLzDYkL7iUSwJ7A0x2bi1SekTu6MTB"
+        "BcQBAUhCEQnbp9Gck5WZuQXYuxAAHUAAVoAB05WavBHZuVmLwN2auQ2btBBmXgvFbFo8ZlNKO3y2"
+        "8vpAHswhOXpYgWFr7yde9zMfmnABEue6twIwvxLHlq1WKfLLlq531HwXNvxy8AG5yuIlEcyOQA05"
+        "WavBHZuVmL5F2dlRXYn5CZv1GFf3gBElPxXFtdnUcqVzMaH4NQgtwGyaBDOk5RkL2YVHFP49fxkO"
+        "dul2bwRmbl5icvRnLk9WbQ8vBFAQFKQAdul2bwRmbl5CcjRnLk9WbQUAAAAQ461bhRgfGvcUqWbp"
+        "8XWKVzvrPgvaeGLzDYkL7iUSwJ7ABQHbvJWL5Jnc1ZmC"
     ),
-    "node_info_zero": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "node_info_zero": "AAAAAAAA",
     "node_info_alias_only": (
-        "AEue6twIwvxLHlq1WKfLLlq531HwXNvxy8AG5yuIlEcyOAds9mYtkncyVnZKA"
+        "AAAAAEue6twIwvxLHlq1WKfLLlq531HwXNvxy8AG5yuIlEcyOQA0x2bi1SekTu6MTB"
     ),
 }
 
@@ -270,7 +276,7 @@ class Base62Test(unittest.TestCase):
             base62_decode("!")
 
 
-# --- Tier A: the hand-rolled node_info -----------------------------------
+# --- Tier A: node_info --------------------------------------------------
 
 
 class NodeInfoWireTest(unittest.TestCase):
@@ -280,7 +286,7 @@ class NodeInfoWireTest(unittest.TestCase):
         return NodeInfo(
             alias=FURRY_BOLT_ALIAS,
             identity=FURRY_BOLT,
-            endpoints=[TCP_EP, TOR_EP, GW_EP],
+            endpoints=[TCP_EP, TOR_EP, GW_EP, KCP_EP, NAT_EP],
         )
 
     def test_the_full_value_encodes_to_the_reference_bytes(self):
@@ -291,69 +297,37 @@ class NodeInfoWireTest(unittest.TestCase):
         self.assertEqual(got, self.full())
         self.assertEqual(
             [type(e) for e in got.endpoints],
-            [TcpEndpoint, TorEndpoint, GatewayEndpoint],
+            [TcpEndpoint, TorEndpoint, GatewayEndpoint, KcpEndpoint, NatEndpoint],
         )
 
-    def test_the_identity_is_flat_with_no_presence_byte(self):
-        """The Go field is `*astral.Identity`, so the reflective codec would
-        write `01` in front of it. `WriteTo` calls `Identity.WriteTo` directly.
-        The zero value is what settles it: 35 bytes, not 36."""
+    def test_the_identity_sits_behind_a_presence_flag(self):
+        """The Go field is `*astral.Identity` and `astral.Objectify` writes it
+        as one. The zero value settles it: 6 bytes, the nil identity a single
+        `00`."""
         raw = vector("node_info_zero")
-        self.assertEqual(len(raw), 1 + 33 + 1)
-        self.assertEqual(raw[0], 0x00)  # empty alias, no flag after it
-        self.assertEqual(raw[1:34], b"\x00" * 33)
-        self.assertEqual(raw[34], 0x00)  # endpoint count
+        self.assertEqual(len(raw), 1 + 1 + 4)
+        self.assertEqual(raw[0], 0x00)  # empty alias
+        self.assertEqual(raw[1], 0x00)  # nil identity
+        self.assertEqual(raw[2:6], b"\x00\x00\x00\x00")  # uint32 endpoint count
         self.assertEqual(payload_bytes(NodeInfo()), raw)
-        self.assertEqual(NodeInfo.read_payload(object_reader(raw)), NodeInfo())
+        got = NodeInfo.read_payload(object_reader(raw))
+        self.assertEqual(got, NodeInfo())
+        self.assertIsNone(got.identity)
 
     def test_the_alias_only_value_matches_the_reference(self):
         n = NodeInfo(alias=FURRY_BOLT_ALIAS, identity=FURRY_BOLT)
-        self.assertEqual(payload_bytes(n), vector("node_info_alias_only"))
+        raw = vector("node_info_alias_only")
+        self.assertEqual(payload_bytes(n), raw)
+        self.assertEqual(raw[11], 0x01)  # present identity, then its 33 bytes
+        self.assertEqual(raw[12:45], FURRY_BOLT.key)
 
-    def test_the_endpoint_tags_are_numeric_and_in_order(self):
+    def test_each_endpoint_carries_its_object_type(self):
         raw = vector("node_info_full")
-        # 1 alias length byte + 10 alias bytes + 33 identity bytes.
-        self.assertEqual(raw[44], 3)  # count
-        self.assertEqual(raw[45], 0)  # tcp, and the payload follows it bare
-        self.assertEqual(
-            ENDPOINT_TAGS,
-            {
-                0: "mod.tcp.endpoint",
-                1: "mod.tor.endpoint",
-                2: "mod.gateway.endpoint",
-            },
-        )
-
-    def test_an_unknown_tag_is_a_hard_decode_error(self):
-        """Design risk R-15. astral-go answers `unknown endpoint type` and there
-        is nothing else it could do: the payload has no length, so a decoder
-        that skipped an unknown tag could not find the next one."""
-        raw = bytes([0x01, ord("x")]) + FURRY_BOLT.key + bytes([0x01, 0x07])
-        with self.assertRaises(StreamCorrupted) as caught:
-            NodeInfo.read_payload(object_reader(raw))
-        self.assertIn("7", str(caught.exception))
-
-    def test_every_tag_from_three_up_is_refused(self):
-        for tag in (3, 4, 255):
-            with self.subTest(tag=tag):
-                raw = bytes([0x00]) + b"\x00" * 33 + bytes([0x01, tag])
-                with self.assertRaises(StreamCorrupted):
-                    NodeInfo.read_payload(object_reader(raw))
-
-    def test_a_kcp_endpoint_cannot_be_written(self):
-        """The astral-go limitation, recorded rather than worked around: the
-        numeric table has three entries and kcp is not one of them, while the
-        live node advertises two kcp endpoints of its own. A node whose
-        endpoints include kcp cannot express its own invite string."""
-        n = NodeInfo(alias="x", identity=FURRY_BOLT, endpoints=[KCP_EP])
-        with self.assertRaises(SchemaError) as caught:
-            payload_bytes(n)
-        self.assertIn("mod.kcp.endpoint", str(caught.exception))
-
-    def test_more_than_255_endpoints_is_refused_before_any_byte(self):
-        n = NodeInfo(alias="x", identity=FURRY_BOLT, endpoints=[TCP_EP] * 256)
-        with self.assertRaises(ValueTooLarge):
-            payload_bytes(n)
+        # 1 alias length byte + 10 alias bytes + 1 flag + 33 identity bytes.
+        self.assertEqual(raw[45:49], b"\x00\x00\x00\x05")  # uint32 count
+        self.assertEqual(raw[49:66], b"\x10mod.tcp.endpoint")
+        self.assertIn(b"\x10mod.kcp.endpoint", raw)
+        self.assertIn(b"\x0cnat.endpoint", raw)
 
     def test_the_text_form_is_the_reference_base62(self):
         for name, want in GO_BASE62.items():
@@ -382,34 +356,13 @@ class NodeInfoWireTest(unittest.TestCase):
         with self.assertRaises(ParseError):
             NodeInfo.from_json({"Alias": "x"})
 
-    def test_it_still_declares_its_fields_but_they_do_not_describe_the_bytes(self):
-        """The escape hatch keeps the declaration and drops the derivation.
-
-        `FIELDS` gives each field its name and its zero value -- an empty alias,
-        the zero identity, no endpoints -- and `blueprint.of()` refuses the
-        class, which is the rule that matters: a peer handed a blueprint of
-        `{string8, identity, []any}` would encode a slice with a `uint32` count
-        and type-tagged elements, and this type reads a `uint8` count and
-        numeric tags.
-        """
-        self.assertEqual(
-            [f.wire_name for f in NodeInfo.FIELDS], ["Alias", "Identity", "Endpoints"]
-        )
-        self.assertIs(NodeInfo.DERIVABLE, False)
-        self.assertEqual(NodeInfo().endpoints, [])
-        from astral.blueprint import of as blueprint_of
-
-        with self.assertRaises(SchemaError):
-            blueprint_of(NodeInfo)
-
-    def test_every_other_type_in_the_module_does_describe_its_bytes(self):
-        """The escape hatch is one type, not a habit: design section 2.5 permits
-        four in the whole SDK and `mod.nodes.node_info` is one of them."""
+    def test_every_type_in_the_module_describes_its_bytes(self):
+        """No type in this module carries a hand-written codec: the declaration
+        is the binary layout, so a blueprint derived from it encodes what the
+        class reads."""
         from astral.blueprint import of as blueprint_of
 
         for cls in NODES_TYPES:
-            if cls is NodeInfo:
-                continue
             with self.subTest(type=cls.ASTRAL_TYPE):
                 self.assertIs(cls.DERIVABLE, True)
                 self.assertEqual(
@@ -452,10 +405,9 @@ class NodesWireTest(unittest.TestCase):
         self.assertEqual(payload_bytes(self.link_info()), raw)
         self.assertEqual(LinkInfo.read_payload(object_reader(raw)), self.link_info())
 
-    def test_a_link_info_endpoint_is_type_tagged_and_not_numeric(self):
+    def test_a_link_info_endpoint_is_type_tagged(self):
         """The two endpoint fields are interface-typed on the Go side, so each
-        carries its own `string8` type name -- the opposite of `node_info`'s
-        numeric tags, in the same module."""
+        carries its own `string8` type name."""
         self.assertIn(b"\x10mod.tcp.endpoint", vector("link_info"))
         self.assertIn(b"\x10mod.tor.endpoint", vector("link_info"))
 
@@ -1075,47 +1027,56 @@ class ReferenceClaimTest(unittest.TestCase):
         except reference.Unavailable as exc:
             self.skipTest(str(exc))
 
-    def test_the_numeric_endpoint_tags_are_zero_one_two_and_default_errors(self):
+    def test_the_pin_encodes_through_objectify(self):
+        """Both halves of the binary codec are `astral.Objectify`, the field
+        walk this module's declaration mirrors (`api/nodes/node_info.go:24-29`)."""
         src = self.source(reference.ASTRAL_GO, "api/nodes/node_info.go")
-        self.assertIn("case *tcp.Endpoint:", src)
-        self.assertIn("case *gateway.Endpoint:", src)
-        self.assertIn('return n, errors.New("unknown endpoint type")', src)
-        # The read side maps the same three numbers and errors on anything else.
-        self.assertIn("e = &tcp.Endpoint{}", src)
-        self.assertIn("e = &tor.Endpoint{}", src)
-        self.assertIn("e = &gateway.Endpoint{}", src)
-        self.assertNotIn("kcp", src)
+        lines = src.splitlines()
+        self.assertEqual(
+            lines[23], "func (info NodeInfo) WriteTo(w io.Writer) (n int64, err error) {"
+        )
+        self.assertEqual(lines[24], "\treturn astral.Objectify(&info).WriteTo(w)")
+        self.assertEqual(
+            lines[27], "func (info *NodeInfo) ReadFrom(r io.Reader) (n int64, err error) {"
+        )
+        self.assertEqual(lines[28], "\treturn astral.Objectify(info).ReadFrom(r)")
 
-    def test_the_identity_is_written_without_a_presence_byte(self):
-        """`WriteAllTo` calls `Identity.WriteTo` directly, and that writes 33
-        bytes. A `*astral.Identity` **field** would carry a nil flag; this one
-        is not written as a field."""
+    def test_the_pin_declares_the_three_fields_in_this_order(self):
         src = self.source(reference.ASTRAL_GO, "api/nodes/node_info.go")
-        self.assertIn("streams.WriteAllTo(w, info.Alias, id)", src)
-        self.assertIn("streams.ReadAllFrom(r, &info.Alias, info.Identity)", src)
+        struct = src.split("type NodeInfo struct {")[1].split("}")[0]
+        self.assertEqual(
+            [line.split() for line in struct.strip().splitlines()],
+            [
+                ["Alias", "astral.String8"],
+                ["Identity", "*astral.Identity"],
+                ["Endpoints", "[]exonet.Endpoint"],
+            ],
+        )
+        self.assertEqual(
+            [f.spec for f in NodeInfo.FIELDS],
+            [Primitive("string8"), Ptr("identity"), Slice()],
+        )
 
-    def test_the_pin_writes_a_zero_identity_for_a_nil_one(self):
-        """The guard at the pin:
-        `id := info.Identity; if id == nil { id = &astral.Identity{} }`. The
-        zero identity is 33 null bytes, so the guard leaves the wire form of
-        every value unchanged, and a zero `node_info` serialises rather than
-        dereferencing nil."""
-        src = self.source(reference.ASTRAL_GO, "api/nodes/node_info.go")
-        write_to = src.split("func (info NodeInfo) WriteTo")[1].split("func ")[0]
-        self.assertIn("if id == nil {", write_to)
-        self.assertIn("id = &astral.Identity{}", write_to)
+    def test_the_pin_round_trips_kcp_and_nat_endpoints(self):
+        """The test this module's docstring cites
+        (`api/nodes/node_info_test.go:88-103`)."""
+        src = self.source(reference.ASTRAL_GO, "api/nodes/node_info_test.go")
+        lines = src.splitlines()
+        self.assertIn("Every endpoint type travels under its own object type", lines[87])
+        self.assertIn('kcp.ParseEndpoint, "5.6.7.8:1792"', lines[102])
+        self.assertIn('nat.ParseEndpoint, "9.10.11.12:1793"', lines[103])
 
-    def test_the_pin_checks_the_read_error_before_the_endpoint_count(self):
-        """`ReadFrom` assigns `n, err = streams.ReadAllFrom(...)` and checks
-        `err` before reading the endpoint count, so a truncated `node_info`
-        stops rather than decoding on with a zero-valued alias and identity.
-        This SDK's reader raises on the short read, as the pin does.
-        """
-        src = self.source(reference.ASTRAL_GO, "api/nodes/node_info.go")
-        head = src.split("func (info *NodeInfo) ReadFrom")[1].split("var l astral.Uint8")[0]
-        self.assertIn("streams.ReadAllFrom(r, &info.Alias, info.Identity)", head)
-        self.assertIn("if err != nil", head)
+    def test_the_pin_writes_a_nil_identity_as_an_absent_flag(self):
+        """The zero-value test this module's docstring cites
+        (`api/nodes/node_info_test.go:17-33`): 6 bytes."""
+        src = self.source(reference.ASTRAL_GO, "api/nodes/node_info_test.go")
+        lines = src.splitlines()
+        self.assertEqual(lines[17], "func TestNodeInfoWriteTo_NilIdentity(t *testing.T) {")
+        self.assertIn("identity presence flag (1) + uint32 endpoint count (4)", lines[25])
+        self.assertIn("want := int64(6)", lines[26])
+        self.assertEqual(len(vector("node_info_zero")), 6)
 
+    def test_a_truncated_node_info_is_a_wire_error(self):
         truncated = bytes([0x0A]) + b"furry"
         with self.assertRaises(astral.WireError):
             NodeInfo.read_payload(object_reader(truncated))

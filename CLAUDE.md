@@ -11,7 +11,7 @@ amendments that supersede the sections they name. **Section 11.4 is deferred**:
 the wire core's `Any`/nil behaviour stays as it is.
 
 Authorities, in precedence order: the live node, astral-go
-(`../astral-go/main` @ `3c849bf`, the revision astrald `0c7e3109` requires), astrald, astral-docs.
+(`../astral-go/main` @ `221ce52`, the revision astrald `1286a469` requires), astrald, astral-docs.
 The SDK supports the node at those revisions and no older one, so a claim about
 an earlier astrald or astral-go has no place in this tree.
 
@@ -57,7 +57,7 @@ distinguish `string8` from `string32`, `bytes` cannot distinguish `bytes8` from
 Consequence: one declaration yields the binary, JSON, text and canonical forms
 and the ObjectID. A hand-written `write_payload` on a record is a defect; the
 escape hatch for a shape the Spec tree cannot express is design 2.5's, and
-`mod.nodes.node_info` is the one type in the tree that takes it.
+`mod.tor.digest` is the one type in the tree that takes it (design 11.7).
 
 `@record` registers into `registry.default_blueprints()`, and registration is a
 side effect of import. `astral/api/__init__.py` therefore imports every module
@@ -110,10 +110,10 @@ signal.** `apphost.whoami` and `dir.alias_map` end at a bare EOF with no `eos`;
 `dir.filters` ends at an `eos`. Terminate on `eos` **or** EOF, never block
 waiting for `eos`, and read `Stream.terminated_by` to learn which happened.
 
-**`mod.nodes.node_info` carries a flat identity too**, and for a different
-reason: astral-go hand-rolls its `WriteTo` instead of using the reflective codec,
-so the `*astral.Identity` field gets no presence byte. Decode it the way the node
-sends it (`api/nodes.py`).
+**`mod.nodes.node_info` is a plain record.** astral-go encodes it through
+`astral.Objectify` from `4b18f24` on, so its `*astral.Identity` carries a
+presence byte like every other pointer field and each endpoint carries its own
+type tag (`api/nodes.py`, design 11.7).
 
 Global rules: big-endian everywhere, two's complement, IEEE 754, no varints, no
 padding, no field names on the binary wire — order is the schema. Codecs do not

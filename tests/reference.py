@@ -43,37 +43,33 @@ ASTRALD: Final = "astrald"
 ASTRAL_GO: Final = "astral-go"
 
 PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
-    # The revisions the modules were read against: astrald `0c7e3109` and the
-    # astral-go its `go.mod` requires (v0.0.0-20261011215909-3c849bf564ec).
+    # The revisions the modules were read against: astrald `1286a469` and the
+    # astral-go its `go.mod` requires (v0.0.0-20261017201810-221ce52e3f71).
     # The SDK supports the current node and no older one, so every `path:line`
     # citation in `astral/api/*.py` resolves at one of these two and none names
     # another revision. Bumping one means re-reading the citations that name it.
     #
-    # Bumped from astrald `e85f5da4` / astral-go `5ea970b4` for the Services v1
-    # wire, which exists at neither old pin. Verified at the bump: of the files
-    # this tree cites, these differ between the old pin and the new one and
-    # each was re-read -- astrald `core/router.go`, `mod/apphost/src/guest.go`,
-    # `mod/apphost/src/access_tokens.go`, `mod/auth/src/db.go`,
-    # `mod/auth/src/op_sign_contract.go`, `mod/crypto/errors.go`,
-    # `mod/crypto/src/sign_guard.go`, `mod/tor/src/parse.go`,
-    # `mod/tree/src/module.go`, `mod/tree/src/node.go`, `mod/user/src/config.go`,
-    # `mod/user/src/contracts.go`, `mod/user/src/op_new_node_contract.go`,
-    # `mod/user/src/sync.go` and the whole of `mod/services`; astral-go
-    # `api/auth/admin_manage_apps_action.go`, `api/objects/module.go`,
-    # `api/tree/node.go` and the whole of `api/services`. Claims rewritten: the
-    # router redacts `token` and `passphrase` from the query it logs
-    # (`astral/api/bip137sig.py`, `astral/api/crypto.py`, `astral/bip39.py`),
-    # `crypto`'s signer guard is the exported `AuthorizeSigner`, `auth.sign_contract`
-    # refuses a non-local origin and authorizes each contract's parties
-    # (`astral/api/auth.py`), the contract-length constants moved to
-    # `mod/user/module.go` (`astral/api/user.py`), and `astral/api/services.py`
-    # is the v1 client. Line citations re-anchored: `core/router.go:83`,
-    # `mod/apphost/src/access_tokens.go:58`, `mod/apphost/src/guest.go:271`,
-    # `mod/tree/src/module.go:204`, `api/tree/node.go:34,42`,
-    # `mod/user/src/sync.go:30`, `mod/user/src/contracts.go:172`, and
-    # `mod/services/src/op_discover.go:34,36,199` in `astral/api/tree.py`.
-    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "0c7e3109"),
-    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "3c849bf"),
+    # Bumped from astrald `0c7e3109` / astral-go `3c849bf` for the
+    # `astral.Objectify` encoding of `mod.nodes.node_info` (astral-go
+    # `4b18f24`), which astrald pins from `032271d4`. Verified at the bump: of
+    # the files this tree cites, these differ between the old pin and the new
+    # one and each was re-read -- astrald `mod/auth/src/authorize.go`,
+    # `mod/objects/src/module.go`, `op_describe.go`, `op_find.go`,
+    # `op_read.go`, `op_search.go`, `partial_id_test.go` and
+    # `mod/user/src/contracts.go`; astral-go `api/apphost/route_query_msg.go`,
+    # `api/nodes/node_info.go`, `api/objects/module.go` and
+    # `astral/channel/binary_sender.go`. Claims rewritten: `node_info` is a
+    # plain record (`astral/api/nodes.py`, design 11.7), `describe`, `find`,
+    # `search` and `read` narrow the routing zone with `LimitZone` and `find`
+    # names the node itself (`astral/api/objects.py`), `BinarySender.Send`
+    # issues one `Write` per frame (`astral/transport/websocket.py`). Surface
+    # added: `auth.list_authorizers`, `auth.remove_authorizer`,
+    # `auth.set_authorizer`, `user.set_swarm_join_policy`,
+    # `user.set_swarm_invite_policy` and their types; the apphost census counts
+    # `set_app_register_policy`. Line citations re-anchored:
+    # `mod/objects/src/module.go:185`, `mod/user/src/contracts.go:178`.
+    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "1286a469"),
+    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "221ce52"),
 }
 
 

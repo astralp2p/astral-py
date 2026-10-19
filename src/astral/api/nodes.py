@@ -39,7 +39,7 @@ a per-op contract and is not discoverable from the wire):
 
 `nodes.resolve_endpoints`, `nodes.add_endpoint` and `nodes.new_link` name their
 identity argument `identity`, and `nodes.close_link` names its nonce `link_id`,
-as `nodes.migrate_session` does. astrald `0c7e3109` marks seven parameters
+as `nodes.migrate_session` does. astrald `1286a469` marks seven parameters
 required in source: `identity` on `nodes.resolve_endpoints`,
 `nodes.add_endpoint` and `nodes.new_link`, `endpoint` on `nodes.add_endpoint`,
 `link_id` on `nodes.close_link`, and `session_id` and `link_id` on
@@ -54,36 +54,21 @@ channel this SDK would not drive. `MigrateSignal` is declared anyway, because
 the node sends one to a peer that speaks that mode and a decoder that did not
 know the type could not even name what it received.
 
-**`mod.nodes.node_info` is hand-rolled on the Go side and is hand-rolled here.**
-It is the one type in this module whose binary form is not the reflective field
-walk:
+**`mod.nodes.node_info` is a plain record.** astral-go encodes it through
+`astral.Objectify` (`api/nodes/node_info.go:24-29`), so its binary form is the
+reflective field walk and this module declares it like every other type:
 
-    string8(Alias) ++ 33 flat identity bytes ++ uint8(count)
-                   ++ (uint8(tag) ++ endpoint payload) x count
+    string8(Alias) ++ Ptr(identity) ++ uint32(count)
+                   ++ (string8(type) ++ endpoint payload) x count
 
-with `tag` numeric -- `0` tcp, `1` tor, `2` gateway -- and **anything else a
-hard decode error**, matching `astral-go/api/nodes/node_info.go`. Two traps live
-in those bytes and both are pinned by vectors generated from astral-go itself:
+- **The identity sits behind a presence flag.** The Go field is
+  `*astral.Identity`, so a nil one is `00` and a present one is `01` ++ 33
+  bytes. A zero `node_info` is `00 00 00000000`, 6 bytes, and astral-go emits
+  exactly that (`api/nodes/node_info_test.go:17-33`).
+- **Every endpoint carries its own object type**, so every endpoint type is
+  representable, `mod.kcp.endpoint` included (`api/nodes/node_info_test.go:88-103`).
 
-- **The identity is flat.** The Go field is `*astral.Identity`, so the
-  reflective codec would write a presence byte in front of it; `WriteTo` calls
-  `Identity.WriteTo` directly and writes 33 bytes with no flag. A zero
-  `node_info` is `00` ++ 33 zero bytes ++ `00`, 35 bytes, and astral-go emits
-  exactly that.
-- **There is no tag for kcp**, even though kcp is now the NAT transport and
-  `furry-bolt` advertises two `mod.kcp.endpoint`s of its own -- verified live
-  through `nodes.resolve_endpoints`. astral-go's `WriteTo` answers
-  `unknown endpoint type` for a `node_info` carrying one, so **a node whose
-  endpoints include kcp cannot express its own invite string**. That is an
-  astral-go limitation, recorded here and not worked around: inventing a tag
-  would produce a blob no other implementation could read.
-
-**A zero one is safe to ask the node for.** `WriteTo` substitutes the zero
-identity for the nil `*astral.Identity` the registry's zero value holds
-(`api/nodes/node_info.go`), so `objects.new` on this type answers rather than
-dereferencing nil. `NodeInfo()` here is that same zero value, needs no node, and
-is byte-identical to what astral-go writes: the zero identity is 33 null bytes
-either way.
+Both are pinned by vectors generated from astral-go itself.
 
 The text form is base62 of that blob (`jxskiss/base62`, alphabet `[A-Za-z0-9]`),
 and so is the JSON form: `NodeInfo` has a `MarshalText` and no `MarshalJSON`, so
@@ -98,7 +83,7 @@ field walk.
 `astral.api.endpoints` (design section 0.1), and this module reaches them by
 **name** through the registry -- `Any()` for the interface-typed fields of
 `link_info`, `endpoint_with_ttl` and `observed_endpoint_message`, and the
-numeric tag table for `node_info`. So there is no import edge, and a stream
+`Slice()` of `node_info`. So there is no import edge, and a stream
 carrying an endpoint type the registry does not know fails as
 `unknown type mod.tcp.endpoint` rather than silently.
 
@@ -111,32 +96,20 @@ from typing import Any, Final, Sequence
 
 from .. import querystring
 from ..client import Client
-from ..codec.binary import (
-    nested_frame,
-    object_reader,
-    payload_bytes,
-    read_object,
-    read_spec,
-    write_spec,
-)
+from ..codec.binary import object_reader, payload_bytes
 from ..errors import (
     BadArgument,
     FeatureUnavailable,
     ParseError,
-    SchemaError,
-    StreamCorrupted,
-    ValueTooLarge,
 )
 from ..object import Ack
 from ..record import record, wire
 from ..spec import AnySpec, Primitive, Ptr, Slice, Spec
 from ..types import Duration, Identity, Nonce
-from ..wire import Reader, Writer
 from .auth import Action
 from .base import ModuleClient
 
 __all__ = [
-    "ENDPOINT_TAGS",
     "EndpointWithTTL",
     "LinkClosedEvent",
     "LinkCreatedEvent",
@@ -198,7 +171,7 @@ def require_experimental(op: str, opted_in: bool) -> None:
     `nodes.links` is read-only and answers on any node. What it is, is design
     section 0.1's Tier 3 in force. This surface is the least covered by the
     reference client -- 3 of 7 `nodes` ops have an astral-go client at
-    astral-go `3c849bf` -- two of `nat`'s five ops are
+    astral-go `221ce52` -- two of `nat`'s five ops are
     dropped outright (section 4.5), and four of these seven **mutate node
     state**: `close_link` drops a live link, `add_endpoint` writes a record that
     stands for 90 days. An SDK that let all of that be reached by a typo in an
@@ -319,25 +292,6 @@ def base62_decode(text: str) -> bytes:
 # --- wire types ----------------------------------------------------------
 
 
-ENDPOINT_TAGS: Final[dict[int, str]] = {
-    0: "mod.tcp.endpoint",
-    1: "mod.tor.endpoint",
-    2: "mod.gateway.endpoint",
-}
-"""`mod.nodes.node_info`'s numeric endpoint tags, and the whole of them.
-
-`mod.kcp.endpoint` has no tag. astral-go's switch has three cases and a default
-that errors, on both the read and the write side, so a `node_info` carrying a
-kcp endpoint is unrepresentable in the reference implementation -- and the live
-node advertises kcp endpoints. Adding a fourth entry here would encode blobs
-nothing else can read.
-"""
-
-_TAG_OF_ENDPOINT: Final[dict[str, int]] = {
-    name: tag for tag, name in ENDPOINT_TAGS.items()
-}
-
-
 @record("mod.nodes.link_info")
 class LinkInfo:
     """One live link between two nodes.
@@ -401,61 +355,16 @@ class EndpointWithTTL:
 class NodeInfo:
     """A node's alias, identity and endpoints: the invite string.
 
-    Hand-rolled on both sides. See this module's docstring for the layout, the
-    flat identity and the missing kcp tag.
+    A plain record on both sides. See this module's docstring for the layout.
 
     `endpoints` holds decoded endpoint objects, whose types come from
-    `astral.api.endpoints` through the registry. Constructing one for a type
-    with no numeric tag is refused on **write**, where astral-go refuses it too,
-    rather than at construction: a `NodeInfo` decoded from a peer and handed
-    straight back must not fail differently from one this SDK built.
+    `astral.api.endpoints` through the registry. `identity` is `None` in the
+    zero value, as the nil `*astral.Identity` is in astral-go's.
     """
 
     alias: str = wire("Alias", Primitive("string8"))
-    identity: Identity = wire("Identity", Primitive("identity"))
+    identity: Identity | None = wire("Identity", Ptr("identity"))
     endpoints: list[Any] = wire("Endpoints", Slice())
-
-    # The escape hatch of design section 2.5, which sets `DERIVABLE` to False.
-    # The declaration above is still what gives each field its zero value and
-    # its name, and it is **not** a description of these bytes: `blueprint.of()`
-    # refuses this class for exactly that reason, since a peer handed such a
-    # blueprint would encode a shape the class cannot read. The JSON form is
-    # overridden below too, so the schema serves construction and reading, not
-    # the wire.
-    def write_payload(self, w: Writer) -> None:
-        with nested_frame(w, "mod.nodes.node_info"):
-            write_spec(w, _NODE_INFO_ALIAS, self.alias)
-            write_spec(w, _NODE_INFO_IDENTITY, self.identity)
-            count = len(self.endpoints)
-            if count > 255:
-                # astral-go returns `too many endpoints` here. The count is a
-                # uint8 and nothing above it is expressible.
-                raise ValueTooLarge(
-                    f"mod.nodes.node_info: {count} endpoints exceeds the 255 a "
-                    "uint8 count can carry"
-                )
-            w.uint8(count)
-            for endpoint in self.endpoints:
-                w.uint8(_endpoint_tag(endpoint))
-                endpoint.write_payload(w)
-
-    @classmethod
-    def read_payload(cls, r: Reader) -> "NodeInfo":
-        with nested_frame(r, "mod.nodes.node_info"):
-            alias = read_spec(r, _NODE_INFO_ALIAS)
-            identity = read_spec(r, _NODE_INFO_IDENTITY)
-            endpoints = []
-            for _ in range(r.uint8()):
-                tag = r.uint8()
-                type_name = ENDPOINT_TAGS.get(tag)
-                if type_name is None:
-                    raise StreamCorrupted(
-                        f"mod.nodes.node_info: endpoint type tag {tag} is not "
-                        f"one of {sorted(ENDPOINT_TAGS)}; the payload cannot be "
-                        "located past it"
-                    )
-                endpoints.append(read_object(r, type_name))
-        return cls(alias=alias, identity=identity, endpoints=endpoints)
 
     # --- the text and JSON forms, which are the same string ---
 
@@ -488,25 +397,6 @@ class NodeInfo:
         return cls.parse(data)
 
 
-_NODE_INFO_ALIAS: Final[Spec] = Primitive("string8")
-_NODE_INFO_IDENTITY: Final[Spec] = Primitive("identity")
-
-
-def _endpoint_tag(endpoint: Any) -> int:
-    """The numeric tag of an endpoint, or the fault of it having none."""
-    type_name = getattr(endpoint, "ASTRAL_TYPE", "")
-    tag = _TAG_OF_ENDPOINT.get(type_name)
-    if tag is None:
-        raise SchemaError(
-            f"mod.nodes.node_info: {type_name or type(endpoint).__name__} has no "
-            f"numeric endpoint tag; the type carries one of "
-            f"{sorted(ENDPOINT_TAGS.values())}. mod.kcp.endpoint has none in "
-            "astral-go either, so a node with kcp endpoints cannot express its "
-            "own node_info"
-        )
-    return tag
-
-
 MIGRATE_SIGNALS: Final = ("ready", "switched", "resume", "done")
 """The four signals of the negotiated `nodes.migrate_session` handshake.
 
@@ -531,8 +421,7 @@ class ObservedEndpointMessage:
     """An endpoint a peer observed this node arriving from.
 
     One polymorphic field and nothing else: astral-go encodes it through the
-    generic `astral.Encode`/`Decode`, which is the type tag plus the payload,
-    unlike `node_info`'s numeric tags. The two are not interchangeable.
+    generic `astral.Encode`/`Decode`, which is the type tag plus the payload.
     """
 
     endpoint: Any = wire("Endpoint", AnySpec())

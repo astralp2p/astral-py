@@ -15,9 +15,9 @@ document states the resolution, and the resolution is binding.
 | Rank | Authority | Location |
 |---|---|---|
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
-| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `3c849bf` (the commit the node pins) |
-| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `0c7e3109` — authoritative for session semantics the client never exercises |
-| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `0040e909`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
+| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `221ce52` (the commit the node pins) |
+| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `1286a469` — authoritative for session semantics the client never exercises |
+| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `3fdc3dd`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
 When 1 and 3 disagree, 1 wins and the disagreement is filed in §9. When astral-go
@@ -1707,3 +1707,21 @@ not answer, because `bind_http` is configurable and the gate variable names the 
 not that one. The serving tests still skip without `ASTRAL_TEST_TOKEN`, and so do the signing round
 trips in `test_api_crypto.LiveSigningTest`: from astrald `341fcdd5` an anonymous caller is the node,
 and the node's key is not signable through the op surface.
+
+## 11.7 Sections 0.1 and 2.5 — `mod.nodes.node_info` leaves the escape hatch (AMENDED, implemented)
+
+Section 2.5 lists `mod.nodes.node_info` among the four types with a hand-written codec, and
+section 0.1 describes its numeric endpoint tags. Both describe astral-go before `4b18f24`. From
+that commit on, `NodeInfo.WriteTo` and `ReadFrom` are `astral.Objectify`
+(`api/nodes/node_info.go:24-29` at `221ce52`), so the binary form is the reflective field walk:
+`string8` alias, `Ptr(identity)`, then a `uint32` count of type-tagged endpoints. astrald pins
+that encoding from `032271d4`.
+
+**Amendment: `mod.nodes.node_info` is a plain `@record` with a derived codec.** No numeric tag
+table exists, every endpoint type is representable, `mod.kcp.endpoint` and `nat.endpoint`
+included, and the zero value is the six bytes `000000000000`. The text and JSON forms stay the
+base62 string of the binary payload, because `NodeInfo` keeps its `MarshalText` and has no
+`MarshalJSON`. Verified: the `GO_VECTORS` and `GO_BASE62` `node_info` literals in
+`tests/test_api_nodes.py` are astral-go `221ce52`'s own output, and `objects.new` on an isolated
+astrald built from `1286a469` answers the six-byte zero value, which decodes to `NodeInfo()`.
+Risk R-15 no longer applies.

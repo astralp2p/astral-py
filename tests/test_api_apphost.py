@@ -869,7 +869,7 @@ class SecurityNoteTest(unittest.TestCase):
     SRC = "mod/apphost/src"
 
     # At the pin. The ops that ask an action before they touch what they guard.
-    ADMIN_MANAGE_APPS = {
+    TOKEN_AND_GRANT = {
         "create_token",
         "delete_token",
         "list_tokens",
@@ -877,15 +877,16 @@ class SecurityNoteTest(unittest.TestCase):
         "list_grants",
         "revoke",
     }
+    ADMIN_MANAGE_APPS = TOKEN_AND_GRANT | {"set_app_register_policy"}
     SERVE_APPS = {"register_handler"}
-    CURRENT_UNGUARDED = {"whoami", "register"}
+    CURRENT_UNGUARDED = {"whoami", "register", "set_app_register_policy"}
 
     def ops(self) -> dict[str, str]:
         """Every `op_*.go` at the pin, name to source.
 
         `_test.go` is excluded, and that is not cosmetic: `op_grants_test.go`
-        sits beside the ops at the pin, and counting it makes the census
-        fifteen.
+        and three other `op_*_test.go` files sit beside the ops at the pin, and
+        counting them makes the census nineteen.
         """
         try:
             names = reference.listdir(reference.ASTRALD, self.SRC)
@@ -911,7 +912,7 @@ class SecurityNoteTest(unittest.TestCase):
         ops = self.ops()
         guarded = {name for name, src in ops.items() if "OriginNetwork" in src}
 
-        self.assertEqual(len(ops), 14)
+        self.assertEqual(len(ops), 15)
         self.assertEqual(set(ops) - guarded, self.CURRENT_UNGUARDED)
         self.assertEqual(len(guarded), 12)
 
@@ -920,9 +921,13 @@ class SecurityNoteTest(unittest.TestCase):
         doc = " ".join((apphost_module.__doc__ or "").split())
         self.assertNotIn("alone among its neighbours", doc)
         self.assertIn(f"re-derived at `{reference.PINS[reference.ASTRALD][1]}`", doc)
-        self.assertIn("Fourteen `op_*.go` files.", doc)
+        self.assertIn("Fifteen `op_*.go` files.", doc)
         self.assertIn("Twelve refuse a network origin", doc)
-        self.assertIn("the two that do not are `whoami` and `register`", doc)
+        self.assertIn(
+            "the three that do not are `whoami`, `register` and "
+            "`set_app_register_policy`",
+            doc,
+        )
 
     def test_the_token_ops_ask_admin_manage_apps_before_they_answer(self):
         """The action guard, per op.
@@ -946,9 +951,10 @@ class SecurityNoteTest(unittest.TestCase):
             with self.subTest(op=name):
                 src = ops[name]
                 self.assertLess(
-                    src.index("AdminManageAppsAction"), src.index("Accept")
+                    src.index("AdminManageAppsAction"), src.index("q.Accept")
                 )
-                self.assertLess(src.index("OriginNetwork"), src.index("Accept"))
+                if name in self.TOKEN_AND_GRANT:
+                    self.assertLess(src.index("OriginNetwork"), src.index("q.Accept"))
 
         doc = apphost_module.__doc__ or ""
         self.assertIn("mod.auth.admin_manage_apps_action", doc)
