@@ -701,7 +701,24 @@ class FollowTest(CliCase):
 
 
 class InputTest(CliCase):
-    """`--input`: the channel-body ops the legacy CLI could not reach."""
+    """`--input`: the channel-body ops the legacy CLI could not reach.
+
+    The input files are written in `setUp`, outside `bounded`. Creating and
+    writing a file in `$TMPDIR` is a synchronous call on the loop's thread. On
+    the 4-core development machine, with `$TMPDIR` on an ext4 SD card and two
+    writers rewriting 256 MB files under `fsync`, 7 of 966 such calls took over
+    1 s and the slowest took 22.7 s. Inside `bounded` that stall spent the
+    test's 5 s on fixture setup, and the expired deadline surfaced at the
+    test's first `await`, the mock's listen.
+
+    The command's own read of the file stays inside the bound, because it is
+    under test. Under the same load, 2 of 2508 `cli.main` calls blocked in that
+    read for over 1 s, the slowest for 21.4 s.
+    """
+
+    def setUp(self) -> None:
+        self.objects = self.write("#[uint8] 21\n\n#[string8] hi\n")
+        self.malformed = self.write("not a text-encoded object\n")
 
     def write(self, text: str) -> str:
         directory = tempfile.mkdtemp()
@@ -713,18 +730,16 @@ class InputTest(CliCase):
     @bounded()
     async def test_each_line_is_one_text_encoded_object_terminated_by_eos(self):
         """`Accept(echo=True)` runs astrald's own echo shape: one answer per input."""
-        path = self.write("#[uint8] 21\n\n#[string8] hi\n")
         mock = await self.node(routes={"objects.echo": Accept(echo=True)})
-        code = await self.run_cli(mock, "--input", path, "objects.echo")
+        code = await self.run_cli(mock, "--input", self.objects, "objects.echo")
         self.assertEqual(code, 0)
         self.assertEqual(self.out.lines, ["uint8\t21", "string8\thi"])
 
     @bounded()
     async def test_a_malformed_line_costs_no_connection(self):
         """Parsed before the dial: a typo must not spend one of 32 node workers."""
-        path = self.write("not a text-encoded object\n")
         mock = await self.node(routes={"x.op": Accept(objects=[u8(1)], eos=True)})
-        code = await self.run_cli(mock, "--input", path, "x.op")
+        code = await self.run_cli(mock, "--input", self.malformed, "x.op")
         self.assertEqual(code, cli.EXIT_ERROR)
         self.assertEqual(mock.conn_count, 0)
 
