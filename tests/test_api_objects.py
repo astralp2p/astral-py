@@ -109,6 +109,7 @@ from astral.types import Duration, Identity, ObjectID, Size, Time, Zone
 
 import live_support
 import reference
+from test_api_nodes import GO_VECTORS as NODES_GO_VECTORS
 from mock_apphost import (
     Accept,
     FURRY_BOLT,
@@ -2595,11 +2596,27 @@ class LiveObjectsTest(live_support.LiveCase):
     async def test_new_answers_the_node_info_zero_value(self):
         """`mod.nodes.node_info`'s zero value holds a nil `*Identity`, and the
         supported astral-go encodes it as an absent presence flag. The node
-        answers that zero value and keeps serving."""
-        self.assertEqual(
-            await self.objects.new("mod.nodes.node_info", timeout=20), NodeInfo()
-        )
+        answers that zero value, astral-go's zero vector byte for byte, and keeps
+        serving."""
+        info = await self.objects.new("mod.nodes.node_info", timeout=20)
+        self.assertEqual(info, NodeInfo())
+        self.assertEqual(payload_bytes(info), bytes.fromhex(NODES_GO_VECTORS["node_info_zero"]))
         self.assertEqual(await self.objects.new("mod.objects.probe", timeout=20), Probe())
+
+    async def test_echo_round_trips_node_info_at_astral_gos_bytes(self):
+        """The node decodes a `mod.nodes.node_info` built from astral-go's bytes
+        and re-encodes it to those bytes: the zero value, and one carrying a
+        tcp, tor, gateway, kcp and nat endpoint."""
+        async with self.objects.echo(timeout=25) as stream:
+            for name in ("node_info_zero", "node_info_full"):
+                with self.subTest(vector=name):
+                    raw = bytes.fromhex(NODES_GO_VECTORS[name])
+                    value = NodeInfo.read_payload(object_reader(raw))
+                    await stream.send(value, timeout=20)
+                    back = await stream.first(timeout=20)
+                    self.assertEqual(back, value)
+                    self.assertEqual(payload_bytes(back), raw)
+            await stream.send_eos(timeout=20)
 
     async def test_echo_round_trips_this_modules_own_types(self):
         """The strongest agreement test the protocol offers: the node decodes
