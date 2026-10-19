@@ -27,14 +27,22 @@ store a delegate are `apphost.set_app_register_policy`,
 `user.set_swarm_join_policy` and `user.set_swarm_invite_policy`, each in its own
 module. There is no `client.policy` property and no `ModuleClient` subclass, for
 that reason: a module client is a bound set of ops and this module has none.
+
+**The three setters take one argument set, and `setter_query` builds it.** Each
+op declares `Identity string`, `Operation string` and `Timeout
+astral.Duration`, and reads both names empty as a restore of the bundled
+accept-all policy (`mod/apphost/src/op_set_app_register_policy.go:13-23` and
+`mod/user/src/op_set_swarm_policy.go:14-24` at astrald `1286a469`).
 """
 
 from __future__ import annotations
 
-from typing import Final, Sequence
+from typing import Any, Final, Sequence
 
+from .. import querystring
+from ..errors import BadArgument
 from ..record import record, wire
-from ..spec import Primitive, Ptr
+from ..spec import Primitive, Ptr, Spec
 from ..types import Duration, Identity
 
 __all__ = [
@@ -61,3 +69,47 @@ class Delegate:
 
 POLICY_TYPES: Final[Sequence[type]] = (Delegate,)
 """Every wire type this module declares, for a private-registry sweep."""
+
+
+_SETTER: Final[dict[str, Spec]] = {
+    "identity": Primitive("string8"),
+    "operation": Primitive("string8"),
+    "timeout": Primitive("duration"),
+}
+
+
+def setter_query(
+    op: str,
+    identity: Identity | str | None,
+    operation: str | None,
+    timeout: Duration | str | None,
+) -> str:
+    """The query string a delegate setter sends: `op` and its three arguments.
+
+    Both names or neither: the node answers an `error_message` for one alone,
+    so that is refused before a query leaves. An empty `identity` is refused
+    too: beside an operation the node resolves it to the zero identity, which
+    fails `Delegate.Validate`, and the restore is both names omitted. A string
+    `timeout` is parsed here, so a unit Go's `time.ParseDuration` lacks is
+    refused before the node sees it.
+    """
+    if (identity is None) != (operation is None):
+        raise BadArgument(
+            f"{op}: identity and operation name one delegate together; pass "
+            "both, or neither to restore the bundled policy"
+        )
+    params: dict[str, Any] = {}
+    if identity is not None:
+        if isinstance(identity, Identity):
+            identity = identity.text()
+        elif not identity:
+            raise BadArgument(
+                f"{op}: the empty name resolves to the zero identity on the "
+                "node, so identity= would name `anyone`; pass Identity.ANYONE "
+                "to mean that identity"
+            )
+        params["identity"] = identity
+        params["operation"] = operation
+    if timeout is not None:
+        params["timeout"] = Duration.parse(timeout) if isinstance(timeout, str) else timeout
+    return querystring.build(op, querystring.encode_params(_SETTER, params))

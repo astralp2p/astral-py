@@ -1,7 +1,7 @@
 """The `apphost` module client, its data types, and the eager-import rule.
 
 Three tiers in one file, because they assert three different things about the
-same ten ops:
+same eleven ops:
 
 - **Tier A** pins the wire: `apphost.access_token` byte for byte, the missing
   `mod.` prefix that would make every token frame undecodable, and the registry
@@ -18,7 +18,9 @@ same ten ops:
   declaration that a test has to make as well.
 - **Tier C** asks the node, and only through the three read-only anonymous-safe
   ops and the read-only `objects.get_blueprint`, `objects.new` and
-  `objects.echo` for the two policy types. Skipped with a reason when
+  `objects.echo` for the two policy types. `apphost.register` and
+  `apphost.set_app_register_policy` mutate the node and are exercised against
+  the mock alone (design section 7.3). Skipped with a reason when
   `ASTRAL_TEST_ENDPOINT` is unset.
 
 The assertion that is not about apphost at all: **importing `astral.api` imports
@@ -48,8 +50,10 @@ from astral.api.apphost import (
     OP_LIST_TOKENS,
     OP_REGISTER,
     OP_REGISTER_HANDLER,
+    OP_SET_APP_REGISTER_POLICY,
     OP_UNHOLD_OBJECT,
     OP_WHOAMI,
+    ERR_REGISTRATION_DECLINED,
     AccessToken,
     APPHOST_TYPES,
     Apphost,
@@ -68,7 +72,9 @@ from astral.codec.binary import object_reader, payload_bytes
 from astral.codec.text import decode as text_decode
 from astral.codec.text import encode as text_encode
 from astral.errors import (
+    BadArgument,
     BadArgumentType,
+    ParseError,
     ProtocolError,
     QueryRejected,
     QueryTimeout,
@@ -76,6 +82,7 @@ from astral.errors import (
 )
 from astral.object import Ack
 from astral.objectid import object_id
+from astral.querystring import QueryStringTooLong
 from astral.registry import default_blueprints
 from astral.session import Session, flush_cancels
 from astral.spec import Primitive, Slice
@@ -656,27 +663,226 @@ class TokenAndContractTest(ApphostCase):
             with self.assertRaises(QueryRejected):
                 await api.create_token(ID_HEX)
 
-    @bounded()
-    async def test_register_takes_no_arguments_and_answers_a_token(self):
-        """The bootstrap an app with no credentials starts from: the node makes
-        the key, the contract and the token."""
-        token_frame = ("apphost.access_token", access_token_payload())
+
+class RegisterTest(ApphostCase):
+    """`apphost.register`: RR, one `apphost.access_token`, three optional
+    arguments, and a decline that is an `error_message` rather than a reject."""
+
+    async def register(self, *args: object, **kw: object) -> tuple[AccessToken, str]:
         async with MockApphost(
-            routes={OP_REGISTER: Accept(objects=(token_frame,))}
+            routes={OP_REGISTER: Accept(objects=(TOKEN_FRAME,))}
         ) as mock:
             api = await self.apphost(mock)
-            token = await api.register()
-        self.assertEqual(token.token, TOKEN)
-        self.assertEqual(mock.queries[-1].query, OP_REGISTER)
+            token = await api.register(*args, **kw)
+        return token, mock.queries[-1].query
 
     @bounded()
-    async def test_register_declines_are_rejections_not_error_messages(self):
-        """A node whose register policy says no rejects the query; nothing is
-        accepted and there is no stream to read."""
-        async with MockApphost(routes={OP_REGISTER: Reject(code=1)}) as mock:
+    async def test_no_arguments_send_none_and_answer_a_token(self):
+        """The bootstrap an app with no credentials starts from: the node makes
+        the key, the contract and the token."""
+        token, query = await self.register()
+        self.assertEqual(token.token, TOKEN)
+        self.assertEqual(query, OP_REGISTER)
+
+    @bounded()
+    async def test_every_argument_travels_lowercase_with_sorted_keys(self):
+        """Each list is one comma-joined value, escaped as Go's
+        `url.QueryEscape` escapes it; `url.ParseQuery` hands the node the
+        commas back."""
+        _, query = await self.register(
+            ["mod.user.see_swarm_action", "mod.objects.read_object_action"],
+            ("mod.auth.see_objects_action",),
+            name="my chat",
+        )
+        self.assertEqual(
+            query,
+            f"{OP_REGISTER}?contract_permits=mod.auth.see_objects_action"
+            "&grant_permits=mod.user.see_swarm_action%2Cmod.objects.read_object_action"
+            "&name=my+chat",
+        )
+
+    @bounded()
+    async def test_the_lists_are_keywords_too_and_any_iterable_serves(self):
+        _, query = await self.register(
+            contract_permits=(a for a in ["a.one", "a.two"])
+        )
+        self.assertEqual(query, f"{OP_REGISTER}?contract_permits=a.one%2Ca.two")
+
+    @bounded()
+    async def test_an_empty_list_sends_no_argument(self):
+        """astral-go's client sends nothing for no permits; the node reads an
+        absent list and an empty one alike."""
+        _, query = await self.register([], [])
+        self.assertEqual(query, OP_REGISTER)
+
+    @bounded()
+    async def test_an_empty_name_is_sent_as_given(self):
+        _, query = await self.register(name="")
+        self.assertEqual(query, f"{OP_REGISTER}?name=")
+
+    @bounded()
+    async def test_a_permit_the_node_would_misread_never_reaches_it(self):
+        """The node splits on every comma, trims each piece and drops a blank
+        one, so each of these is an action the caller did not name."""
+        async with MockApphost(routes={OP_REGISTER: Accept()}) as mock:
+            api = await self.apphost(mock)
+            for key in ("grant_permits", "contract_permits"):
+                for bad in ("a,b", "", " ", " a", "a\n", "x" * 256):
+                    with self.subTest(key=key, permit=bad):
+                        with self.assertRaises(BadArgument) as caught:
+                            await api.register(**{key: ["ok.action", bad]})
+                        self.assertIn(key, str(caught.exception))
+            self.assertEqual(mock.queries, [])
+
+    @bounded()
+    async def test_a_255_byte_action_name_is_the_longest_sent(self):
+        name = "\u00e9" * 127 + "x"  # 255 UTF-8 bytes
+        with self.assertWarns(QueryStringTooLong):
+            _, query = await self.register([name])
+        self.assertTrue(query.startswith(f"{OP_REGISTER}?grant_permits="))
+        with self.assertRaises(BadArgument):
+            await self.register(["\u00e9" * 128])
+
+    @bounded()
+    async def test_a_bare_string_or_a_non_string_entry_is_a_type_error(self):
+        """A bare `str` would iterate its characters into single-letter
+        actions."""
+        async with MockApphost(routes={OP_REGISTER: Accept()}) as mock:
+            api = await self.apphost(mock)
+            for value in ("mod.user.see_swarm_action", b"x", [1], [None]):
+                with self.subTest(value=value):
+                    with self.assertRaises(BadArgumentType):
+                        await api.register(value)  # type: ignore[arg-type]
+            with self.assertRaises(BadArgumentType):
+                await api.register(name=b"chat")  # type: ignore[arg-type]
+            self.assertEqual(mock.queries, [])
+
+    @bounded()
+    async def test_a_name_over_255_bytes_never_reaches_the_node(self):
+        """`Name` is a `string8` in the request a delegate reads."""
+        with self.assertWarns(QueryStringTooLong):
+            _, query = await self.register(name="n" * 255)
+        self.assertEqual(query, f"{OP_REGISTER}?name={'n' * 255}")
+        with self.assertRaises(BadArgument):
+            await self.register(name="n" * 256)
+
+    @bounded()
+    async def test_a_declined_registration_is_a_remote_error(self):
+        """The node accepts before its policy decides, so a refusal is an
+        `error_message` in the stream, not `query_rejected_msg`."""
+        async with MockApphost(
+            routes={
+                OP_REGISTER: Accept(objects=(error_frame(ERR_REGISTRATION_DECLINED),))
+            }
+        ) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(RemoteError) as caught:
+                await api.register(["mod.user.see_swarm_action"])
+        self.assertEqual(caught.exception.message, "registration declined")
+
+    @bounded()
+    async def test_an_answer_of_the_wrong_type_is_a_protocol_error(self):
+        async with MockApphost(
+            routes={OP_REGISTER: Accept(objects=(ACK_FRAME,))}
+        ) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(ProtocolError):
+                await api.register()
+
+
+class SetAppRegisterPolicyTest(ApphostCase):
+    """`apphost.set_app_register_policy`: RR, one `ack`, the argument set the
+    two swarm setters share."""
+
+    async def set_policy(self, route: object, *args: object, **kw: object) -> MockApphost:
+        async with MockApphost(routes={OP_SET_APP_REGISTER_POLICY: route}) as mock:
+            api = await self.apphost(mock)
+            self.assertIsNone(await api.set_app_register_policy(*args, **kw))
+        return mock
+
+    @bounded()
+    async def test_a_delegate_travels_as_identity_operation_and_timeout(self):
+        mock = await self.set_policy(
+            Accept(objects=(ACK_FRAME,)),
+            GENERATOR,
+            "control.decide_app_register",
+            timeout="90s",
+        )
+        self.assertEqual(
+            mock.queries[-1].query,
+            f"{OP_SET_APP_REGISTER_POLICY}?identity={GENERATOR.text()}"
+            "&operation=control.decide_app_register&timeout=1m30s",
+        )
+
+    @bounded()
+    async def test_a_directory_name_and_a_duration_pass_through(self):
+        """The node resolves `identity` itself, so a name is sent as given."""
+        mock = await self.set_policy(
+            Accept(objects=(ACK_FRAME,)),
+            "control-plane",
+            "control.decide",
+            timeout=Duration(5 * 60 * 10**9),
+        )
+        self.assertEqual(
+            mock.queries[-1].query,
+            f"{OP_SET_APP_REGISTER_POLICY}?identity=control-plane"
+            "&operation=control.decide&timeout=5m0s",
+        )
+
+    @bounded()
+    async def test_no_delegate_restores_the_bundled_policy(self):
+        """Both names empty is the op's restore: the node clears the stored
+        delegate and answers `ack`."""
+        mock = await self.set_policy(Accept(objects=(ACK_FRAME,)))
+        self.assertEqual(mock.queries[-1].query, OP_SET_APP_REGISTER_POLICY)
+
+    @bounded()
+    async def test_a_malformed_delegate_never_reaches_the_node(self):
+        async with MockApphost(routes={OP_SET_APP_REGISTER_POLICY: Accept()}) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(BadArgument):
+                await api.set_app_register_policy(GENERATOR)
+            with self.assertRaises(BadArgument):
+                await api.set_app_register_policy(operation="control.decide")
+            with self.assertRaises(BadArgument):
+                await api.set_app_register_policy("", "control.decide")
+            with self.assertRaises(ParseError):
+                await api.set_app_register_policy(
+                    GENERATOR, "control.decide", timeout="1y"
+                )
+            self.assertEqual(mock.queries, [])
+
+    @bounded()
+    async def test_a_refused_delegate_surfaces_as_a_remote_error(self):
+        async with MockApphost(
+            routes={
+                OP_SET_APP_REGISTER_POLICY: Accept(
+                    objects=(error_frame("the node cannot be its own delegate"),)
+                )
+            }
+        ) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(RemoteError) as caught:
+                await api.set_app_register_policy(FURRY_BOLT, "control.decide")
+        self.assertEqual(caught.exception.message, "the node cannot be its own delegate")
+
+    @bounded()
+    async def test_an_unauthorized_caller_is_a_rejection(self):
+        async with MockApphost(
+            routes={OP_SET_APP_REGISTER_POLICY: Reject(code=1)}
+        ) as mock:
             api = await self.apphost(mock)
             with self.assertRaises(QueryRejected):
-                await api.register()
+                await api.set_app_register_policy()
+
+    @bounded()
+    async def test_an_answer_other_than_ack_is_a_protocol_error(self):
+        async with MockApphost(
+            routes={OP_SET_APP_REGISTER_POLICY: Accept(objects=(IDENTITY_FRAME,))}
+        ) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(ProtocolError):
+                await api.set_app_register_policy()
 
 class HoldTest(ApphostCase):
     @bounded()
@@ -1280,6 +1486,79 @@ class SecurityNoteTest(unittest.TestCase):
                 self.assertIn(fragment, line)
 
 
+class RegisterCitationTest(unittest.TestCase):
+    """Every `path:line` the register and register-policy prose cites, read at
+    the pins, and the separator claim read off the source rather than trusted."""
+
+    SRC = "mod/apphost/src"
+
+    def test_every_anchor_lands_on_its_claim(self):
+        cites = (
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 17, "RegisterDuration = 10 * 365"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 23, "type opRegisterArgs struct"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 39, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 56,
+             "append(mod.GetWebOriginPermits(origin), parsePermits(args.ContractPermits)...)"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 58, "why accept before deciding"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 60, "query.AcceptRaw()"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 69, "GetRegisterAppPolicy()"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 75, "switch {"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 78, "ErrRegistrationDeclined"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 86, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 132, "Add(RegisterDuration)"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 137, "range grantPermits"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 182, "CreateAccessToken(guestID"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 13,
+             "type opSetAppRegisterPolicyArgs struct"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 23, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 31,
+             "AdminManageAppsAction"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 35, "q.AcceptRaw()"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 38,
+             'args.Identity == "" && args.Operation == ""'),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 46, "mod.newDelegate("),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 61,
+             "func (mod *Module) newDelegate"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 71, "d.Validate()"),
+            (reference.ASTRALD, f"{self.SRC}/parse_permits.go", 12, "func parsePermits"),
+            (reference.ASTRALD, f"{self.SRC}/register_serve_apps.go", 15,
+             "func serveAppsGrantRequest"),
+            (reference.ASTRALD, f"{self.SRC}/register_serve_apps.go", 17,
+             "append([]*auth.Permit{serveApps}, parsePermits(asked)...)"),
+            (reference.ASTRALD, "mod/apphost/register_policy.go", 33, "func AcceptAll"),
+            (reference.ASTRAL_GO, "api/apphost/errors.go", 7,
+             'NewError("registration declined")'),
+            (reference.ASTRAL_GO, "api/apphost/client/register.go", 38,
+             "func (client *Client) Register(ctx *astral.Context, permits ...string)"),
+            (reference.ASTRAL_GO, "api/apphost/client/register.go", 70, "func registerArgs"),
+            (reference.ASTRAL_GO, "lib/query/field_editor.go", 41, "case reflect.String:"),
+            (reference.ASTRAL_GO, "lib/query/field_editor.go", 42, 'String8("").ObjectType()'),
+            (reference.ASTRAL_GO, "astral/string_types.go", 25, "if len(s) > 1<<8-1"),
+        )
+        for repo, path, number, fragment in cites:
+            with self.subTest(citation=f"{path}:{number}"):
+                try:
+                    line = reference.cited_line(repo, path, number)
+                except reference.Unavailable as exc:  # pragma: no cover
+                    self.skipTest(str(exc))
+                self.assertIn(fragment, line)
+
+    def test_the_node_splits_on_commas_and_trims_each_piece(self):
+        """What `_permits` refuses is what `parsePermits` would misread."""
+        try:
+            src = reference.read(reference.ASTRALD, f"{self.SRC}/parse_permits.go")
+            args = reference.read(reference.ASTRALD, f"{self.SRC}/op_register.go")
+        except reference.Unavailable as exc:  # pragma: no cover
+            self.skipTest(str(exc))
+        self.assertIn('strings.Split(joined, ",")', src)
+        self.assertIn("strings.TrimSpace(action)", src)
+        self.assertIn('action != ""', src)
+        for field in ("GrantPermits string", "ContractPermits string", "Name string"):
+            with self.subTest(field=field):
+                self.assertIn(field, args)
+        self.assertEqual(ERR_REGISTRATION_DECLINED, "registration declined")
+
+
 class ModulePatternTest(ApphostCase):
     """One base class, one shape-violation message, one type sweep."""
 
@@ -1353,6 +1632,10 @@ class ModulePatternTest(ApphostCase):
         self.assertEqual(mod._IDENTITY["identity"], Primitive("string8"))
         self.assertEqual(mod._OBJECT_ID["id"], Primitive("object_id.sha256"))
         self.assertEqual(mod._CANCEL["query_id"], Primitive("nonce64"))
+        self.assertEqual(
+            mod._REGISTER,
+            {key: Primitive("string8") for key in ("grant_permits", "contract_permits", "name")},
+        )
 
         # The declaration is what refuses a wrong-typed value. Without it the
         # encoder dispatches on the value and sends base64 for bytes.
