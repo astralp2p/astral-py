@@ -126,8 +126,7 @@ inert. Defect filed against astrald.
 struct is an identity and an output format and nothing else, and the argument
 binder skips a key the op does not declare (`lib/query/editor.go`
 `Editor.SetMany` at astral-go `221ce52`), so a `start` sent there is accepted and
-ignored. It is sent only when the caller names one, because an implicit zero
-would mean "re-read the whole log" to a node that reads it.
+ignored. `sync_with` therefore accepts no `start` and sends only `identity`.
 
 **Reject codes are numeric and carry no message.** Code 2 is "no active
 contract" on `adopt`, `expel`, `info`, `list_expelled`, `request_membership` and
@@ -940,9 +939,7 @@ class User(ModuleClient):
         )
         self._expect(await self._c.call_one(qs, **kw), Ack, OP_REMOVE_ASSET)
 
-    async def sync_with(
-        self, node: Identity | str, *, start: int | None = None, **kw: Any
-    ) -> None:
+    async def sync_with(self, node: Identity | str, **kw: Any) -> None:
         """Pull the asset log from one sibling. RR, one `ack`. **Mutates.**
 
         The node runs `sync_assets` against `node` over the network zone and
@@ -960,23 +957,17 @@ class User(ModuleClient):
         for the node to resolve. `node` is mandatory here, and the op tags the
         argument required.
 
-        **`start` reaches no code on astrald `1286a469`.** `syncAssets` takes
-        the node and reads the height out of the tree itself
-        (`mod/user/src/op_sync_with.go:39`, `mod/user/src/sync.go:30`), and the
-        op declares no `start` at all, so the binder drops the key. It is
-        therefore sent only when the caller names it, never by default -- an
-        implicit `start=0` is identical to an absent one and would mean
-        "re-read the whole log from zero" to a node that reads it, which is not
-        what a caller who named no height asked for.
+        **`sync_with` takes no `start`.** `syncAssets` takes the node and reads
+        the height out of the tree itself (`mod/user/src/op_sync_with.go:39`,
+        `mod/user/src/sync.go:30`), and the op declares no `start` at all, so
+        the binder would drop the key. Only `identity` is sent.
         """
-        params: dict[str, Any] = {
-            "identity": _identity(node, OP_SYNC_WITH).text()
-        }
-        if start is not None:
-            params["start"] = _height(start, OP_SYNC_WITH)
         qs = querystring.build(
             OP_SYNC_WITH,
-            self._encode({"identity": _STRING8, "start": _UINT64}, params),
+            self._encode(
+                {"identity": _STRING8},
+                {"identity": _identity(node, OP_SYNC_WITH).text()},
+            ),
         )
         self._expect(await self._c.call_one(qs, **kw), Ack, OP_SYNC_WITH)
 
