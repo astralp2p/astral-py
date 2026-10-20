@@ -21,6 +21,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import os
+import time
 import unittest
 
 from astral import primitives as P
@@ -39,6 +40,7 @@ from mock_apphost import (
     AUTH_SUCCESS,
     ERROR_CODES,
     ERROR_MSG,
+    FS_STALL,
     FURRY_BOLT,
     FURRY_BOLT_ALIAS,
     HANDLE_QUERY,
@@ -806,6 +808,52 @@ class AmbientEnvironmentTest(unittest.TestCase):
                     f"{' nor '.join(sorted(carriers))}, so the ambient endpoint "
                     "and token reach it unblanked",
                 )
+
+
+class BoundedTest(unittest.IsolatedAsyncioTestCase):
+    """`bounded` forgives a loop step stalled on the filesystem, and nothing else.
+
+    Each case blocks the loop with `time.sleep` for longer than an inner bound,
+    which is how a disk stall looks from the loop: one step that does not
+    return. The only difference between the two stalls is whether the step
+    raised a filesystem audit event first.
+    """
+
+    STALL = FS_STALL * 2 + 0.3
+    BUDGET = 0.3
+
+    @bounded()
+    async def test_a_hang_is_still_bounded(self):
+        @bounded(self.BUDGET)
+        async def hangs() -> None:
+            await asyncio.Event().wait()
+
+        started = time.monotonic()
+        with self.assertRaises(TimeoutError):
+            await hangs()
+        self.assertLess(time.monotonic() - started, self.BUDGET + 1.0)
+
+    @bounded()
+    async def test_a_filesystem_stall_on_the_loop_is_not_charged(self):
+        @bounded(self.BUDGET)
+        async def stalls_on_a_file() -> str:
+            with open(os.devnull, "rb"):
+                pass
+            time.sleep(self.STALL)  # the stall, on the loop's thread
+            await asyncio.sleep(0.01)
+            return "finished"
+
+        self.assertEqual(await stalls_on_a_file(), "finished")
+
+    @bounded()
+    async def test_a_stall_with_no_filesystem_event_is_still_charged(self):
+        @bounded(self.BUDGET)
+        async def stalls() -> None:
+            time.sleep(self.STALL)  # the stall, on the loop's thread
+            await asyncio.sleep(0.01)
+
+        with self.assertRaises(TimeoutError):
+            await stalls()
 
 
 if __name__ == "__main__":

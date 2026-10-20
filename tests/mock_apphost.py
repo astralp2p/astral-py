@@ -32,15 +32,18 @@ feature, because a real node misbehaves:
 
 A handler never propagates an exception into the enclosing `TaskGroup`: faults land
 in `errors` for the test to assert on. `bounded` wraps every test in
-`asyncio.timeout`, because a hanging test in an async suite wedges the whole run.
+`asyncio.timeout`, because a hanging test in an async suite wedges the whole run,
+and does not charge the test for loop steps stalled on the filesystem.
 
 **Importing this module blanks the ambient node.** `blank_ambient_environment()`
 runs at import and empties the endpoint and token variables of design section
 3.3, so a developer's own `ASTRALD_APPHOST_TOKEN` cannot make a client
-authenticate against a mock that has no token. That is the one import side effect
-here and it is deliberate: a stdlib `unittest` run has no fixture that covers
-`discover`, a single module and a single test alike, and every test module that
-reaches `connect()` imports this one.
+authenticate against a mock that has no token. That is one of two import side
+effects here. The other installs the audit hook `bounded` reads, which is
+process-wide and cannot be removed. Both are deliberate: a stdlib `unittest` run
+has no fixture that covers `discover`, a single module and a single test alike,
+and every test module that reaches `connect()` or uses `bounded` imports this
+one.
 """
 
 from __future__ import annotations
@@ -49,7 +52,11 @@ import asyncio
 import contextlib
 import enum
 import functools
+import math
 import os
+import sys
+import threading
+import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Coroutine, Final, Sequence
 
@@ -75,6 +82,7 @@ __all__ = [
     "ERROR_CODES",
     "ERROR_MSG",
     "ErrorMsg",
+    "FS_STALL",
     "FURRY_BOLT",
     "FURRY_BOLT_ALIAS",
     "Garbage",
@@ -503,13 +511,114 @@ DEFAULT_TEST_TIMEOUT: Final = 5.0
 MAX_FRAME: Final = 16 * 1024 * 1024
 
 
+FS_STALL: Final = 0.25
+"""A loop step that touched the filesystem and ran longer than this, in seconds,
+is a disk stall, and `bounded` does not charge it to the test."""
+
+_TICK: Final = 0.05
+
+_FS_EVENTS: Final = frozenset(
+    {
+        "open",
+        "os.listdir",
+        "os.mkdir",
+        "os.remove",
+        "os.rename",
+        "os.rmdir",
+        "os.scandir",
+        "shutil.rmtree",
+        "socket.bind",
+    }
+)
+"""The audit events that reach the filesystem. `open` covers `io.open`, `os.open`
+and with them every `tempfile` call; `os.remove` covers `os.unlink`. A
+`socket.bind` counts only for an address that is a path: binding one creates an
+inode, and the listener's close unlinks it."""
+
+_fs_touched: dict[int, float] = {}
+"""Thread ident to the `time.monotonic()` of that thread's last filesystem event."""
+
+
+def _note_fs(event: str, args: tuple[object, ...]) -> None:
+    if event in _FS_EVENTS and (
+        event != "socket.bind" or (len(args) > 1 and isinstance(args[1], (str, bytes)))
+    ):
+        _fs_touched[threading.get_ident()] = time.monotonic()
+
+
+sys.addaudithook(_note_fs)
+
+
+class _Bound:
+    """`asyncio.timeout(seconds)` that does not count disk stalls on the loop."""
+
+    def __init__(self, seconds: float) -> None:
+        self._seconds = seconds
+
+    async def __aenter__(self) -> "_Bound":
+        self._loop = asyncio.get_running_loop()
+        self._thread = threading.get_ident()
+        self._timeout = asyncio.timeout(self._seconds)
+        await self._timeout.__aenter__()
+        self._last = self._loop.time()
+        self._tick_handle = self._loop.call_later(_TICK, self._tick)
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool | None:
+        self._tick_handle.cancel()
+        return await self._timeout.__aexit__(*exc)  # type: ignore[arg-type]
+
+    def _tick(self) -> None:
+        # `loop.time()` is `time.monotonic()`, the clock `_note_fs` stamps with.
+        # A tick scheduled before a stall is due before a deadline the stall
+        # crossed, unless that deadline was already less than one tick away.
+        # Due handles run in deadline order, so the tick runs first in the loop
+        # iteration that ends the stall, and `reschedule` cancels the
+        # deadline's handle before it can fire.
+        now = self._loop.time()
+        stalled = now - self._last - _TICK
+        deadline = self._timeout.when()
+        if (
+            stalled > FS_STALL
+            and _fs_touched.get(self._thread, -math.inf) >= self._last
+            and deadline is not None
+            and not self._timeout.expired()
+        ):
+            self._timeout.reschedule(deadline + stalled)
+        self._last = now
+        self._tick_handle = self._loop.call_later(_TICK, self._tick)
+
+
 def bounded(seconds: float = DEFAULT_TEST_TIMEOUT):  # type: ignore[no-untyped-def]
-    """Bound one async test. A hanging test wedges the whole suite."""
+    """Bound one async test. A hanging test wedges the whole suite.
+
+    The bound is `seconds` of loop time, less every loop step that touched the
+    filesystem and stalled for longer than `FS_STALL`. A file operation is a
+    synchronous call on the loop's thread, and with `$TMPDIR` on a loaded disk
+    it blocks for seconds. Verified on the 4-core development machine, with
+    `$TMPDIR` on its ext4 SD card and two writers rewriting 256 MB files under
+    `fsync`: the main thread sat in the ext4 journal for up to 7.3 s right
+    after a unix socket's `bind`, and for 4.1 s right after opening the probe
+    file of the first `tempfile.gettempdir()`. A plain `asyncio.timeout`
+    charged that to the test, and 4 of 50 runs failed in
+    `test_serve.ShutdownTest`'s two shutdown tests, every failure the bound
+    expiring. The serving tests cannot move those calls out of the bound:
+    `Service.listen` binds, `Service.aclose` unlinks, and because the close
+    shields its steps, a cancelled close can finish its unlink at whatever
+    `await` the test is parked on next (inferred from `serve.py`).
+
+    A hang is still bounded. A coroutine that never resumes leaves the loop
+    idle, the ticks keep their schedule, and the deadline fires as before. A
+    stall with no filesystem event, CPU-bound code or a `time.sleep` on the
+    loop, is still charged. A file operation on another thread is charged too,
+    because the loop is not stalled while it waits for one; `test_cli`'s
+    `InputTest` deals with its own.
+    """
 
     def decorate(fn):  # type: ignore[no-untyped-def]
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):  # type: ignore[no-untyped-def]
-            async with asyncio.timeout(seconds):
+            async with _Bound(seconds):
                 return await fn(*args, **kwargs)
 
         return wrapper
