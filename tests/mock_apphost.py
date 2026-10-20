@@ -33,7 +33,8 @@ feature, because a real node misbehaves:
 A handler never propagates an exception into the enclosing `TaskGroup`: faults land
 in `errors` for the test to assert on. `bounded` wraps every test in
 `asyncio.timeout`, because a hanging test in an async suite wedges the whole run,
-and does not charge the test for loop steps stalled on the filesystem.
+and does not charge the test for a loop stall in a tick window that saw a
+filesystem event.
 
 **Importing this module blanks the ambient node.** `blank_ambient_environment()`
 runs at import and empties the endpoint and token variables of design section
@@ -512,8 +513,12 @@ MAX_FRAME: Final = 16 * 1024 * 1024
 
 
 FS_STALL: Final = 0.25
-"""A loop step that touched the filesystem and ran longer than this, in seconds,
-is a disk stall, and `bounded` does not charge it to the test."""
+"""A `bounded` tick that runs more than this many seconds late, in a window in
+which the loop's thread raised a filesystem event, is a disk stall, and `bounded`
+does not charge that lateness to the test. The lateness is measured from the
+tick's due time. A step that starts `r` seconds before the next tick is due
+counts once it blocks for longer than `FS_STALL + r`, and `bounded` forgives `r`
+less than its length; `r` is at most one `_TICK`."""
 
 _TICK: Final = 0.05
 
@@ -530,10 +535,21 @@ _FS_EVENTS: Final = frozenset(
         "socket.bind",
     }
 )
-"""The audit events that reach the filesystem. `open` covers `io.open`, `os.open`
-and with them every `tempfile` call; `os.remove` covers `os.unlink`. A
-`socket.bind` counts only for an address that is a path: binding one creates an
-inode, and the listener's close unlinks it."""
+"""The audit events `bounded` counts as filesystem activity. Verified by an
+audit-hook trace under Python 3.14:
+
+- `open` is raised by `open`, `io.open`, `os.open` and `io.open_code`, so
+  importing a module from a file counts. `tempfile.mkstemp` raises it; `tempfile.mkdtemp` and
+  `TemporaryDirectory` raise `os.mkdir`; `tempfile.mktemp` raises no event.
+- `os.remove` covers `os.unlink`. `os.listdir` also covers a `/proc` listing,
+  `socket_fds`'s among them.
+- The set is not every event that reaches the filesystem: `os.chmod`, `os.utime`
+  and `os.truncate` are not in it, and `os.write`, `os.fsync` and `os.close`
+  raise no audit event.
+- `socket.bind` counts for a `str` or `bytes` address: a unix socket path, whose
+  bind creates an inode that the listener's close unlinks, and also a Linux
+  abstract-namespace name, which creates none. An IP address is a tuple and does
+  not count."""
 
 _fs_touched: dict[int, float] = {}
 """Thread ident to the `time.monotonic()` of that thread's last filesystem event."""
@@ -550,7 +566,8 @@ sys.addaudithook(_note_fs)
 
 
 class _Bound:
-    """`asyncio.timeout(seconds)` that does not count disk stalls on the loop."""
+    """`asyncio.timeout(seconds)` that does not count a loop stall in a tick window
+    with a filesystem event."""
 
     def __init__(self, seconds: float) -> None:
         self._seconds = seconds
@@ -570,11 +587,18 @@ class _Bound:
 
     def _tick(self) -> None:
         # `loop.time()` is `time.monotonic()`, the clock `_note_fs` stamps with.
+        # The check is on the window since the previous tick, not on a step: a
+        # lateness over `FS_STALL` is forgiven whole when the loop's thread
+        # raised a counted event at any point in the window, in the step that
+        # stalled or in any other.
         # A tick scheduled before a stall is due before a deadline the stall
         # crossed, unless that deadline was already less than one tick away.
-        # Due handles run in deadline order, so the tick runs first in the loop
-        # iteration that ends the stall, and `reschedule` cancels the
-        # deadline's handle before it can fire.
+        # `_run_once` moves due timers to `_ready` in deadline order, behind the
+        # callbacks already queued there, and skips a cancelled handle. So the
+        # tick runs before the deadline's handle in the iteration that ends the
+        # stall, and `reschedule` cancels that handle before it can fire. A task
+        # step queued ahead of the tick runs before it, so that step's
+        # filesystem event counts for the stall before it.
         now = self._loop.time()
         stalled = now - self._last - _TICK
         deadline = self._timeout.when()
@@ -592,8 +616,9 @@ class _Bound:
 def bounded(seconds: float = DEFAULT_TEST_TIMEOUT):  # type: ignore[no-untyped-def]
     """Bound one async test. A hanging test wedges the whole suite.
 
-    The bound is `seconds` of loop time, less every loop step that touched the
-    filesystem and stalled for longer than `FS_STALL`. A file operation is a
+    The bound is `seconds` of loop time, less the lateness of every tick that ran
+    more than `FS_STALL` late in a window in which the loop's thread raised an
+    event in `_FS_EVENTS`. A tick runs every `_TICK` seconds. A file operation is a
     synchronous call on the loop's thread, and with `$TMPDIR` on a loaded disk
     it blocks for seconds. Verified on the 4-core development machine, with
     `$TMPDIR` on its ext4 SD card and two writers rewriting 256 MB files under
@@ -609,10 +634,18 @@ def bounded(seconds: float = DEFAULT_TEST_TIMEOUT):  # type: ignore[no-untyped-d
 
     A hang is still bounded. A coroutine that never resumes leaves the loop
     idle, the ticks keep their schedule, and the deadline fires as before. A
-    stall with no filesystem event, CPU-bound code or a `time.sleep` on the
-    loop, is still charged. A file operation on another thread is charged too,
-    because the loop is not stalled while it waits for one; `test_cli`'s
-    `InputTest` deals with its own.
+    stall in a window in which the loop's thread raised no filesystem event,
+    CPU-bound code or a `time.sleep` on the loop, is still charged.
+
+    The rule does not attribute an event to the step that stalled. A stall is
+    forgiven when any event lands in its window: before the stall, or after it
+    in a step queued ahead of the next tick. So CPU-bound code or a `time.sleep`
+    next to an `open`, a first import or a `socket_fds()` call is forgiven too
+    (inferred from `_Bound._tick`'s check, which compares the event's time with
+    the previous tick only).
+
+    A file operation on another thread is charged, because the loop is not
+    stalled while it waits for one; `test_cli`'s `InputTest` deals with its own.
     """
 
     def decorate(fn):  # type: ignore[no-untyped-def]
