@@ -1230,14 +1230,12 @@ class AssetOpTest(UserCase):
 
 
 class SyncWithOpTest(UserCase):
-    """`user.sync_with`: RR, one `ack`, an identity argument and a height."""
+    """`user.sync_with`: RR, one `ack`, an identity argument."""
 
     @bounded()
-    async def test_it_sends_the_identity_and_no_height_by_default(self):
+    async def test_it_sends_the_identity_alone(self):
         """`start` is undeclared on astrald `1286a469`, and the node reads the
-        height out of its own tree. An implicit `start=0` would mean "re-read
-        the whole log" to a node that reads it, which is not what a caller who
-        named no height asked for."""
+        height out of its own tree."""
         query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
         self.assertIsNone(await api.sync_with(FURRY_BOLT))
@@ -1245,20 +1243,13 @@ class SyncWithOpTest(UserCase):
         self.assertNotIn("start", self.params()[1])
 
     @bounded()
-    async def test_a_named_start_height_travels(self):
-        query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}&start=12"
-        api = await self.serving({query: Accept(objects=[ACK_FRAME])})
-        await api.sync_with(FURRY_BOLT, start=12)
-        self.assertEqual(self.params()[1]["start"], "12")
-
-    @bounded()
-    async def test_a_start_of_zero_is_sent_when_it_is_asked_for(self):
-        """Naming the height is a different statement from omitting it, so an
-        explicit zero travels."""
-        query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}&start=0"
-        api = await self.serving({query: Accept(objects=[ACK_FRAME])})
-        await api.sync_with(FURRY_BOLT, start=0)
-        self.assertEqual(self.params()[1]["start"], "0")
+    async def test_it_accepts_no_start_keyword(self):
+        """`start` is undeclared on astrald `1286a469`, so naming one is a
+        `TypeError` and nothing reaches the node."""
+        api = await self.serving({OP_SYNC_WITH: Accept(objects=[ACK_FRAME])})
+        with self.assertRaises(TypeError):
+            await api.sync_with(FURRY_BOLT, start=12)
+        self.assertEqual(self.mock.queries, [])
 
     @bounded()
     async def test_a_directory_name_never_reaches_the_node(self):
