@@ -713,7 +713,17 @@ class InputTest(CliCase):
 
     The command's own read of the file stays inside the bound, because it is
     under test. Under the same load, 2 of 2508 `cli.main` calls blocked in that
-    read for over 1 s, the slowest for 21.4 s.
+    read for over 1 s, the slowest for 21.4 s. The stall is the read's atime
+    update, not the read: under `relatime`, the development machine's mount
+    option, the first read of a file whose atime is not newer than its mtime
+    writes a new atime, which is a journalled metadata write. Measured under
+    the same load on 600 files written and then left for the journal to commit
+    them: the first read took over 1 s twice, the slowest 9.7 s, and the second
+    read of the same file never took over 0.1 s. So `write` reads each file once
+    before the test starts, and the command's read inside the bound is served
+    from the page cache with no write behind it. `bounded` cannot forgive this
+    stall the way it forgives one on the loop, because `main` runs on a worker
+    thread and the loop is idle while it waits.
     """
 
     def setUp(self) -> None:
@@ -725,6 +735,7 @@ class InputTest(CliCase):
         path = Path(directory) / "input.txt"
         path.write_text(text, encoding="utf-8")
         self.addCleanup(lambda: (path.unlink(missing_ok=True), os.rmdir(directory)))
+        path.read_bytes()  # the atime update, outside the bound
         return str(path)
 
     @bounded()
