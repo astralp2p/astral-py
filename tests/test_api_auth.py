@@ -292,9 +292,9 @@ class AuthTypesTest(unittest.TestCase):
         self.assertNotIn(Action, AUTH_TYPES)
 
     def test_mod_auth_sudo_action_is_not_declared_here(self):
-        """It exists -- astrald declares and registers it, and the live node
-        answers a ten-byte zero instance -- but it belongs to astrald rather
-        than to astral-go's `api/auth`, and no op sends one."""
+        """It exists -- astral-go's `api/auth` declares and registers it from
+        `5923624`, and a live node answered a ten-byte zero instance -- but no
+        op sends one, so this module does not declare it."""
         self.assertFalse(default_blueprints().has("mod.auth.sudo_action"))
 
     def test_the_signature_type_the_declaration_points_at_is_registered(self):
@@ -1263,9 +1263,10 @@ class LiveAuthTest(live_support.LiveCase):
 
     @bounded(30.0)
     async def test_mod_auth_sudo_action_is_a_type_on_the_node(self):
-        """astrald declares and registers it even though astral-go does not, so
-        D-27's premise holds for astral-go and not for the node. Ten bytes: a
-        nonce and two nil flags, the embedded `auth.Action` flattened."""
+        """astral-go's `api/auth` declares and registers it from `5923624`;
+        at the pins, which predate that, astrald declares it and astral-go does
+        not, so D-27's premise held there. Ten bytes: a nonce and two nil
+        flags, the embedded `auth.Action` flattened."""
         async with await self.client() as client:
             async with client.stream(
                 "objects.new?type=mod.auth.sudo_action", allow_unparsed=True, timeout=20.0

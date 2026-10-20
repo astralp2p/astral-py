@@ -146,17 +146,20 @@ dataclass carrying the two field declarations, inherited by a concrete action
 record so the fields flatten under their own names. Declaring it as a record
 would nest the two fields in JSON under a key no node sends.
 
-**`mod.auth.sudo_action` exists.** astral-docs documents
-`protocols/auth/types/mod.auth.sudo_action.md`, the op survey records it as
-having no counterpart in astral-go (D-27), and the survey is right about
-astral-go and wrong about the node: astrald declares the type in
-`mod/auth/sudo_action.go`, registers it with `astral.Add`, and the live node
-answers `objects.new?type=mod.auth.sudo_action` with a ten-byte zero instance,
-verified this session. The type is `{Action, AsID *identity}` and its authorizer
-is `Actor().IsEqual(AsID)` (`astrald/mod/auth/src/authorizers.go`), i.e. it
-grants nothing that is not already the caller. It is **not declared here**: no
-op in the node's 118-op registry sends one, and it belongs to astrald rather
-than to astral-go's `api/auth`.
+**`mod.auth.sudo_action` exists, and astral-go's `api/auth` declares it.**
+astral-go `5923624` declares `SudoAction` in `api/auth/sudo_action.go` and
+registers it with `astral.Add`; astrald `09d9df87` stopped declaring it. Both
+commits are past this SDK's pins (astral-go `221ce52`, astrald `1286a469`), at
+which astrald declares the type in `mod/auth/sudo_action.go` and astral-go does
+not, and a live node answered `objects.new?type=mod.auth.sudo_action` with a
+ten-byte zero instance, verified at those pins and not re-observed since the
+move. astral-docs documents `protocols/auth/types/mod.auth.sudo_action.md`, and
+the op survey records it as having no counterpart in astral-go (D-27), which
+held at the pins and no longer does. The type is `{Action, AsID *identity}`, and
+astrald's authorizer for it is `Actor().IsEqual(AsID)`
+(`astrald/mod/auth/src/authorizers.go`), i.e. it grants nothing that is not
+already the caller. It is **not declared here**: no op in the node's 118-op
+registry sends one.
 
 **`mod.crypto.signature` is declared by `astral.api.crypto`, not here.** Both
 signature fields are `Ptr("mod.crypto.signature")`, resolved by name through the
@@ -242,7 +245,7 @@ class Action:
 
     astral-go's `auth.Action` is embedded by value into `mod.auth.*_action`,
     `mod.objects.*_action`, `mod.user.*_action`, `mod.nodes.relay_for_action` and
-    astrald's `mod.auth.sudo_action`. A value embed flattens in binary **and** in
+    `mod.auth.sudo_action`. A value embed flattens in binary **and** in
     JSON, so a concrete action inherits this class rather than referencing it:
 
         @record("mod.auth.see_objects_action")
@@ -698,8 +701,8 @@ AUTH_TYPES: Final[Sequence[type]] = (
 """Every wire type this module declares, for a private-registry sweep.
 
 `Action` is absent because it is a field base rather than a type, and
-`mod.auth.sudo_action` and `mod.auth.authorizer_assignments` because they
-belong to astrald.
+`mod.auth.sudo_action` and `mod.auth.authorizer_assignments` because this
+module does not declare them.
 """
 
 Auth.TYPES = AUTH_TYPES
