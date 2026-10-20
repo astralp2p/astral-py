@@ -648,10 +648,10 @@ def bounded(seconds: float = DEFAULT_TEST_TIMEOUT):  # type: ignore[no-untyped-d
     The rule does not attribute a filesystem event to the step that stalled. A
     tick's lateness over `FS_STALL` is forgiven when a filesystem event lands
     anywhere in its window: before the stall, or after it in a step queued ahead
-    of the next tick. So CPU-bound code or a `time.sleep` next to an `open`, a first import
-    of a `.py` module or a `socket_fds()` call is forgiven too (inferred from
-    `_Bound._tick`'s check, which compares the event's time with the previous
-    tick only).
+    of the next tick. So CPU-bound code or a `time.sleep` next to an `open`, a
+    first import of a `.py` module or a `socket_fds()` call is forgiven too
+    (inferred from `_Bound._tick`'s check, which compares the event's time with
+    the previous tick only).
 
     A file operation on another thread is charged, because the loop is not
     stalled while it waits for one; `test_cli`'s `InputTest` deals with its own.
