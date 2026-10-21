@@ -34,8 +34,8 @@ A handler never propagates an exception into the enclosing `TaskGroup`: faults l
 in `errors` for the test to assert on. `bounded` wraps every test in
 `asyncio.timeout`, because a hanging test in an async suite wedges the whole run,
 and does not charge the test for the lateness of a tick of its own that runs more
-than `FS_STALL` late when the loop's thread raised a filesystem event since the
-previous tick.
+than `FS_STALL` late when the loop's thread raised a filesystem event in the
+tick's window (`FS_STALL`).
 
 **Importing this module blanks the ambient node.** `blank_ambient_environment()`
 runs at import and empties the endpoint and token variables of design section
@@ -518,10 +518,11 @@ FS_STALL: Final = 0.25
 this many seconds late when the loop's thread raised a filesystem event
 (`_FS_EVENTS`) in the tick's window.
 
-A tick is due `_TICK` seconds after the previous tick ran. Its window is the time
-since the previous tick ran, and its lateness is the time from its due time to
-the moment it runs, whichever steps fill it. A step that is the only work in a
-window and starts `r` seconds before the tick is due makes the tick more than
+A tick is due `_TICK` seconds after the previous tick ran, or, for the first
+tick, after `bounded` entered its bound (`_Bound.__aenter__`). Its window is the
+time since then, and its lateness is the time from its due time to the moment it
+runs, whichever steps fill it. A step that starts in a window, is the only work
+in it, and starts `r` seconds before the tick is due makes the tick more than
 `FS_STALL` late once it blocks for longer than `FS_STALL + r`. The test is then
 charged `r` of the step's length when the step raised a filesystem event, and
 all of it otherwise; `r` is at most one `_TICK` (inferred from `_Bound._tick`'s
@@ -565,8 +566,8 @@ by recording, with `sys.addaudithook`, the events each call below raises:
   https://man7.org/linux/man-pages/man7/unix.7.html). The listener's close
   unlinks the path (sourced: `src/astral/transport/socket.py:452-454`).
   `_note_fs` does not check the address family, so a `str` or `bytes` address of
-  another family is a filesystem event too. A TCP bind records its address as a
-  `(host, port)` tuple, so it is no filesystem event."""
+  another family is a filesystem event too. An IP address is a tuple, so a TCP
+  bind is no filesystem event."""
 
 _fs_touched: dict[int, float] = {}
 """Thread ident to the `time.monotonic()` of that thread's last filesystem event."""
@@ -605,7 +606,7 @@ class _Bound:
 
     def _tick(self) -> None:
         # `loop.time()` is `time.monotonic()`, the clock `_note_fs` stamps with.
-        # The check is on the window since the previous tick, not on a step: the
+        # The check is on the tick's window (`FS_STALL`), not on a step: the
         # whole lateness of a tick more than `FS_STALL` late is not charged when
         # the loop's thread raised a filesystem event at any point in the
         # window, in the step that stalled or in any other.
@@ -617,7 +618,7 @@ class _Bound:
         # the tick runs before the deadline's handle, and `reschedule` cancels
         # that handle before it can fire. A task step queued ahead of the tick
         # runs before it, so that step's filesystem event lands in the window of
-        # the stall before it.
+        # the tick that the stall before it delays.
         now = self._loop.time()
         stalled = now - self._last - _TICK
         deadline = self._timeout.when()
@@ -666,7 +667,7 @@ def bounded(seconds: float = DEFAULT_TEST_TIMEOUT):  # type: ignore[no-untyped-d
     either when an `open`, a first import of a module from a `.py` or `.pyc`
     file, or a `socket_fds()` call on the loop's thread falls in the same window
     (inferred from `_Bound._tick`'s check, which compares the event's time with
-    the previous tick only).
+    the start of the tick's window only).
 
     A file operation on another thread is charged, because the loop is not
     stalled while it waits for one; `test_cli`'s `InputTest` deals with its own.
