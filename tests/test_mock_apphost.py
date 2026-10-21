@@ -811,12 +811,14 @@ class AmbientEnvironmentTest(unittest.TestCase):
 
 
 class BoundedTest(unittest.IsolatedAsyncioTestCase):
-    """`bounded` forgives a loop step stalled on the filesystem, and nothing else.
+    """`bounded` under a hang and under a stall with and without a filesystem event.
 
-    Each case blocks the loop with `time.sleep` for longer than an inner bound,
-    which is how a disk stall looks from the loop: one step that does not
-    return. The only difference between the two stalls is whether the step
-    raised a filesystem audit event first.
+    The two stall cases block the loop with `time.sleep` for longer than an inner
+    bound, which is how a disk stall looks from the loop: one step that does not
+    return. The two stalls differ only in whether the stalling step raised a
+    filesystem event first. The hang case parks on `asyncio.Event().wait()` and
+    leaves the loop idle. No case pins where in the window the event falls,
+    because `bounded` does not check it.
     """
 
     STALL = FS_STALL * 2 + 0.3
