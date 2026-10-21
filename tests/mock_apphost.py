@@ -35,7 +35,7 @@ in `errors` for the test to assert on. `bounded` wraps every test in
 `asyncio.timeout`, because a hanging test in an async suite wedges the whole run,
 and does not charge the test for the lateness of a tick of its own that runs more
 than `FS_STALL` late when the loop's thread raised a filesystem event in the
-tick's window (`FS_STALL`).
+tick's window (see `FS_STALL`).
 
 **Importing this module blanks the ambient node.** `blank_ambient_environment()`
 runs at import and empties the endpoint and token variables of design section
@@ -566,8 +566,8 @@ by recording, with `sys.addaudithook`, the events each call below raises:
   https://man7.org/linux/man-pages/man7/unix.7.html). The listener's close
   unlinks the path (sourced: `src/astral/transport/socket.py:452-454`).
   `_note_fs` does not check the address family, so a `str` or `bytes` address of
-  another family is a filesystem event too. An IP address is a tuple, so a TCP
-  bind is no filesystem event."""
+  another family is a filesystem event too. An `AF_INET` or `AF_INET6` address
+  is a tuple, so a TCP bind is no filesystem event."""
 
 _fs_touched: dict[int, float] = {}
 """Thread ident to the `time.monotonic()` of that thread's last filesystem event."""
@@ -606,7 +606,7 @@ class _Bound:
 
     def _tick(self) -> None:
         # `loop.time()` is `time.monotonic()`, the clock `_note_fs` stamps with.
-        # The check is on the tick's window (`FS_STALL`), not on a step: the
+        # The check is on the tick's window (see `FS_STALL`), not on a step: the
         # whole lateness of a tick more than `FS_STALL` late is not charged when
         # the loop's thread raised a filesystem event at any point in the
         # window, in the step that stalled or in any other.
@@ -636,7 +636,8 @@ class _Bound:
 def bounded(seconds: float = DEFAULT_TEST_TIMEOUT):  # type: ignore[no-untyped-def]
     """Bound one async test. A hanging test wedges the whole suite.
 
-    The bound is `seconds` of loop time, less the lateness of every tick that ran
+    The bound expires once the test is charged `seconds` of loop time. The test
+    is charged all of its loop time except the lateness of every tick that ran
     more than `FS_STALL` late when the loop's thread raised a filesystem event
     (`_FS_EVENTS`) in the tick's window. `FS_STALL` defines a tick's due time,
     window and lateness.
