@@ -33,8 +33,9 @@ feature, because a real node misbehaves:
 A handler never propagates an exception into the enclosing `TaskGroup`: faults land
 in `errors` for the test to assert on. `bounded` wraps every test in
 `asyncio.timeout`, because a hanging test in an async suite wedges the whole run,
-and does not charge the test for a tick of its own that runs more than `FS_STALL`
-late in a window in which the loop's thread raised a filesystem event.
+and does not charge the test for the lateness of a tick of its own that runs more
+than `FS_STALL` late in a window in which the loop's thread raised a filesystem
+event.
 
 **Importing this module blanks the ambient node.** `blank_ambient_environment()`
 runs at import and empties the endpoint and token variables of design section
@@ -513,14 +514,14 @@ MAX_FRAME: Final = 16 * 1024 * 1024
 
 
 FS_STALL: Final = 0.25
-"""A `bounded` tick that runs more than this many seconds late, in a window in
-which the loop's thread raised a filesystem event (`_FS_EVENTS`), is a disk
-stall, and `bounded` does not charge that lateness to the test. The lateness is
-the time from the tick's due time to the moment it runs, whichever steps fill it.
-A step that is the only work between two ticks and starts `r` seconds before the
-next tick is due counts once it blocks for longer than `FS_STALL + r`, and
-`bounded` forgives `r` less than its length; `r` is at most one `_TICK`
-(inferred from `_Bound._tick`'s `now - self._last - _TICK`)."""
+"""`bounded` does not charge the test for the lateness of a tick that runs more than
+this many seconds late in a window in which the loop's thread raised a filesystem
+event (`_FS_EVENTS`). The lateness is the time from the tick's due time to the
+moment it runs, whichever steps fill it. A step that is the only work between two
+ticks and starts `r` seconds before the next tick is due makes that tick more
+than `FS_STALL` late once it blocks for longer than `FS_STALL + r`, and the test
+is then charged `r` of the step's length; `r` is at most one `_TICK` (inferred
+from `_Bound._tick`'s `now - self._last - _TICK`)."""
 
 _TICK: Final = 0.05
 
@@ -543,7 +544,8 @@ by recording, with `sys.addaudithook`, the events each call below raises:
 
 - `open` is raised by `open`, `io.open`, `os.open` and `io.open_code`, so
   importing a module from a `.py` or `.pyc` file raises one. Importing an
-  extension (`.so`), built-in or frozen module raises no `open`.
+  extension (`.so`), built-in or frozen module raises no `open` for that module
+  itself.
 - `tempfile.mkstemp` raises `open`; `tempfile.mkdtemp` and `TemporaryDirectory`
   raise `os.mkdir`; `tempfile.mktemp` raises none of its own. The first
   `tempfile.gettempdir()` in a process, whichever `tempfile` call makes it,
@@ -553,9 +555,13 @@ by recording, with `sys.addaudithook`, the events each call below raises:
 - Not every call that reaches the filesystem raises a filesystem event:
   `os.chmod`, `os.utime` and `os.truncate` raise audit events outside this set,
   and `os.write`, `os.fsync` and `os.close` raise none.
-- A `str` or `bytes` address is a unix socket path, whose bind creates an inode
-  that the listener's close unlinks, or a Linux abstract-namespace name, which
-  creates none. An IP address is a tuple, so a TCP bind is no filesystem event."""
+- For an `AF_UNIX` socket, a `str` or `bytes` address is a path, whose bind
+  creates an inode (sourced: unix(7)) that the listener's close unlinks
+  (sourced: `src/astral/transport/socket.py:452-454`), or a Linux
+  abstract-namespace name, which creates none. `_note_fs` does not check the
+  address family, so a `str` or `bytes` address of another family is a
+  filesystem event too. An IP address is a tuple, so a TCP bind is no
+  filesystem event."""
 
 _fs_touched: dict[int, float] = {}
 """Thread ident to the `time.monotonic()` of that thread's last filesystem event."""
@@ -572,8 +578,9 @@ sys.addaudithook(_note_fs)
 
 
 class _Bound:
-    """`asyncio.timeout(seconds)` that does not count a tick's lateness over
-    `FS_STALL` in a window in which the loop's thread raised a filesystem event."""
+    """`asyncio.timeout(seconds)` that does not charge the lateness of a tick that
+    runs more than `FS_STALL` late in a window in which the loop's thread raised a
+    filesystem event."""
 
     def __init__(self, seconds: float) -> None:
         self._seconds = seconds
@@ -593,19 +600,19 @@ class _Bound:
 
     def _tick(self) -> None:
         # `loop.time()` is `time.monotonic()`, the clock `_note_fs` stamps with.
-        # The check is on the window since the previous tick, not on a step: a
-        # lateness over `FS_STALL` is forgiven whole when the loop's thread
-        # raised a filesystem event at any point in the window, in the step that
-        # stalled or in any other.
+        # The check is on the window since the previous tick, not on a step: the
+        # whole lateness of a tick more than `FS_STALL` late is not charged when
+        # the loop's thread raised a filesystem event at any point in the
+        # window, in the step that stalled or in any other.
         # A tick scheduled before a stall is due before a deadline the stall
         # crossed, unless that deadline was already less than one tick away.
-        # `_run_once` moves due timers to `_ready` in deadline order, behind the
-        # callbacks already queued there, and skips a cancelled handle (sourced:
-        # `/usr/lib/python3.14/asyncio/base_events.py:2020-2044`). So the tick
-        # runs before the deadline's handle, and `reschedule` cancels that
-        # handle before it can fire. A task step queued ahead of the tick runs
-        # before it, so that step's filesystem event counts for the stall
-        # before it.
+        # `_run_once` moves due timers to `_ready` in order of due time, behind
+        # the callbacks already queued there, and skips a cancelled handle
+        # (sourced: `/usr/lib/python3.14/asyncio/base_events.py:2020-2044`). So
+        # the tick runs before the deadline's handle, and `reschedule` cancels
+        # that handle before it can fire. A task step queued ahead of the tick
+        # runs before it, so that step's filesystem event lands in the window of
+        # the stall before it.
         now = self._loop.time()
         stalled = now - self._last - _TICK
         deadline = self._timeout.when()
@@ -645,11 +652,12 @@ def bounded(seconds: float = DEFAULT_TEST_TIMEOUT):  # type: ignore[no-untyped-d
     stall in a window in which the loop's thread raised no filesystem event,
     CPU-bound code or a `time.sleep` on the loop, is still charged.
 
-    The rule does not attribute a filesystem event to the step that stalled. A
-    tick's lateness over `FS_STALL` is forgiven when a filesystem event lands
-    anywhere in its window: before the stall, or after it in a step queued ahead
-    of the next tick. So CPU-bound code or a `time.sleep` next to an `open`, a
-    first import of a `.py` module or a `socket_fds()` call is forgiven too
+    The rule does not attribute a filesystem event to the step that stalled. The
+    lateness of a tick that runs more than `FS_STALL` late is not charged when
+    the loop's thread raised a filesystem event anywhere in its window: before
+    the stall, or after it in a step queued ahead of the next tick. So CPU-bound
+    code or a `time.sleep` next to an `open`, a first import of a module from a
+    `.py` or `.pyc` file, or a `socket_fds()` call is not charged either
     (inferred from `_Bound._tick`'s check, which compares the event's time with
     the previous tick only).
 
