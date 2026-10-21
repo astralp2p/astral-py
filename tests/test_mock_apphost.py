@@ -811,7 +811,7 @@ class AmbientEnvironmentTest(unittest.TestCase):
 
 
 class BoundedTest(unittest.IsolatedAsyncioTestCase):
-    """`bounded` leaves a stall uncharged only in a window with a filesystem event.
+    """`bounded` under a hang and under a stall with and without a filesystem event.
 
     The two stall cases block the loop with `time.sleep` for longer than an inner
     bound, which is how a disk stall looks from the loop: one step that does not
