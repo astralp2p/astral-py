@@ -1,24 +1,26 @@
-"""The `user` module client: seventeen ops, fourteen types, one non-`eos` stream.
+"""The `user` module client: eighteen ops, fifteen types, one non-`eos` stream.
 
 Three tiers in one file, because the same claim is made at each and the three
 must agree:
 
 - **Tier A** pins the wire on bytes `furry-bolt` sent this session, captured
   through `Client.call_raw`, which hands back the response body unframed and so
-  records exactly what the node wrote. Five captures: a `mod.user.info` carrying
+  records exactly what the node wrote. Six captures: a `mod.user.info` carrying
   a fully signed four-permit contract, a `mod.users.swarm_member` followed by an
   `eos`, `user.assets`'s bare `eos`, and `user.sync_assets`'s single `uint64`
   frame with **no** `eos` after it. The last is the whole reason design section
   3.10 names a third streaming shape. The fifth is from an unclaimed node at
   astrald `26bb51d5`: `user.new_node_contract` answering the three-permit
-  contract that replaced the four-permit one.
-- **Tier B** pins the seventeen ops against `MockApphost`: the query string each
-  one builds, the answer each one accepts, the two body-input ops' frame order
+  contract that replaced the four-permit one. The sixth is from an unclaimed
+  node at astrald `48ae88b2`: `user.bootstrap` answering the user the BIP-39
+  test words derive, read raw after hand-framed words.
+- **Tier B** pins the eighteen ops against `MockApphost`: the query string each
+  one builds, the answer each one accepts, the three body-input ops' frame order
   and their absent terminator, and the guards that keep an empty target from
   reaching a node that would read it as `anyone`.
 - **Tier C** runs the read-only ops against a real node. Nothing here mutates:
   `adopt`, `expel`, `add_asset`, `remove_asset`, `sync_with`,
-  `request_membership`, `accept_contract`, `accept_membership`,
+  `request_membership`, `accept_contract`, `accept_membership`, `bootstrap`,
   `set_swarm_join_policy` and `set_swarm_invite_policy` are exercised against
   the mock alone.
 
@@ -44,6 +46,7 @@ from astral.api.auth import Contract, Permit, SignedContract
 from astral.api.user import (
     AdminSwarmAction,
     AssetSync,
+    BootstrapResult,
     CreatedUserInfo,
     DEFAULT_CONTRACT_VALIDITY,
     EVENT_ASSETS,
@@ -56,6 +59,7 @@ from astral.api.user import (
     OP_ADD_ASSET,
     OP_ADOPT,
     OP_ASSETS,
+    OP_BOOTSTRAP,
     OP_EXPEL,
     OP_INFO,
     OP_LIST_EXPELLED,
@@ -196,6 +200,28 @@ LIVE_SYNC_ASSETS_BODY = bytes.fromhex("0675696e743634000000080000000000000000")
 LIVE_SYNC_ASSETS_FROM_7 = bytes.fromhex("0675696e743634000000080000000000000007")
 """`user.sync_assets?start=7`: the height echoed back, so re-polling is safe."""
 
+BOOTSTRAP_WORDS = " ".join(["abandon"] * 11 + ["about"])
+"""The first BIP-39 test vector's mnemonic: a valid checksum, and public."""
+
+BOOTSTRAP_USER = Identity.parse(
+    "02ea6286d75732e42ec1204efbb772ecb9016b962e6c0195ba7dd19bd78832fcd2"
+)
+"""The user `BOOTSTRAP_WORDS` derive along `m/1791'/0'/0'/0/0` with no
+passphrase. Verified on astrald `48ae88b2` twice: `user.bootstrap` claimed an
+unclaimed node for it, and `bip137sig.seed`, `bip137sig.derive_key` on that path
+and `crypto.public_key` answered the same key."""
+
+LIVE_BOOTSTRAP_BODY = bytes.fromhex(
+    "196d6f642e757365722e626f6f7473747261705f726573756c7400000024"  # frame, 36 B
+    "01"                                                            # Identity present
+    "02ea6286d75732e42ec1204efbb772ecb9016b962e6c0195ba7dd19bd78832fcd2"
+    "0000"                                                          # Mnemonic, empty
+)
+"""`user.bootstrap` with `BOOTSTRAP_WORDS` on the body, on an unclaimed node at
+astrald `48ae88b2`, read with `Stream.read_bytes` after a hand-framed `string16`.
+One frame, then EOF and no `eos`; `Mnemonic` is empty because the caller sent
+the words."""
+
 USER_ID = Identity.parse(
     "03a40290fa01b9127b06f3dd990219939274e2e61afab7445f608ad652839f941d"
 )
@@ -270,7 +296,15 @@ def a_signed_contract() -> SignedContract:
 
 
 class LiveCaptureTest(unittest.TestCase):
-    """The four captures, decoded and re-encoded."""
+    """The captures, decoded and re-encoded."""
+
+    def test_the_bootstrap_frame_decodes_to_the_derived_user(self):
+        (type_name, payload), = frames_of(LIVE_BOOTSTRAP_BODY)
+        self.assertEqual(type_name, BootstrapResult.ASTRAL_TYPE)
+        result = BootstrapResult.read_payload(object_reader(payload))
+        self.assertEqual(result.identity, BOOTSTRAP_USER)
+        self.assertEqual(result.mnemonic, "")
+        self.assertEqual(payload_bytes(result), payload)
 
     def test_the_info_frame_decodes_to_a_typed_info(self):
         (type_name, payload), = frames_of(LIVE_INFO_BODY)
@@ -410,6 +444,27 @@ class RoundTripTest(unittest.TestCase):
     def test_a_notification_round_trips(self):
         self.assert_round_trips(Notification(event=EVENT_ASSETS))
 
+    def test_a_bootstrap_result_round_trips(self):
+        self.assert_round_trips(
+            BootstrapResult(identity=BOOTSTRAP_USER, mnemonic=BOOTSTRAP_WORDS)
+        )
+
+    def test_a_bootstrap_result_s_zero_value_is_the_node_s(self):
+        """`objects.new?type=mod.user.bootstrap_result` on astrald `48ae88b2`:
+        one nil flag and an empty `string16` in binary, a null and an empty
+        string in JSON."""
+        self.assertEqual(payload_bytes(BootstrapResult()).hex(), "000000")
+        self.assertEqual(
+            jsoncodec.marshal(BootstrapResult()),
+            json.loads('{"Identity":null,"Mnemonic":""}'),
+        )
+
+    def test_a_bootstrap_result_s_repr_never_shows_the_words(self):
+        result = BootstrapResult(identity=BOOTSTRAP_USER, mnemonic=BOOTSTRAP_WORDS)
+        self.assertNotIn("abandon", repr(result))
+        self.assertIn("<12 words>", repr(result))
+        self.assertIn("<0 words>", repr(BootstrapResult()))
+
     def test_a_created_user_info_round_trips(self):
         self.assert_round_trips(
             CreatedUserInfo(
@@ -432,7 +487,9 @@ class BlueprintParityTest(unittest.TestCase):
     """Every declaration equals the node's own blueprint for that type.
 
     The field orders below were read from `objects.get_blueprint?type=…` on
-    `furry-bolt` this session, one query per type. The action types are
+    `furry-bolt` this session, one query per type; `mod.user.bootstrap_result`'s
+    on an isolated astrald built from `48ae88b2`, and the policy types' on one
+    built from `1286a469`. The action types are
     absent: that op refuses them -- `BlueprintFromType …Action: type auth.Action
     does not implement Object and is not a supported container` -- which is the
     same refusal `mod.objects.*_action` gets and says nothing about their wire
@@ -473,6 +530,10 @@ class BlueprintParityTest(unittest.TestCase):
             ("Contract", "ptr:mod.auth.contract"),
         ],
         "mod.user.swarm_invite_decision": [("Allow", "primitive:bool")],
+        "mod.user.bootstrap_result": [
+            ("Identity", "ptr:identity"),
+            ("Mnemonic", "primitive:string16"),
+        ],
         "mod.users.created_user_info": [
             ("ID", "ptr:identity"),
             ("Alias", "primitive:string8"),
@@ -561,16 +622,16 @@ class TypeRegistrationTest(unittest.TestCase):
             with self.subTest(type=kind.ASTRAL_TYPE):
                 self.assertTrue(kind.ASTRAL_TYPE.startswith(("mod.user.", "mod.users.")))
 
-    def test_the_op_names_are_the_seventeen_the_registry_reports(self):
+    def test_the_op_names_are_the_eighteen_the_registry_reports(self):
         """The live `shell.spec` registry answered these `user.*` names: the
-        first fifteen on `furry-bolt`, all seventeen on an isolated astrald
-        built from `1286a469`."""
+        first fifteen on `furry-bolt`, seventeen on an isolated astrald built
+        from `1286a469`, and all eighteen on one built from `48ae88b2`."""
         names = sorted(
             value
             for name, value in vars(user_module).items()
             if name.startswith("OP_") and isinstance(value, str)
         )
-        self.assertEqual(len(names), 17)
+        self.assertEqual(len(names), 18)
         self.assertEqual(
             names,
             [
@@ -579,6 +640,7 @@ class TypeRegistrationTest(unittest.TestCase):
                 "user.add_asset",
                 "user.adopt",
                 "user.assets",
+                "user.bootstrap",
                 "user.expel",
                 "user.info",
                 "user.list_expelled",
@@ -780,7 +842,7 @@ class ActionConstraintTest(unittest.TestCase):
         self.assertTrue(permit.allows(SwarmMembershipAction()))
 
 
-# --- Tier B: the seventeen ops against the mock --------------------------
+# --- Tier B: the eighteen ops against the mock ---------------------------
 
 
 class BodyReadingNode:
@@ -1054,7 +1116,7 @@ class ListSiblingsOpTest(UserCase):
     @bounded()
     async def test_a_zone_goes_to_the_op_argument_and_to_the_routing_zone(self):
         """One scope, two levers, as `Objects` does it. The op's own argument is
-        inert on astrald `1286a469` -- the context it builds is never used --
+        inert on astrald `48ae88b2` -- the context it builds is never used --
         and the routing zone is not, so sending only one of them is wrong
         whichever one it is."""
         api = await self.serving(
@@ -1234,7 +1296,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_sends_the_identity_alone(self):
-        """`start` is undeclared on astrald `1286a469`, and the node reads the
+        """`start` is undeclared on astrald `48ae88b2`, and the node reads the
         height out of its own tree."""
         query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
@@ -1244,7 +1306,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_accepts_no_start_keyword(self):
-        """`start` is undeclared on astrald `1286a469`, so naming one is a
+        """`start` is undeclared on astrald `48ae88b2`, so naming one is a
         `TypeError` and nothing reaches the node."""
         api = await self.serving({OP_SYNC_WITH: Accept(objects=[ACK_FRAME])})
         with self.assertRaises(TypeError):
@@ -1550,6 +1612,177 @@ class AcceptContractOpTest(UserCase):
         self.assertIn("without an answer", str(caught.exception))
 
 
+class AnswerThenRead:
+    """A mock route that answers, ends its body, then records what the client sent.
+
+    The generate form sends nothing, so a route that reads before answering
+    would wait for a frame that never comes. The body ends with a half-close,
+    as the op's return ends it, and frames a client wrote before it read the
+    answer are already in this side's receive buffer when it reads.
+    """
+
+    def __init__(self, *answers: tuple[str, bytes]) -> None:
+        self.answers = answers
+        self.received: list[tuple[str, bytes]] = []
+
+    async def __call__(self, conn: MockConn, query: RouteQuery) -> None:
+        conn.send_frame(QUERY_ACCEPTED)
+        for answer in self.answers:
+            conn.send_frame(*answer)
+        await conn.flush()
+        conn.half_close()
+        while (got := await conn.recv_frame_or_none()) is not None:
+            self.received.append(got)
+
+
+class BootstrapOpTest(UserCase):
+    """`user.bootstrap`: WA, the words on the body or `generate=true`, one object."""
+
+    GENERATED = " ".join(["zoo"] * 23 + ["vote"])
+
+    def result_frame(self, mnemonic: str = "") -> tuple[str, bytes]:
+        return (
+            BootstrapResult.ASTRAL_TYPE,
+            payload_bytes(BootstrapResult(identity=BOOTSTRAP_USER, mnemonic=mnemonic)),
+        )
+
+    async def node(
+        self, *answers: tuple[str, bytes], expect: int = 1
+    ) -> tuple[User, BodyReadingNode]:
+        route = BodyReadingNode(*answers, expect=expect)
+        mock = MockApphost(routes={OP_BOOTSTRAP: route})
+        await self.enterAsyncContext(mock)
+        self.mock = mock
+        return await self.user(mock), route
+
+    @bounded()
+    async def test_no_words_sends_generate_and_nothing_on_the_body(self):
+        route = AnswerThenRead(self.result_frame(self.GENERATED))
+        mock = MockApphost(routes={OP_BOOTSTRAP: route})
+        await self.enterAsyncContext(mock)
+        self.mock = mock
+        api = await self.user(mock)
+        result = await api.bootstrap()
+        self.assertEqual(self.sent(), "user.bootstrap?generate=true")
+        self.assertEqual(route.received, [])
+        self.assertEqual(result.identity, BOOTSTRAP_USER)
+        self.assertEqual(result.mnemonic, self.GENERATED)
+
+    @bounded()
+    async def test_the_words_travel_on_the_body_and_never_in_the_query(self):
+        api, route = await self.node(self.result_frame())
+        result = await api.bootstrap(BOOTSTRAP_WORDS)
+        self.assertEqual(self.sent(), OP_BOOTSTRAP)
+        self.assertNotIn("abandon", self.sent())
+        self.assertEqual(route.types, ["string16"])
+        text = BOOTSTRAP_WORDS.encode()
+        self.assertEqual(route.received[0][1], len(text).to_bytes(2, "big") + text)
+        self.assertEqual(result, BootstrapResult(identity=BOOTSTRAP_USER))
+
+    @bounded()
+    async def test_a_sequence_of_words_travels_as_one_spaced_string(self):
+        api, route = await self.node(self.result_frame())
+        await api.bootstrap(["  abandon"] * 11 + ["about\n"])
+        text = BOOTSTRAP_WORDS.encode()
+        self.assertEqual(route.received[0][1], len(text).to_bytes(2, "big") + text)
+
+    @bounded()
+    async def test_the_passphrase_travels_as_its_argument_nfkd_normalised(self):
+        api, route = await self.node(self.result_frame())
+        await api.bootstrap(BOOTSTRAP_WORDS, passphrase="pass\u00e9")
+        self.assertEqual(self.params(), (OP_BOOTSTRAP, {"passphrase": "passe\u0301"}))
+        self.assertEqual(route.types, ["string16"])
+
+    @bounded()
+    async def test_generate_carries_the_passphrase_beside_it(self):
+        api = await self.serving(
+            {OP_BOOTSTRAP: Accept(objects=[self.result_frame(self.GENERATED)])}
+        )
+        await api.bootstrap(passphrase="secret")
+        self.assertEqual(
+            self.params(),
+            (OP_BOOTSTRAP, {"generate": "true", "passphrase": "secret"}),
+        )
+
+    @bounded()
+    async def test_empty_and_blank_words_raise_and_route_no_query(self):
+        """Only an omitted `words` asks the node to generate. An empty form
+        field must not claim a node for words its caller never sees."""
+        api = await self.serving({OP_BOOTSTRAP: Accept(objects=[self.result_frame()])})
+        for words in ("", "   ", "\n\t ", [], ["", " "]):
+            with self.subTest(words=words):
+                with self.assertRaises(BadArgument) as caught:
+                    await api.bootstrap(words)
+                self.assertIsInstance(caught.exception, ValueError)
+                self.assertIn("words=None", str(caught.exception))
+        self.assertEqual(self.mock.queries, [])
+
+    @bounded()
+    async def test_invalid_words_never_reach_the_node(self):
+        api = await self.serving({OP_BOOTSTRAP: Accept(objects=[self.result_frame()])})
+        for words in (
+            " ".join(["abandon"] * 12),          # wrong checksum
+            " ".join(["abandon"] * 11),          # not a mnemonic length
+            BOOTSTRAP_WORDS.replace("about", "aboot"),  # not in the wordlist
+        ):
+            with self.subTest(words=words):
+                with self.assertRaises(ParseError):
+                    await api.bootstrap(words)
+        self.assertEqual(self.mock.queries, [])
+
+    @bounded()
+    async def test_an_argument_of_the_wrong_type_is_refused(self):
+        api = await self.serving({OP_BOOTSTRAP: Accept(objects=[self.result_frame()])})
+        for words in (BOOTSTRAP_WORDS.encode(), 12):
+            with self.subTest(words=words):
+                with self.assertRaises(BadArgumentType):
+                    await api.bootstrap(words)  # type: ignore[arg-type]
+        with self.assertRaises(BadArgumentType):
+            await api.bootstrap(BOOTSTRAP_WORDS, passphrase=b"x")  # type: ignore[arg-type]
+        self.assertEqual(self.mock.queries, [])
+
+    @bounded()
+    async def test_no_terminator_follows_the_words(self):
+        """The node reads a **second** frame that never comes, so the recorded
+        frames are everything the client wrote."""
+        api, route = await self.node(expect=2)
+        with self.assertRaises(QueryTimeout):
+            await api.bootstrap(BOOTSTRAP_WORDS, timeout=0.3)
+        self.assertEqual(route.types, ["string16"])
+        self.assertNotIn(EOS, route.types)
+
+    @bounded()
+    async def test_a_claimed_node_and_another_caller_are_rejections(self):
+        for code in (2, 4):
+            with self.subTest(code=code):
+                api = await self.serving({OP_BOOTSTRAP: Reject(code)})
+                with self.assertRaises(QueryRejected) as caught:
+                    await api.bootstrap(BOOTSTRAP_WORDS)
+                self.assertEqual(caught.exception.code, code)
+
+    @bounded()
+    async def test_a_refused_claim_surfaces_as_a_remote_error(self):
+        message = "claim refused: the claim rule of auth.sign_contract refuses this user"
+        api, _ = await self.node(frame_error(message))
+        with self.assertRaises(RemoteError) as caught:
+            await api.bootstrap(BOOTSTRAP_WORDS)
+        self.assertEqual(caught.exception.message, message)
+
+    @bounded()
+    async def test_a_stream_that_answers_nothing_is_reported(self):
+        api, _ = await self.node()
+        with self.assertRaises(ProtocolError) as caught:
+            await api.bootstrap(BOOTSTRAP_WORDS)
+        self.assertIn("without an answer", str(caught.exception))
+
+    @bounded()
+    async def test_a_wrong_answer_type_is_a_protocol_error(self):
+        api, _ = await self.node(ACK_FRAME)
+        with self.assertRaises(ProtocolError) as caught:
+            await api.bootstrap(BOOTSTRAP_WORDS)
+        self.assertIn(BootstrapResult.ASTRAL_TYPE, str(caught.exception))
+
+
 class SwarmPolicyOpTest(UserCase):
     """`user.set_swarm_join_policy` and `user.set_swarm_invite_policy`: RR, one
     `ack`, three optional arguments."""
@@ -1677,10 +1910,10 @@ async def _send_error_msg(conn: MockConn) -> None:
 class LiveUserTest(live_support.LiveCase):
     """`user` against a real node. Read-only: nothing here changes node state.
 
-    Seven of the seventeen ops are safe to run: `assets`, `list_siblings`,
+    Seven of the eighteen ops are safe to run: `assets`, `list_siblings`,
     `list_expelled`, `swarm_status`, `sync_assets`, `info` and
     `new_node_contract`, the last of which constructs and returns without
-    signing or storing. The other ten change who a node belongs to, what it
+    signing or storing. The other eleven change who a node belongs to, what it
     holds or who decides, and are exercised against the mock alone.
 
     Whether the node under test is claimed is not this SDK's to decide, so the
@@ -1880,20 +2113,34 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/op_sync_assets.go", 38): "height = args.Start",
         ("mod/user/src/op_sync_assets.go", 49): "height++",
         ("mod/user/src/op_list_siblings.go", 24): "IncludeZone(args.Zone)",
-        ("mod/user/module.go", 16): "MinimalContractLength = time.Hour",
-        ("mod/user/module.go", 20): "DefaultContractValidity = 365 * 24 * time.Hour",
+        ("mod/user/module.go", 23): "MinimalContractLength = time.Hour",
+        ("mod/user/module.go", 27): "DefaultContractValidity = 365 * 24 * time.Hour",
+        ("mod/user/module.go", 18): "UserKeyPath = coldcard.BIP44Path",
         ("mod/user/src/siblings.go", 25): "user.Notification{Event",
         ("mod/user/src/op_adopt.go", 39): "return q.RejectWithCode(4)",
         ("mod/user/src/op_sync_with.go", 39): "mod.syncAssets(ctx.IncludeZone",
-        ("mod/user/src/sync.go", 30): "tree.Get[*astral.Uint64](ctx, heightNode)",
+        ("mod/user/src/sync.go", 31): "tree.Get[*astral.Uint64](ctx, heightNode)",
         ("mod/dir/src/module.go", 58): 'if s == "" || s == "anyone"',
         ("mod/dir/src/module.go", 107): "return identity.Fingerprint()",
-        ("mod/user/src/contracts.go", 178): "usermod.DefaultContractValidity",
+        ("mod/user/src/contracts.go", 206): "usermod.DefaultContractValidity",
+        ("mod/user/src/op_bootstrap.go", 40): "switch q.Origin()",
+        ("mod/user/src/op_bootstrap.go", 68): "if args.Generate {",
+        ("mod/user/src/op_bootstrap.go", 79): "bip137sig.MaxEntropyBits",
+        ("mod/user/src/op_bootstrap.go", 87): "channel.Expect(&phrase), channel.FailOnEOF()",
+        ("mod/user/src/op_bootstrap.go", 121): "mod.Objects.Store(ctx, mod.Objects.WriteDefault(), &key)",
+        ("mod/user/src/op_bootstrap.go", 147): "NewNodeContract(userID, mod.node.Identity(), true",
+        ("mod/user/src/op_bootstrap.go", 152): "mod.Auth.IsNodeClaim(ctx, caller, contract)",
+        ("mod/apphost/src/config.go", 87): '"user.bootstrap"',
+        ("core/router.go", 45): "if q.Caller == nil {",
+        ("core/router.go", 83): '"%v routed in %v", logged',
+        ("core/query_log.go", 12): '"passphrase": true',
     }
 
     ASTRAL_GO_LINES = {
         ("api/user/contract.go", 12): "SwarmMembershipAction{}.ObjectType()",
         ("api/user/expulsion.go", 39): "expels %s from the swarm",
+        ("api/user/bootstrap_result.go", 14): "Identity *astral.Identity",
+        ("api/user/client/bootstrap.go", 20): 'if words == "" {',
     }
 
     def assert_lands(self, repo: str, anchors: dict) -> None:
@@ -1995,14 +2242,14 @@ class ShapeDeclarationTest(unittest.TestCase):
 
     def test_the_module_declares_a_shape_for_every_op_in_its_table(self):
         """The docstring table is the module's declaration of op shape, which
-        design section 4.7 makes a per-op contract. Seventeen rows,
-        seventeen ops."""
+        design section 4.7 makes a per-op contract. Eighteen rows,
+        eighteen ops."""
         table = [
             line
             for line in (user_module.__doc__ or "").splitlines()
             if line.startswith("| `user.")
         ]
-        self.assertEqual(len(table), 17)
+        self.assertEqual(len(table), 18)
         named = {line.split("`")[1] for line in table}
         declared = {
             value

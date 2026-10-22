@@ -1372,17 +1372,17 @@ class SecurityNoteTest(unittest.TestCase):
         ops = self.ops()
         guarded = {name for name, src in ops.items() if "OriginNetwork" in src}
 
-        self.assertEqual(len(ops), 15)
+        self.assertEqual(len(ops), 16)
         self.assertEqual(set(ops) - guarded, self.CURRENT_UNGUARDED)
-        self.assertEqual(len(guarded), 12)
+        self.assertEqual(len(guarded), 13)
 
         # Unwrapped, because a line break inside a sentence is a formatting
         # choice and the claim is the sentence.
         doc = " ".join((apphost_module.__doc__ or "").split())
         self.assertNotIn("alone among its neighbours", doc)
         self.assertIn(f"re-derived at `{reference.PINS[reference.ASTRALD][1]}`", doc)
-        self.assertIn("Fifteen `op_*.go` files.", doc)
-        self.assertIn("Twelve refuse a network origin", doc)
+        self.assertIn("Sixteen `op_*.go` files.", doc)
+        self.assertIn("Thirteen refuse a network origin", doc)
         self.assertIn(
             "the three that do not are `whoami`, `register` and "
             "`set_app_register_policy`",
@@ -1468,14 +1468,16 @@ class SecurityNoteTest(unittest.TestCase):
             (f"{self.SRC}/op_register_handler.go", 29, "ServeAppsAction"),
             (f"{self.SRC}/authorize_admin_manage_apps.go", 19, "func (mod *Module) mayManageApps"),
             (f"{self.SRC}/authorize_admin_manage_apps.go", 24, "AdminManageAppsAction"),
-            (f"{self.SRC}/guest.go", 205, "ExtraAnonymous"),
-            (f"{self.SRC}/guest.go", 271, "isAuthenticated()"),
+            (f"{self.SRC}/guest.go", 204, "ExtraAnonymous"),
+            (f"{self.SRC}/guest.go", 270, "isAuthenticated()"),
             ("mod/user/src/authorize_user_or_node.go", 16, "authorizeUserOrNode"),
             ("mod/user/src/authorize_user_or_node.go", 20, "mod.node.Identity()"),
             ("mod/user/src/authorize_serve_apps.go", 15, "AuthorizeServeApps"),
             ("core/router.go", 45, "q.Caller == nil"),
             ("core/router.go", 46, "q.Caller = r.node.identity"),
-            ("mod/crypto/src/sign_guard.go", 37, "cannot reach an op"),
+            ("mod/crypto/src/sign_guard.go", 36, "cannot reach an op"),
+            (f"{self.SRC}/op_hosts.go", 26, "OriginNetwork"),
+            (f"{self.SRC}/op_hosts.go", 32, "SeeSwarmAction"),
         )
         for path, number, fragment in cites:
             with self.subTest(citation=f"{path}:{number}"):

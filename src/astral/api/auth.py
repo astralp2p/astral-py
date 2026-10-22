@@ -20,9 +20,9 @@ a per-op contract and is not discoverable from the wire):
 | `auth.sign_contract` | WA | `mod.auth.signed_contract` \\| `error_message`, one per input | privileged, no state written |
 
 The five are the whole of the module. `shell.spec` on an isolated astrald built
-from `1286a469` lists exactly these five, verified; `furry-bolt` and astrald
-`26bb51d5` listed `auth.index` and `auth.sign_contract` alone, and astral-go's
-`api/auth/module.go` declares those two constants and no others.
+from `48ae88b2` lists exactly these five, verified; `furry-bolt` and astrald
+`26bb51d5` listed `auth.index` and `auth.sign_contract` alone. astral-go's
+`api/auth/module.go` declares one op-name constant for each of the five.
 
 **An external authorizer is the last word on one action type.** The node asks
 its handlers, then the contract chain, and then the authorizer assigned to the
@@ -40,13 +40,13 @@ refused.
 
 **`auth.index` takes its object ID in the query string or its object IDs on the
 body.** `opIndexArgs.ID` is optional (`mod/auth/src/op_index.go` at astrald
-`1286a469`), and an omitted `id` makes the op read `object_id.sha256` objects
+`48ae88b2`), and an omitted `id` makes the op read `object_id.sha256` objects
 off the channel until `eos` or EOF, answering one `ack` or `error_message` per
 input and carrying on past a failed one -- the RR/BD hybrid `objects.contains`,
 `objects.delete`, `objects.load` and `objects.probe` already have. The batch
 goes through astral-go's `channel.Batch`, which answers an explicit `eos` with a
 final `eos` and ends silently after EOF (`astral/channel/batch.go` at astral-go
-`221ce52`). `index()` is the single form and `index_many()` the batch. Verified
+`8972f283`). `index()` is the single form and `index_many()` the batch. Verified
 on astrald `26bb51d5`: the spec flags `id` `"Required":false`, a bare `eos` on
 the body answers a bare `eos`, two IDs no repository holds answer two `object
 not found` and an `eos`, and the single form answers `object not found` and EOF.
@@ -81,7 +81,7 @@ as an identity the caller holds `mod.auth.sudo_action` for, and never as the
 node's own key on the self branch. A refused contract is answered with an
 `error_message` opening `authorize issuer:` or `authorize subject:`. The one
 exception is the node's own session asking for the contract that claims this
-unclaimed node (`sign_contract_guard.go` `isNodeClaim`).
+unclaimed node (`sign_contract_guard.go` `IsNodeClaim`).
 
 **`auth.sign_contract` is a batch op, and takes an `eos` that is not inferable
 from the wire.** Its reader is `channel.Batch`
@@ -90,9 +90,9 @@ batch form uses: it reads contracts until `eos` or EOF, answers one
 `mod.auth.signed_contract` or `error_message` per input in input order, and
 **mirrors the input stream's terminator** -- an explicit `eos` is answered with a
 final `eos`, a stream ended by EOF is not (`astral/channel/batch.go` at astral-go
-`221ce52`). A body-input op whose reader omits an `eos` branch answers the same
+`8972f283`). A body-input op whose reader omits an `eos` branch answers the same
 terminator with an `error_message`
-(`astral-go/astral/channel/switch.go:101`), so the terminator is a per-op
+(`astral-go/astral/channel/switch.go:110`), so the terminator is a per-op
 contract rather than a protocol rule.
 
 `sign_contract()` sends one contract and reads one answer. The node's batch form
@@ -124,12 +124,12 @@ promotes anonymous fields. The nesting is astral-go's rule; the flattening is
 Go's default showing through a gap.
 
 **`auth.Action` is a registered astral object at the pin.**
-`api/auth/action.go` at astral-go `221ce52` declares
+`api/auth/action.go` at astral-go `8972f283` declares
 `func (Action) ObjectType() string { return "mod.auth.action" }` (line 22) and
 registers it with `astral.MustAdd(&Action{})` (line 55).
 
 That changes what astral-go can derive. `specFromType` probes `tryObjectType`
-ahead of its container dispatch (`astral/blueprint_reflect.go` at `221ce52`), so
+ahead of its container dispatch (`astral/blueprint_reflect.go` at `8972f283`), so
 an embedded `auth.Action` field now yields a `RefSpec` naming
 `mod.auth.action` rather than failing -- inferred from those two sources, with
 no run behind it.
@@ -148,18 +148,20 @@ would nest the two fields in JSON under a key no node sends.
 
 **`mod.auth.sudo_action` exists, and astral-go's `api/auth` declares it.**
 astral-go `5923624` declares `SudoAction` in `api/auth/sudo_action.go` and
-registers it with `astral.Add`; astrald `09d9df87` stopped declaring it. Both
-commits are past this SDK's pins (astral-go `221ce52`, astrald `1286a469`), at
-which astrald declares the type in `mod/auth/sudo_action.go` and astral-go does
-not, and a live node answered `objects.new?type=mod.auth.sudo_action` with a
-ten-byte zero instance, verified at those pins and not re-observed since the
-move. astral-docs documents `protocols/auth/types/mod.auth.sudo_action.md`, and
-the op survey records it as having no counterpart in astral-go (D-27), which
-held at the pins and no longer does. The type is `{Action, AsID *identity}`, and
+registers it with `astral.Add`; astrald `09d9df87` stopped declaring it. The
+pins (astral-go `8972f283`, astrald `48ae88b2`) carry both commits, so
+`api/auth/sudo_action.go` is the one declaration and `mod/auth/sudo_action.go`
+does not exist there. A node answers `objects.new?type=mod.auth.sudo_action`
+with a ten-byte zero instance, verified on an isolated astrald built from
+`48ae88b2`. astral-docs documents
+`protocols/auth/types/mod.auth.sudo_action.md`, and the op survey records it as
+having no counterpart in astral-go (D-27), which held at astral-go `221ce52` and
+does not hold at the pin. The type is `{Action, AsID *identity}`, and
 astrald's authorizer for it is `Actor().IsEqual(AsID)`
 (`astrald/mod/auth/src/authorizers.go`), i.e. it grants nothing that is not
-already the caller. It is **not declared here**: no op in the node's 118-op
-registry sends one.
+already the caller. It is **not declared here**: no op sends one. astrald
+`48ae88b2` builds one only to ask its authorizer (`mod/apphost/src/guest.go`,
+`mod/crypto/src/sign_guard.go`, `mod/shell/src/op_shell.go`).
 
 **`mod.crypto.signature` is declared by `astral.api.crypto`, not here.** Both
 signature fields are `Ptr("mod.crypto.signature")`, resolved by name through the

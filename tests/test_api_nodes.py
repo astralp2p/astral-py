@@ -1094,12 +1094,22 @@ class ReferenceClaimTest(unittest.TestCase):
         self.assertIn("LinkCount      astral.Uint8", closed)
 
     def test_three_ops_have_an_astral_go_client(self):
-        """The count `require_experimental` states: three at the pin."""
+        """The count `require_experimental` states: three at the pin.
+
+        Counted in the `client/` package, one file per op beside `client.go`.
+        `module.go` is not the count: it names all seven ops at the pin.
+        """
+        try:
+            names = reference.listdir(reference.ASTRAL_GO, "api/nodes/client")
+        except reference.Unavailable as exc:  # pragma: no cover -- may be absent
+            self.skipTest(str(exc))
+        ops = {name for name in names if not name.endswith("_test.go")}
+        self.assertEqual(
+            ops,
+            {"client.go", "links.go", "migrate_session.go", "resolve_endpoints.go"},
+        )
         src = self.source(reference.ASTRAL_GO, "api/nodes/module.go")
-        self.assertIn('MethodLinks            = "nodes.links"', src)
-        self.assertIn('MethodResolveEndpoints = "nodes.resolve_endpoints"', src)
-        self.assertIn('MethodMigrateSession   = "nodes.migrate_session"', src)
-        self.assertEqual(src.count('= "nodes.'), 3)
+        self.assertEqual(src.count('= "nodes.'), 7)
 
     def test_the_pin_requires_the_seven_parameters_the_module_names(self):
         required = {
