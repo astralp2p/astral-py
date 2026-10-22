@@ -811,7 +811,7 @@ class SearchGrammarTest(unittest.TestCase):
         """A query built rather than parsed can hold what the grammar cannot
         spell, and the text channel loses it silently -- `bin`, `json` and
         `canonical` all carry it exactly. The loss is astral-go's
-        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 221ce52),
+        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 8972f283),
         which a registered searcher parses the same query with, so the SDK
         matching it is what keeps the two agreeing about the question.
 
@@ -2706,7 +2706,7 @@ class CitationTest(unittest.TestCase):
         (
             reference.ASTRALD,
             "mod/apphost/src/guest.go",
-            171,
+            170,
             "ctx = ctx.WithZone(msg.Zone)",
         ),
         (reference.ASTRALD, "mod/objects/src/op_describe.go", 40, "ctx = ctx.LimitZone(*args.Zone)"),

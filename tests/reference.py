@@ -43,33 +43,39 @@ ASTRALD: Final = "astrald"
 ASTRAL_GO: Final = "astral-go"
 
 PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
-    # The revisions the modules were read against: astrald `1286a469` and the
-    # astral-go its `go.mod` requires (v0.0.0-20261017201810-221ce52e3f71).
+    # The revisions the modules were read against: astrald `48ae88b2` and the
+    # astral-go its `go.mod` requires (v0.0.0-20261022090210-8972f283b0e4).
     # The SDK supports the current node and no older one, so every `path:line`
     # citation in `astral/api/*.py` resolves at one of these two and none names
     # another revision. Bumping one means re-reading the citations that name it.
     #
-    # Bumped from astrald `0c7e3109` / astral-go `3c849bf` for the
-    # `astral.Objectify` encoding of `mod.nodes.node_info` (astral-go
-    # `4b18f24`), which astrald pins from `032271d4`. Verified at the bump: of
-    # the files this tree cites, these differ between the old pin and the new
-    # one and each was re-read -- astrald `mod/auth/src/authorize.go`,
-    # `mod/objects/src/module.go`, `op_describe.go`, `op_find.go`,
-    # `op_read.go`, `op_search.go`, `partial_id_test.go` and
-    # `mod/user/src/contracts.go`; astral-go `api/apphost/route_query_msg.go`,
-    # `api/nodes/node_info.go`, `api/objects/module.go` and
-    # `astral/channel/binary_sender.go`. Claims rewritten: `node_info` is a
-    # plain record (`astral/api/nodes.py`, design 11.7), `describe`, `find`,
-    # `search` and `read` narrow the routing zone with `LimitZone` and `find`
-    # names the node itself (`astral/api/objects.py`), `BinarySender.Send`
-    # issues one `Write` per frame (`astral/transport/websocket.py`). Surface
-    # added: `auth.list_authorizers`, `auth.remove_authorizer`,
-    # `auth.set_authorizer`, `user.set_swarm_join_policy`,
-    # `user.set_swarm_invite_policy` and their types; the apphost census counts
-    # `set_app_register_policy`. Line citations re-anchored:
-    # `mod/objects/src/module.go:185`, `mod/user/src/contracts.go:178`.
-    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "1286a469"),
-    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "221ce52"),
+    # Bumped from astrald `1286a469` / astral-go `221ce52` for `user.bootstrap`
+    # (astrald `5b5f32f0`) and `mod.user.bootstrap_result` (astral-go
+    # `ed5bcb9`). Verified at the bump: of the files this tree cites, these
+    # differ between the old pin and the new one and each was re-read --
+    # astrald `mod/apphost/src/config.go`, `guest.go`, `op_register.go`,
+    # `mod/auth/sudo_action.go` (deleted), `mod/auth/src/authorizers.go`,
+    # `sign_contract_guard.go`, `mod/crypto/src/sign_guard.go`,
+    # `mod/nodes/src/op_migrate_session.go`, `mod/user/module.go`,
+    # `mod/user/src/contracts.go`, `object_receiver.go`,
+    # `op_accept_contract.go`, `op_accept_membership.go`,
+    # `op_new_node_contract.go` and `sync.go`; astral-go
+    # `api/auth/module.go`, `api/auth/sudo_action.go` (added),
+    # `api/ip/module.go` (added), `api/nodes/module.go`,
+    # `astral/blueprint_reflect.go`, `astral/channel/switch.go` and
+    # `text_sender.go`. Claims rewritten: `accept_contract` and
+    # `accept_membership` read their input with `FailOnEOF`, and
+    # `accept_membership` refuses a self-issued or non-membership contract
+    # (`astral/api/user.py`); `mod.auth.sudo_action` is astral-go's at the pins
+    # (`astral/api/auth.py`); astral-go's `api/ip` declares the three op names
+    # (`astral/api/ip.py`). Surface added: `user.bootstrap` and its type; the
+    # apphost census counts `hosts`. Line citations re-anchored:
+    # `mod/apphost/src/guest.go:170,199-205,270-272`,
+    # `mod/crypto/src/sign_guard.go:32-36`, `mod/user/module.go:23,27`,
+    # `mod/user/src/contracts.go:206`, `mod/user/src/sync.go:31`,
+    # `astral/channel/switch.go:110`.
+    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "48ae88b2"),
+    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "8972f283"),
 }
 
 

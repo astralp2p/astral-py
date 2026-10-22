@@ -119,7 +119,7 @@ string, sends no zone the caller did not ask for, and sends the `eos`.
 
 **The `zone` argument is not the routing zone, and on four ops it destroys it.**
 Eight ops declare a `zone` query-string argument. astrald sets the op's context
-zone from `route_query_msg.Zone` (`mod/apphost/src/guest.go:171`), and then
+zone from `route_query_msg.Zone` (`mod/apphost/src/guest.go:170`), and then
 `describe`, `find`, `search` and `read` *narrow* it with `LimitZone` when the
 argument is present (`mod/objects/src/op_describe.go:40`,
 `mod/objects/src/op_find.go:32`, `mod/objects/src/op_search.go:41`,

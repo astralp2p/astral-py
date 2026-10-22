@@ -53,7 +53,7 @@ a property of astrald rather than an omission here:
 ## Authorization
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `1286a469` and astral-go `221ce52`.** An identity argument travels
+pins, astrald `48ae88b2` and astral-go `8972f283`.** An identity argument travels
 under the key `identity` and `apphost.cancel`'s nonce under `query_id`.
 
 **`apphost.list_tokens` and `apphost.create_token` are administration, not
@@ -82,12 +82,14 @@ ops do not use it. The distinction decides who the plaintext-token paragraph
 below applies to: the router's substitution of the node identity for a missing
 caller reaches the token ops and is refused by `mayManageApps`.
 
-**The census, re-derived at `1286a469`.** Fifteen `op_*.go` files. Twelve
+**The census, re-derived at `48ae88b2`.** Sixteen `op_*.go` files. Thirteen
 refuse a network origin; the three that do not are `whoami`, `register` and
 `set_app_register_policy`. Seven ask `mod.auth.admin_manage_apps_action` --
 `create_token`, `delete_token`, `list_tokens`, `grant`, `list_grants`, `revoke`
 and `set_app_register_policy`. One asks `mod.auth.serve_apps_action`:
-`register_handler` (`op_register_handler.go:29`). The other seven ask no action.
+`register_handler` (`op_register_handler.go:29`). One asks
+`mod.user.see_swarm_action`: `hosts` (`op_hosts.go:32`), which names the nodes
+that host an app and has no client here. The other seven ask no action.
 
 **`apphost.set_app_register_policy` delegates the decision on every
 `apphost.register` to an op of another identity**, or with no delegate named
@@ -115,10 +117,10 @@ allows the user identity and the node's own identity and nobody else; any other
 identity reaches the action through a node-local grant or a signed contract
 permit (`authorize_user_or_node.go:11-12`). A token-less guest session sends a
 nil `Caller` and `core/router.go:45-47` rewrites it to the node's identity.
-astrald marks such a session anonymous (`mod/apphost/src/guest.go:200-206`) and
+astrald marks such a session anonymous (`mod/apphost/src/guest.go:199-205`) and
 the mark cannot reach an op: `routing.Op` builds its `IncomingQuery` from the
 query and its origin alone and drops `Extra`
-(`mod/crypto/src/sign_guard.go:33-37`). Inferred from those four, with no live
+(`mod/crypto/src/sign_guard.go:32-36`). Inferred from those four, with no live
 run behind it: **an unauthenticated local process still reads every access token
 on the node in plaintext, and still mints one for any identity it names.** The
 two guards stop the caller off a link, and the authenticated app that holds
@@ -221,7 +223,7 @@ ERR_REGISTRATION_DECLINED: Final = "registration declined"
 
 The node accepts the query before its policy decides and then sends this as
 an `error_message`, which surfaces as `RemoteError` with this `message`
-(`api/apphost/errors.go:5-7` at astral-go `221ce52`, sent at
+(`api/apphost/errors.go:5-7` at astral-go `8972f283`, sent at
 `mod/apphost/src/op_register.go:75-86`).
 """
 
@@ -262,7 +264,7 @@ _CANCEL: Final[dict[str, Spec]] = {
     "cause": Primitive("string8"),
 }
 # `routing.op_spec` reports a Go `string` argument as `string8`
-# (`lib/query/field_editor.go:41-42` at astral-go `221ce52`); the node binds the
+# (`lib/query/field_editor.go:41-42` at astral-go `8972f283`); the node binds the
 # whole value to the field, so the joined permit list carries no 255-byte bound.
 _REGISTER: Final[dict[str, Spec]] = {
     "grant_permits": Primitive("string8"),
@@ -635,7 +637,7 @@ class Apphost(ModuleClient):
         `error_message` and arrives as `RemoteError`
         (`op_set_app_register_policy.go:46-49,61-71`).
 
-        astral-go `221ce52` has no client for this op.
+        astral-go `8972f283` has no client for this op.
         """
         qs = setter_query(OP_SET_APP_REGISTER_POLICY, identity, operation, timeout)
         self._expect(
@@ -709,7 +711,7 @@ class Apphost(ModuleClient):
         local process can attempt; whether it then receives the node's queries is
         astrald's business and is not asserted here. `register_service_msg` is
         the authenticated counterpart -- astrald refuses it outright from a
-        token-less guest (`mod/apphost/src/guest.go:271-273`).
+        token-less guest (`mod/apphost/src/guest.go:270-272`).
         """
         qs = querystring.build(
             OP_REGISTER_HANDLER,

@@ -51,7 +51,7 @@ does either.** `Digest.WriteTo` used to write whatever bytes it held while
 `Digest.ReadFrom` demanded exactly 35, so the zero value encoded to nothing and
 no conforming reader could consume it -- and inside a `mod.nodes.link_info` it
 moved every field after it by 35 bytes. astral-go `eeb31e3` (PR #90, in `main`
-at `221ce52`, the revision astrald `1286a469` requires) makes the width
+at `8972f283`, the revision astrald `48ae88b2` requires) makes the width
 unconditional: `WriteTo` writes `DigestSize` bytes for every digest it accepts,
 the zero value as `DigestSize` nulls, and refuses any other length with
 `ErrInvalidDigestLength` rather than putting a short frame on the wire;
@@ -105,7 +105,7 @@ fields, because a `@record` owns its schema. `nat.endpoint` is a third of the
 same shape -- `IP` ref, `Port` uint16, `Network()` of `kcp` -- and Tier 3 can
 reuse `IPEndpoint` rather than restate it.
 
-Source citations are pinned to astral-go `221ce52` and astrald `1286a469`. The
+Source citations are pinned to astral-go `8972f283` and astrald `48ae88b2`. The
 tor paragraphs above name the astral-go commits that made the changes they
 describe, and all three are in `main` at that pin, so every citation here
 resolves at one of the two pinned revisions.
@@ -142,17 +142,17 @@ MAX_PORT: Final = 0xFFFF
 TCP_NETWORK: Final = "tcp"
 TCP_ALIAS: Final = "inet"
 """astrald's TCP module parses and unpacks `inet` as well as `tcp`
-(`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `1286a469`). The
+(`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `48ae88b2`). The
 endpoint's own `Network()` is `tcp` and never `inet`."""
 
 KCP_NETWORK: Final = "kcp"
 TOR_NETWORK: Final = "tor"
 GATEWAY_NETWORK: Final = "gw"
-"""`mod/gateway/src/module.go` `NetworkName`, line 28 at astrald `1286a469`.
+"""`mod/gateway/src/module.go` `NetworkName`, line 28 at astrald `48ae88b2`.
 The module is `gateway` and its network is `gw`."""
 
 TOR_DEFAULT_PORT: Final = 1791
-"""`mod/tor/src/module.go` `defaultListenPort`, line 17 at astrald `1286a469`.
+"""`mod/tor/src/module.go` `defaultListenPort`, line 17 at astrald `48ae88b2`.
 astrald's tor parser supplies it for an address with no port; astral-go's
 `UnmarshalText` requires one. `TorEndpoint.parse` accepts both."""
 
@@ -549,7 +549,7 @@ class TorEndpoint(Endpoint):
 
         `unknown` is the zero value, which is astral-go's `UnmarshalText`. A
         missing port defaults to 1791, which is astrald's parser
-        (`mod/tor/src/parse.go` `Parse`, astrald `1286a469`) and is accepted
+        (`mod/tor/src/parse.go` `Parse`, astrald `48ae88b2`) and is accepted
         here so a string the node reads is a string this SDK reads. A port
         outside `uint16` raises rather than truncating.
         """
@@ -609,7 +609,7 @@ class GatewayEndpoint(Endpoint):
     through the directory, it refuses an endpoint whose gateway is its target,
     and it refuses one where either half resolves to the zero identity, which is
     what `""` and `anyone` resolve to (`mod/gateway/src/parser.go`
-    `Module.Parse`, astrald `1286a469`).
+    `Module.Parse`, astrald `48ae88b2`).
     All three need a node. A wire type has none, so `parse` is astral-go's
     `ParseEndpoint`: two identities, parsed locally, no resolution and no
     equality rule.
@@ -630,7 +630,7 @@ class GatewayEndpoint(Endpoint):
 
         An absent identity renders as 66 zeros, because astral-go's
         `Identity.String()` answers `anyoneKey` for a nil receiver
-        (`astral/identity.go`, astral-go `221ce52`).
+        (`astral/identity.go`, astral-go `8972f283`).
         """
         return f"{_identity_text(self.gateway_id)}:{_identity_text(self.target_id)}"
 

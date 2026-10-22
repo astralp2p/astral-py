@@ -1159,7 +1159,7 @@ class LiveAuthTest(live_support.LiveCase):
     Nothing here signs, stores or indexes. `auth.index` gets an empty batch and
     IDs of objects no repository holds: the op loads before it indexes and
     answers `object not found` without reaching the index
-    (`mod/auth/src/op_index.go` at astrald `1286a469`, `indexOne`).
+    (`mod/auth/src/op_index.go` at astrald `48ae88b2`, `indexOne`).
     `auth.sign_contract` is opened and closed with nothing on the body, so the
     node has nothing to sign. Both are the ops' refusal shapes and both are
     verified rather than assumed.
@@ -1263,10 +1263,10 @@ class LiveAuthTest(live_support.LiveCase):
 
     @bounded(30.0)
     async def test_mod_auth_sudo_action_is_a_type_on_the_node(self):
-        """astral-go's `api/auth` declares and registers it from `5923624`;
-        at the pins, which predate that, astrald declares it and astral-go does
-        not, so D-27's premise held there. Ten bytes: a nonce and two nil
-        flags, the embedded `auth.Action` flattened."""
+        """astral-go's `api/auth` declares and registers it from `5923624`,
+        and the pins carry that commit, so the node answers with astral-go's
+        type. Ten bytes: a nonce and two nil flags, the embedded `auth.Action`
+        flattened."""
         async with await self.client() as client:
             async with client.stream(
                 "objects.new?type=mod.auth.sudo_action", allow_unparsed=True, timeout=20.0
@@ -1289,8 +1289,8 @@ class LiveAuthTest(live_support.LiveCase):
         `type auth.Action does not implement Object and is not a supported
         container`. `5b1d282` added both, and `specFromType` probes
         `tryObjectType` ahead of its container dispatch, so the embedded field
-        now yields a `RefSpec` naming `mod.auth.action`. astrald `1286a469`
-        requires `221ce52`, which is past `5b1d282`, so the SDK's own pin is
+        now yields a `RefSpec` naming `mod.auth.action`. astrald `48ae88b2`
+        requires `8972f283`, which is past `5b1d282`, so the SDK's own pin is
         already on this side of it.
         """
         async with await self.client() as client:
@@ -1428,7 +1428,7 @@ class CitationTest(unittest.TestCase):
     GO = reference.ASTRAL_GO
 
     CITATIONS = {
-        "astral/channel/switch.go:101": "NewErrUnexpectedObject",
+        "astral/channel/switch.go:110": "NewErrUnexpectedObject",
         "astral/struct_value.go:163": "s.Type().Field(i).Name",
         "astral/time.go:16": "func (t Time) WriteTo",
         "astral/identity.go:87": "func (id *Identity) String()",

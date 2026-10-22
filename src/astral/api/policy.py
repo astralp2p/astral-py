@@ -1,13 +1,13 @@
 """`policy.delegate` -- the op a node asks instead of deciding an admission itself.
 
 astral-go's `api/policy` package holds what a node and the app it delegates an
-admission decision to share (`api/policy/delegate.go` at astral-go `221ce52`,
-the revision astrald `1286a469` requires). Two node modules store a delegate:
+admission decision to share (`api/policy/delegate.go` at astral-go `8972f283`,
+the revision astrald `48ae88b2` requires). Two node modules store a delegate:
 `apphost` for `apphost.register` and `user` for `user.request_membership` and
 `user.accept_membership`, each persisted as a `policy.delegate` in the node's
 tree under `/mod/apphost/policy` and `/mod/user/policy`
 (`mod/apphost/src/register_policy.go:12,21` and
-`mod/user/src/swarm_policy.go:12,17-18` at astrald `1286a469`). The question and
+`mod/user/src/swarm_policy.go:12,17-18` at astrald `48ae88b2`). The question and
 the answer are the owning module's types -- `mod.apphost.app_register_request`
 and `mod.apphost.app_register_decision` in `astral.api.apphost`, the four
 `mod.user.swarm_*` types in `astral.api.user`.
@@ -32,7 +32,7 @@ that reason: a module client is a bound set of ops and this module has none.
 op declares `Identity string`, `Operation string` and `Timeout
 astral.Duration`, and reads both names empty as a restore of the bundled
 accept-all policy (`mod/apphost/src/op_set_app_register_policy.go:13-23` and
-`mod/user/src/op_set_swarm_policy.go:14-24` at astrald `1286a469`).
+`mod/user/src/op_set_swarm_policy.go:14-24` at astrald `48ae88b2`).
 """
 
 from __future__ import annotations

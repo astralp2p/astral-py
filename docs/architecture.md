@@ -15,9 +15,9 @@ document states the resolution, and the resolution is binding.
 | Rank | Authority | Location |
 |---|---|---|
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
-| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `221ce52` (the commit the node pins) |
-| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `1286a469` — authoritative for session semantics the client never exercises |
-| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `3fdc3dd`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
+| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `8972f283` (the commit the node pins) |
+| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `48ae88b2` — authoritative for session semantics the client never exercises |
+| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `415c28c`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
 When 1 and 3 disagree, 1 wins and the disagreement is filed in §9. When astral-go
@@ -1112,7 +1112,8 @@ is why "every accepted query yields objects" must never be assumed.
 The single most common way to get an op wrong is passing channel-body input as a query
 argument. The confirmed body-input ops: `tree.set` (batch form), `crypto.public_key`,
 `crypto.sign_hash`, `crypto.sign_text`, `crypto.verify_hash_signature`,
-`crypto.verify_text_signature`, `auth.sign_contract`, `user.accept_contract`, `user.accept_membership`, `objects.store`, `objects.push`,
+`crypto.verify_text_signature`, `auth.sign_contract`, `user.accept_contract`, `user.accept_membership`,
+`user.bootstrap` (its words, unless `generate` is set), `objects.store`, `objects.push`,
 `objects.create`, `objects.register_blueprint`, and the streamed-id forms of
 `objects.contains` / `objects.delete` / `objects.load` / `objects.probe`. A query argument on
 `crypto.verify_*` **silently never verifies**.
@@ -1716,7 +1717,7 @@ and the node's key is not signable through the op surface.
 Section 2.5 lists `mod.nodes.node_info` among the four types with a hand-written codec, and
 section 0.1 describes its numeric endpoint tags. Both describe astral-go before `4b18f24`. From
 that commit on, `NodeInfo.WriteTo` and `ReadFrom` are `astral.Objectify`
-(`api/nodes/node_info.go:24-29` at `221ce52`), so the binary form is the reflective field walk:
+(`api/nodes/node_info.go:24-29` at `8972f283`), so the binary form is the reflective field walk:
 `string8` alias, `Ptr(identity)`, then a `uint32` count of type-tagged endpoints. astrald pins
 that encoding from `032271d4`.
 
