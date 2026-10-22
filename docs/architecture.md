@@ -1172,8 +1172,8 @@ Rules every module client obeys:
    `mod.` is never part of an op name. Exceptions to the prefix rule that must be spelled
    literally: `apphost.access_token`, `services.update`, `objects.search_query`,
    `objects.query_tag`, `nat.hole`, `nat.endpoint`, `bip137sig.entropy`, `bip137sig.seed`,
-   `policy.delegate`, and the plural `mod.users.swarm_member` /
-   `mod.users.created_user_info` alongside the singular `mod.user.*`.
+   `policy.delegate`, and the plural `mod.users.swarm_member` alongside the singular
+   `mod.user.*`.
 7. **Never port an astral-go client bug.** The known set: `dir.apply_filters` queries
    `dir.set_alias`; `objects.new_mem` sends `size` as an int64 where the op wants a size
    string; `objects.read` hardcodes `zone=dvn`; `objects.register_blueprint` and
