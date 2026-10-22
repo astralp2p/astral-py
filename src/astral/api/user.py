@@ -1,6 +1,6 @@
 """`user.*` -- the swarm a node belongs to: membership, siblings, assets, bans.
 
-Tier 2 and the largest module of it: eighteen ops, fifteen wire types, and the
+Tier 2 and the largest module of it: eighteen ops, fourteen wire types, and the
 one op in the SDK whose stream ends with a **value** instead of a terminator.
 Every op below is on the live node's `shell.spec` registry -- fifteen entries
 verified against `furry-bolt`, the two policy setters on an isolated astrald
@@ -61,14 +61,13 @@ send their objects and return; `sync_assets` is the value. Confirmed live for
 three empty on this node) and for `new_node_contract` and `sync_assets`
 (`"eof"`). Nothing here waits for `eos` unconditionally.
 
-**Type names are singular for `mod.user.*` and plural for two of them.**
-`mod.users.swarm_member` and `mod.users.created_user_info` carry the plural
-segment and `mod.user.info`, `mod.user.op_update`, `mod.user.expulsion`,
-`mod.user.signed_expulsion`, `mod.user.notification`,
-`mod.user.bootstrap_result`, the four policy types and the three action types
-do not. The names are spelled literally, as design section 5.1 rule 6 requires; both
-spellings are on the live registry, verified this session through
-`objects.blueprints`.
+**Type names are singular for `mod.user.*` and plural for one of them.**
+`mod.users.swarm_member` carries the plural segment and `mod.user.info`,
+`mod.user.op_update`, `mod.user.expulsion`, `mod.user.signed_expulsion`,
+`mod.user.notification`, `mod.user.bootstrap_result`, the four policy types and
+the three action types do not. The names are spelled literally, as design
+section 5.1 rule 6 requires; both spellings are on the live registry, verified
+this session through `objects.blueprints`.
 
 **`mod.user.op_update` is declared here.** astral-go's `api/user` does not carry
 it -- astrald defines it beside the op that sends it
@@ -77,9 +76,9 @@ that package's `init`. The field order below is the node's own, read from
 `objects.get_blueprint?type=mod.user.op_update` on `furry-bolt`: `Nonce nonce64`,
 `ObjectID *object_id.sha256`, `Removed bool`. The same query answered for
 `mod.user.info`, `mod.user.expulsion`, `mod.user.signed_expulsion`,
-`mod.user.notification`, `mod.users.swarm_member` and
-`mod.users.created_user_info`, and every field order below is that answer;
-`mod.user.bootstrap_result`'s is the same query's answer on astrald `48ae88b2`.
+`mod.user.notification` and `mod.users.swarm_member`, and every field order
+below is that answer; `mod.user.bootstrap_result`'s is the same query's answer
+on astrald `48ae88b2`.
 The
 action types are **refused** by that op -- `BlueprintFromType …Action: type
 auth.Action does not implement Object and is not a supported container` -- which
@@ -217,12 +216,6 @@ push is neither accepted nor rejected and the event triggers nothing. The type i
 declared here for decode completeness: an app that receives pushed objects meets
 it. Defect filed against astrald.
 
-**`mod.users.created_user_info` is answered by no op on this node.** The live
-registry has no `users.*` module at all, verified this session -- 118 ops, none of
-them `users.`-prefixed. astral-go declares the type in `api/user`
-(`created_user_info.go`) and astrald never constructs it. It is declared here so
-the type is decodable when a peer sends one, and for nothing else.
-
 **Two policies decide who joins and whose invitation is accepted, and an app can
 be either one.** `user.request_membership` asks the swarm join policy with a
 `mod.user.swarm_join_request` and `user.accept_membership` asks the swarm invite
@@ -317,7 +310,6 @@ __all__ = [
     "AdminSwarmAction",
     "AssetSync",
     "BootstrapResult",
-    "CreatedUserInfo",
     "DEFAULT_CONTRACT_VALIDITY",
     "ERR_EXPELLED",
     "ERR_INVITATION_DECLINED",
@@ -499,28 +491,6 @@ class SwarmMember:
     identity: Identity | None = wire("Identity", Ptr("identity"))
     alias: str = wire("Alias", Primitive("string8"))
     linked: bool = wire("Linked", Primitive("bool"))
-
-
-@record("mod.users.created_user_info")
-class CreatedUserInfo:
-    """A newly provisioned user, its key, its first contract and its token.
-
-    Declared for decode completeness. No op on the live registry answers with
-    one -- there is no `users.*` module on the node, verified this session --
-    and astrald never constructs the type; astral-go declares it in `api/user`.
-
-    `access_token` is a bearer credential. It is a plain field on a plain
-    record: nothing here redacts it and `repr` prints it.
-    """
-
-    id: Identity | None = wire("ID", Ptr("identity"))  # noqa: A003
-    alias: str = wire("Alias", Primitive("string8"))
-    key_id: ObjectID | None = wire("KeyID", Ptr("object_id.sha256"))
-    contract_id: ObjectID | None = wire("ContractID", Ptr("object_id.sha256"))
-    contract: SignedContract | None = wire(
-        "Contract", Ptr("mod.auth.signed_contract")
-    )
-    access_token: str = wire("AccessToken", Primitive("string8"))
 
 
 @record("mod.user.notification")
@@ -1531,7 +1501,6 @@ def _unconstrained(constraints: Any) -> bool:
 USER_TYPES: Final[Sequence[type]] = (
     AdminSwarmAction,
     BootstrapResult,
-    CreatedUserInfo,
     Expulsion,
     Info,
     Notification,

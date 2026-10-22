@@ -1,4 +1,4 @@
-"""The `user` module client: eighteen ops, fifteen types, one non-`eos` stream.
+"""The `user` module client: eighteen ops, fourteen types, one non-`eos` stream.
 
 Three tiers in one file, because the same claim is made at each and the three
 must agree:
@@ -47,7 +47,6 @@ from astral.api.user import (
     AdminSwarmAction,
     AssetSync,
     BootstrapResult,
-    CreatedUserInfo,
     DEFAULT_CONTRACT_VALIDITY,
     EVENT_ASSETS,
     Expulsion,
@@ -465,18 +464,6 @@ class RoundTripTest(unittest.TestCase):
         self.assertIn("<12 words>", repr(result))
         self.assertIn("<0 words>", repr(BootstrapResult()))
 
-    def test_a_created_user_info_round_trips(self):
-        self.assert_round_trips(
-            CreatedUserInfo(
-                id=USER_ID,
-                alias="somebody",
-                key_id=OID,
-                contract_id=OID,
-                contract=a_signed_contract(),
-                access_token="t0ken",
-            )
-        )
-
     def test_every_zero_value_round_trips(self):
         for kind in USER_TYPES:
             with self.subTest(type=kind.ASTRAL_TYPE):
@@ -533,14 +520,6 @@ class BlueprintParityTest(unittest.TestCase):
         "mod.user.bootstrap_result": [
             ("Identity", "ptr:identity"),
             ("Mnemonic", "primitive:string16"),
-        ],
-        "mod.users.created_user_info": [
-            ("ID", "ptr:identity"),
-            ("Alias", "primitive:string8"),
-            ("KeyID", "ptr:object_id.sha256"),
-            ("ContractID", "ptr:object_id.sha256"),
-            ("Contract", "ptr:mod.auth.signed_contract"),
-            ("AccessToken", "primitive:string8"),
         ],
     }
 
@@ -613,10 +592,9 @@ class TypeRegistrationTest(unittest.TestCase):
         self.assertEqual(declared, set(USER_TYPES))
 
     def test_the_plural_type_names_are_spelled_literally(self):
-        """Two types carry `mod.users` and every other carries `mod.user`.
+        """One type carries `mod.users` and every other carries `mod.user`.
         Design section 5.1 rule 6: the name is the node's, not a pattern."""
         self.assertEqual(SwarmMember.ASTRAL_TYPE, "mod.users.swarm_member")
-        self.assertEqual(CreatedUserInfo.ASTRAL_TYPE, "mod.users.created_user_info")
         self.assertEqual(Info.ASTRAL_TYPE, "mod.user.info")
         for kind in USER_TYPES:
             with self.subTest(type=kind.ASTRAL_TYPE):
