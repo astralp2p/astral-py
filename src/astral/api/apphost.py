@@ -69,8 +69,8 @@ astral-go's `AdminManageAppsAction.ObjectType()`,
 `apphost.delete_token` carries the same pair (`op_delete_token.go:20,24`) and so
 does the grant surface beside it -- `apphost.grant`, `apphost.list_grants`,
 `apphost.revoke`. `grant()` below is the client of `apphost.grant`; the other
-three have none here. `apphost.cancel` refuses
-the network origin too (`op_cancel.go:23`) and authorizes on ownership instead:
+three have none here. `apphost.cancel` refuses the network origin too
+(`op_cancel.go:23`) and authorizes on ownership instead:
 a session cancels what it launched, and the action is the way past that
 (`op_cancel.go:58-68`).
 
@@ -123,7 +123,8 @@ the mark cannot reach an op: `routing.Op` builds its `IncomingQuery` from the
 query and its origin alone and drops `Extra`
 (`mod/crypto/src/sign_guard.go:32-36`). Inferred from those four, with no live
 run behind it: **an unauthenticated local process still reads every access token
-on the node in plaintext, and still mints one for any identity it names.** The
+on the node in plaintext, still mints one for any identity it names, and still
+grants any identity any action.** The
 two guards stop the caller off a link, and the authenticated app that holds
 neither a grant nor a contract permit for the action.
 
@@ -593,6 +594,9 @@ class Apphost(ModuleClient):
         **kw: Any,
     ) -> None:
         """Grant `identity` one action on this node. RR, one `ack`. **Mutates.**
+        With `constraints`, WA: one bundle in, one `ack` out. Either way the
+        stream ends at EOF with no `eos`; the op reads one object
+        (`op_grant.go:70`).
 
         The node records a node-local grant and replaces whatever `identity`
         held for the same action (`op_grant.go:21-23`). Local-only, and gated on
@@ -600,7 +604,9 @@ class Apphost(ModuleClient):
         without the action both get `QueryRejected` (`op_grant.go:31-37`).
 
         `identity` travels under the wire key `identity`, as the hex of the
-        identity this client resolves. `action` is the action's object type, e.g.
+        identity this client resolves. The node refuses the zero identity,
+        `anyone`, with `missing identity` (`op_grant.go:47-49`). `action` is the
+        action's object type, e.g.
         `mod.services.service_discovery_action`. `duration` omitted grants until
         the grant is revoked (`op_grant.go:57-61`).
 
@@ -618,10 +624,19 @@ class Apphost(ModuleClient):
             qs = querystring.build(OP_GRANT, _encode(_GRANT, params))
             self._expect(await self._c.call_one(qs, **kw), Ack, OP_GRANT)
             return
+        if not isinstance(constraints, Bundle):
+            raise BadArgumentType(
+                f"{OP_GRANT}: constraints: expected a Bundle, got "
+                f"{type(constraints).__name__}"
+            )
         params["constrained"] = True
         qs = querystring.build(OP_GRANT, _encode(_GRANT, params))
-        for obj in await self._c.call_with(qs, constraints, expect=1, **kw):
-            self._expect(obj, Ack, OP_GRANT)
+        answers = await self._c.call_with(qs, constraints, expect=1, **kw)
+        if not answers:
+            raise ProtocolError(
+                f"{OP_GRANT}: the stream ended without answering the constraints"
+            )
+        self._expect(answers[0], Ack, OP_GRANT)
 
     async def register(
         self,
