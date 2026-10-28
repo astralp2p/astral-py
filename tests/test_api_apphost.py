@@ -45,6 +45,7 @@ from astral.api.apphost import (
     OP_BIND,
     OP_CANCEL,
     OP_CREATE_TOKEN,
+    OP_GRANT,
     OP_HOLD_OBJECT,
     OP_LIST_HELD_OBJECTS,
     OP_LIST_TOKENS,
@@ -80,7 +81,7 @@ from astral.errors import (
     QueryTimeout,
     RemoteError,
 )
-from astral.object import Ack
+from astral.object import Ack, Bundle
 from astral.objectid import object_id
 from astral.querystring import QueryStringTooLong
 from astral.registry import default_blueprints
@@ -622,6 +623,103 @@ class ListHeldObjectsTest(ApphostCase):
             held = await api.list_held_objects()
         self.assertEqual(held, [oid])
         self.assertEqual(mock.queries[-1].query, OP_LIST_HELD_OBJECTS)
+
+
+def read_bundle_then(*replies: tuple[str, bytes]):  # type: ignore[no-untyped-def]
+    """astrald's `apphost.grant` with `constrained=true`: accept, read the
+    bundle, answer, then read to EOF so every frame the client sent is recorded.
+
+    A canned `Accept` answers and closes before the client writes the bundle,
+    and the input is dropped.
+    """
+
+    async def handler(conn, query) -> None:  # type: ignore[no-untyped-def]
+        conn.send_raw(frame("mod.apphost.query_accepted_msg"))
+        await conn.flush()
+        await conn.recv_frame_or_none()
+        for reply in replies:
+            conn.send_frame(*reply)
+        await conn.flush()
+        if replies:
+            while await conn.recv_frame_or_none() is not None:
+                pass
+        await conn.aclose()
+
+    return handler
+
+
+class GrantTest(ApphostCase):
+    """`apphost.grant`: RR, one `ack`; constraints travel on the body."""
+
+    DISCOVERY = "mod.services.service_discovery_action"
+
+    @staticmethod
+    def body(mock: MockApphost) -> list[tuple[str, bytes]]:
+        """The frames the mock received after the session handshake."""
+        received = mock.connections[-1].received
+        for index, (type_name, _) in enumerate(received):
+            if type_name == "mod.apphost.route_query_msg":
+                return received[index + 1 :]
+        return []
+
+    @bounded()
+    async def test_grant_sends_the_identity_under_identity(self):
+        """The identity argument travels under `identity`, the name astrald
+        `bd98bbe8` gives it; `id` would be skipped by the node's binding."""
+        async with MockApphost(routes={OP_GRANT: Accept(objects=(ACK_FRAME,))}) as mock:
+            api = await self.apphost(mock)
+            await api.grant(ID_HEX, self.DISCOVERY, duration=dt.timedelta(hours=1))
+        self.assertEqual(
+            mock.queries[-1].query,
+            f"{OP_GRANT}?action={self.DISCOVERY}&duration=1h0m0s&identity={ID_HEX}",
+        )
+        self.assertEqual(self.body(mock), [])
+
+    @bounded()
+    async def test_grant_with_constraints_sends_the_bundle_on_the_body(self):
+        """A bundle is not a query argument: `constrained=true` on the query,
+        the bundle as the one object on the body."""
+        async with MockApphost(routes={OP_GRANT: read_bundle_then(ACK_FRAME)}) as mock:
+            api = await self.apphost(mock)
+            await api.grant(ID_HEX, self.DISCOVERY, constraints=Bundle([Ack()]))
+        self.assertEqual(
+            mock.queries[-1].query,
+            f"{OP_GRANT}?action={self.DISCOVERY}&constrained=true&identity={ID_HEX}",
+        )
+        # The handler reads to EOF, so an `eos` after the bundle would show here.
+        self.assertEqual([t for t, _ in self.body(mock)], ["bundle"])
+
+    @bounded()
+    async def test_grant_with_constraints_and_no_answer_is_a_protocol_error(self):
+        """A stream that ends before the `ack` recorded nothing the caller can
+        rely on; it is not a success."""
+        async with MockApphost(routes={OP_GRANT: read_bundle_then()}) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(ProtocolError):
+                await api.grant(ID_HEX, self.DISCOVERY, constraints=Bundle([Ack()]))
+
+    @bounded()
+    async def test_grant_constraints_must_be_a_bundle(self):
+        async with MockApphost(routes={}) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(BadArgumentType):
+                await api.grant(ID_HEX, self.DISCOVERY, constraints=[Ack()])  # type: ignore[arg-type]
+
+    @bounded()
+    async def test_a_refused_grant_is_a_rejection(self):
+        async with MockApphost(routes={OP_GRANT: Reject(code=1)}) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(QueryRejected):
+                await api.grant(ID_HEX, self.DISCOVERY)
+
+    @bounded()
+    async def test_a_grant_the_node_cannot_record_is_a_remote_error(self):
+        async with MockApphost(
+            routes={OP_GRANT: Accept(objects=(error_frame("missing action"),))}
+        ) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(RemoteError):
+                await api.grant(ID_HEX, self.DISCOVERY)
 
 
 class TokenAndContractTest(ApphostCase):
@@ -1478,6 +1576,13 @@ class SecurityNoteTest(unittest.TestCase):
             ("mod/crypto/src/sign_guard.go", 36, "cannot reach an op"),
             (f"{self.SRC}/op_hosts.go", 26, "OriginNetwork"),
             (f"{self.SRC}/op_hosts.go", 32, "SeeSwarmAction"),
+            (f"{self.SRC}/op_grant.go", 21, "OpGrant records"),
+            (f"{self.SRC}/op_grant.go", 31, "OriginNetwork"),
+            (f"{self.SRC}/op_grant.go", 35, admin),
+            (f"{self.SRC}/op_grant.go", 47, "identity.IsZero()"),
+            (f"{self.SRC}/op_grant.go", 58, "args.Duration != 0"),
+            (f"{self.SRC}/op_grant.go", 68, "args.Constrained"),
+            (f"{self.SRC}/op_grant.go", 70, "FailOnEOF"),
         )
         for path, number, fragment in cites:
             with self.subTest(citation=f"{path}:{number}"):
