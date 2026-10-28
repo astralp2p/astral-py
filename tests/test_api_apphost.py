@@ -45,6 +45,7 @@ from astral.api.apphost import (
     OP_BIND,
     OP_CANCEL,
     OP_CREATE_TOKEN,
+    OP_GRANT,
     OP_HOLD_OBJECT,
     OP_LIST_HELD_OBJECTS,
     OP_LIST_TOKENS,
@@ -80,7 +81,7 @@ from astral.errors import (
     QueryTimeout,
     RemoteError,
 )
-from astral.object import Ack
+from astral.object import Ack, Bundle
 from astral.objectid import object_id
 from astral.querystring import QueryStringTooLong
 from astral.registry import default_blueprints
@@ -622,6 +623,59 @@ class ListHeldObjectsTest(ApphostCase):
             held = await api.list_held_objects()
         self.assertEqual(held, [oid])
         self.assertEqual(mock.queries[-1].query, OP_LIST_HELD_OBJECTS)
+
+
+class GrantTest(ApphostCase):
+    """`apphost.grant`: RR, one `ack`; constraints travel on the body."""
+
+    DISCOVERY = "mod.services.service_discovery_action"
+
+    @staticmethod
+    def body(mock: MockApphost) -> list[tuple[str, bytes]]:
+        """The frames the mock received after the session handshake."""
+        received = mock.connections[-1].received
+        for index, (type_name, _) in enumerate(received):
+            if type_name == "mod.apphost.route_query_msg":
+                return received[index + 1 :]
+        return []
+
+    @bounded()
+    async def test_grant_sends_the_identity_under_identity(self):
+        """The identity argument travels under `identity`, the name astrald
+        `bd98bbe8` gives it; `id` would be skipped by the node's binding."""
+        async with MockApphost(routes={OP_GRANT: Accept(objects=(ACK_FRAME,))}) as mock:
+            api = await self.apphost(mock)
+            await api.grant(ID_HEX, self.DISCOVERY, duration=dt.timedelta(hours=1))
+        self.assertEqual(
+            mock.queries[-1].query,
+            f"{OP_GRANT}?action={self.DISCOVERY}&duration=1h0m0s&identity={ID_HEX}",
+        )
+        self.assertEqual(self.body(mock), [])
+
+    @bounded()
+    async def test_grant_with_constraints_sends_the_bundle_on_the_body(self):
+        """A bundle is not a query argument: `constrained=true` on the query,
+        the bundle as the one object on the body."""
+        constraints = Bundle([Ack()])
+
+        async def read_then_ack(conn, query) -> None:  # type: ignore[no-untyped-def]
+            # astrald reads the bundle after accepting, then answers; a canned
+            # `Accept` answers and closes first, and the input is dropped.
+            conn.send_raw(frame("mod.apphost.query_accepted_msg"))
+            await conn.flush()
+            await conn.recv_frame_or_none()
+            conn.send_frame(*ACK_FRAME)
+            await conn.flush()
+            await conn.aclose()
+
+        async with MockApphost(routes={OP_GRANT: read_then_ack}) as mock:
+            api = await self.apphost(mock)
+            await api.grant(ID_HEX, self.DISCOVERY, constraints=constraints)
+        self.assertEqual(
+            mock.queries[-1].query,
+            f"{OP_GRANT}?action={self.DISCOVERY}&constrained=true&identity={ID_HEX}",
+        )
+        self.assertEqual([t for t, _ in self.body(mock)], ["bundle"])
 
 
 class TokenAndContractTest(ApphostCase):

@@ -68,7 +68,8 @@ astral-go's `AdminManageAppsAction.ObjectType()`,
 
 `apphost.delete_token` carries the same pair (`op_delete_token.go:20,24`) and so
 does the grant surface beside it -- `apphost.grant`, `apphost.list_grants`,
-`apphost.revoke`. None of the four has a client here. `apphost.cancel` refuses
+`apphost.revoke`. `grant()` below is the client of `apphost.grant`; the other
+three have none here. `apphost.cancel` refuses
 the network origin too (`op_cancel.go:23`) and authorizes on ownership instead:
 a session cancels what it launched, and the action is the way past that
 (`op_cancel.go:58-68`).
@@ -139,7 +140,7 @@ from typing import Any, Final, Iterable, Sequence
 
 from .. import querystring
 from ..errors import BadArgument, BadArgumentType, ProtocolError
-from ..object import Ack
+from ..object import Ack, Bundle
 from ..record import record, wire
 from ..session import (
     HANDSHAKE_TIMEOUT,
@@ -188,6 +189,7 @@ __all__ = [
     "OP_BIND",
     "OP_CANCEL",
     "OP_CREATE_TOKEN",
+    "OP_GRANT",
     "OP_HOLD_OBJECT",
     "OP_LIST_HELD_OBJECTS",
     "OP_LIST_TOKENS",
@@ -211,6 +213,7 @@ __all__ = [
 # that silently never cancels.
 
 OP_CREATE_TOKEN: Final = "apphost.create_token"
+OP_GRANT: Final = "apphost.grant"
 OP_HOLD_OBJECT: Final = "apphost.hold_object"
 OP_LIST_HELD_OBJECTS: Final = "apphost.list_held_objects"
 OP_LIST_TOKENS: Final = "apphost.list_tokens"
@@ -250,6 +253,12 @@ an `error_message`, which surfaces as `RemoteError` with this `message`
 _IDENTITY: Final[dict[str, Spec]] = {
     "identity": Primitive("string8"),
     "duration": Primitive("duration"),
+}
+_GRANT: Final[dict[str, Spec]] = {
+    "identity": Primitive("string8"),
+    "action": Primitive("string8"),
+    "duration": Primitive("duration"),
+    "constrained": Primitive("bool"),
 }
 _OBJECT_ID: Final[dict[str, Spec]] = {
     "id": Primitive("object_id.sha256"),
@@ -571,6 +580,48 @@ class Apphost(ModuleClient):
             params["duration"] = span
         qs = querystring.build(OP_CREATE_TOKEN, _encode(_IDENTITY, params))
         return self._expect(await self._c.call_one(qs, **kw), AccessToken, OP_CREATE_TOKEN)
+
+    # --- grants ---
+
+    async def grant(
+        self,
+        identity: Identity | str,
+        action: str,
+        *,
+        duration: Duration | int | _dt.timedelta | None = None,
+        constraints: Bundle | None = None,
+        **kw: Any,
+    ) -> None:
+        """Grant `identity` one action on this node. RR, one `ack`. **Mutates.**
+
+        The node records a node-local grant and replaces whatever `identity`
+        held for the same action (`op_grant.go:21-23`). Local-only, and gated on
+        `mod.auth.admin_manage_apps_action`; a caller off a link and a caller
+        without the action both get `QueryRejected` (`op_grant.go:31-37`).
+
+        `identity` travels under the wire key `identity`, as the hex of the
+        identity this client resolves. `action` is the action's object type, e.g.
+        `mod.services.service_discovery_action`. `duration` omitted grants until
+        the grant is revoked (`op_grant.go:57-61`).
+
+        `constraints` given sends `constrained=true` and the bundle on the body,
+        because a bundle is not a query argument (`op_grant.go:65-74`). An action
+        that evaluates no constraints refuses the constrained permit when it is
+        checked.
+        """
+        resolved = await self._c.resolve_identity(identity, **kw)
+        params: dict[str, Any] = {"identity": resolved.text(), "action": action}
+        span = _duration(duration)
+        if span is not None:
+            params["duration"] = span
+        if constraints is None:
+            qs = querystring.build(OP_GRANT, _encode(_GRANT, params))
+            self._expect(await self._c.call_one(qs, **kw), Ack, OP_GRANT)
+            return
+        params["constrained"] = True
+        qs = querystring.build(OP_GRANT, _encode(_GRANT, params))
+        for obj in await self._c.call_with(qs, constraints, expect=1, **kw):
+            self._expect(obj, Ack, OP_GRANT)
 
     async def register(
         self,
