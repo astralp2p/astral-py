@@ -13,23 +13,21 @@ while disagreeing with `furry-bolt`:
   `mod.auth.signed_contract` nests its embedded pointer under `"Contract"` in
   JSON and flattens it in binary, while every action type flattens its embedded
   **value** in both.
-- **Tier B** pins the five ops against `MockApphost`: the query string `index`
-  builds, the batch form's IDs on the body with an `eos` after them, the fact
-  that `sign_contract` puts the contract on the channel **body** with an `eos`
-  after it, and the query strings the three authorizer ops build.
+- **Tier B** pins the four ops against `MockApphost`: the fact that
+  `sign_contract` puts the contract on the channel **body** with an `eos` after
+  it, and the query strings the three authorizer ops build.
 - **Tier C** runs the read-only half against a real node: the op inventory from
   `shell.spec`, the three zero values from `objects.new`, the three blueprints
-  from `objects.get_blueprint`, and the two ops' refusal shapes. Nothing in the
-  live tier signs, stores or indexes anything: `auth.index` gets an empty batch
-  and IDs no repository holds, and the op loads before it indexes, so each ends
-  at `object not found`. `auth.sign_contract` is opened and closed with no
-  contract on the body, so there is nothing for the node to sign.
+  from `objects.get_blueprint`, and `auth.sign_contract`'s refusal shape.
+  Nothing in the live tier signs or stores anything: `auth.sign_contract` is
+  opened and closed with no contract on the body, so there is nothing for the
+  node to sign.
 
-Of the five ops only `auth.list_authorizers` is a read: `auth.index` mutates the
-local contract index, `auth.sign_contract` needs the node to hold two private
-keys, and the two authorizer setters change who decides. So the live tier lists
-the authorizers and exercises the other two ops' **refusals** and their types,
-which is the whole of what a read-only tier is entitled to.
+Of the four ops only `auth.list_authorizers` is a read: `auth.sign_contract`
+needs the node to hold two private keys, and the two authorizer setters change
+who decides. So the live tier lists the authorizers and exercises
+`auth.sign_contract`'s **refusal** and the module's types, which is the whole of
+what a read-only tier is entitled to.
 """
 
 from __future__ import annotations
@@ -37,7 +35,6 @@ from __future__ import annotations
 import dataclasses
 import functools
 import json
-import os
 import pathlib
 import re
 import unittest
@@ -51,7 +48,6 @@ from astral.api.auth import (
     Auth,
     AuthorizerAssignment,
     Contract,
-    OP_INDEX,
     OP_LIST_AUTHORIZERS,
     OP_REMOVE_AUTHORIZER,
     OP_SET_AUTHORIZER,
@@ -65,7 +61,6 @@ from astral.codec.binary import object_reader, payload_bytes
 from astral.errors import (
     BadArgument,
     BadArgumentType,
-    ParseError,
     ProtocolError,
     QueryRejected,
     RangeError,
@@ -182,7 +177,6 @@ def frame_error(message: str) -> tuple[str, bytes]:
 
 
 ACK_FRAME = ("ack", b"")
-OID = ObjectID(size=5, hash=bytes(range(32)))
 
 
 def a_contract() -> Contract:
@@ -727,7 +721,7 @@ class DivergenceTest(unittest.TestCase):
         )
 
 
-# --- Tier B: the two ops, against the mock -------------------------------
+# --- Tier B: the four ops, against the mock ------------------------------
 
 
 class AuthCase(unittest.IsolatedAsyncioTestCase):
@@ -758,165 +752,6 @@ class AuthCase(unittest.IsolatedAsyncioTestCase):
     def sent(self, mock: MockApphost) -> str:
         self.assertEqual(len(mock.queries), 1, f"queries: {mock.queries}")
         return mock.queries[0].query
-
-    def assert_no_faults(self, mock: MockApphost) -> None:
-        self.assertEqual(mock.errors, [])
-
-
-class IndexingNode:
-    """A route that answers one frame per input and mirrors the terminator, as
-    astral-go's `channel.Batch` does.
-
-    Reads and answers strictly in step. `received` is every body frame the
-    client sent, terminator included.
-    """
-
-    def __init__(self, *answers: tuple[str, bytes]) -> None:
-        self.answers = list(answers)
-        self.received: list[tuple[str, bytes]] = []
-
-    async def __call__(self, conn: MockConn, query: RouteQuery) -> None:
-        conn.send_frame(QUERY_ACCEPTED)
-        await conn.flush()
-        answers = iter(self.answers)
-        while True:
-            got = await conn.recv_frame_or_none()
-            if got is None:
-                return
-            self.received.append(got)
-            if got[0] == "eos":
-                conn.send_frame("eos", b"")
-                await conn.flush()
-                return
-            conn.send_frame(*next(answers, ACK_FRAME))
-            await conn.flush()
-
-    @property
-    def types(self) -> list[str]:
-        return [name for name, _ in self.received]
-
-
-class IndexOpTest(AuthCase):
-    """`auth.index`: RR with an `id`, BD without one, `ack` or `error_message`."""
-
-    @bounded()
-    async def test_it_sends_the_object_id_and_reads_the_ack(self):
-        mock = MockApphost(routes={f"{OP_INDEX}?id={OID}": Accept(objects=[ACK_FRAME])})
-        async with mock:
-            api = await self.auth(mock)
-            self.assertIsNone(await api.index(OID))
-        self.assertEqual(self.sent(mock), f"{OP_INDEX}?id={OID}")
-        self.assert_no_faults(mock)
-
-    @bounded()
-    async def test_it_accepts_the_text_form_of_an_object_id(self):
-        mock = MockApphost(routes={f"{OP_INDEX}?id={OID}": Accept(objects=[ACK_FRAME])})
-        async with mock:
-            api = await self.auth(mock)
-            await api.index(str(OID))
-        self.assertEqual(self.sent(mock), f"{OP_INDEX}?id={OID}")
-
-    @bounded()
-    async def test_a_value_that_is_not_an_object_id_never_reaches_the_node(self):
-        mock = MockApphost(routes={OP_INDEX: Accept(objects=[ACK_FRAME])})
-        async with mock:
-            api = await self.auth(mock)
-            with self.assertRaises(ParseError):
-                await api.index("not-an-object-id")
-        self.assertEqual(mock.queries, [])
-
-    @bounded()
-    async def test_the_single_form_always_sends_its_id(self):
-        """An absent `id` selects the batch, so `index()` has no default for it:
-        a caller who forgot the argument would otherwise open a batch and wait
-        on an op reading IDs it never sends."""
-        with self.assertRaises(TypeError):
-            await Auth(object()).index()  # type: ignore[call-arg]
-
-    @bounded()
-    async def test_an_error_message_surfaces_as_a_remote_error(self):
-        """Every failure past the required check arrives this way: object not
-        found, invalid contract, a signature that does not verify."""
-        mock = MockApphost(
-            routes={f"{OP_INDEX}?id={OID}": Accept(objects=[frame_error("invalid contract")])}
-        )
-        async with mock:
-            api = await self.auth(mock)
-            with self.assertRaises(RemoteError) as caught:
-                await api.index(OID)
-        self.assertIn("invalid contract", str(caught.exception))
-
-    @bounded()
-    async def test_an_answer_that_is_not_an_ack_is_a_protocol_error(self):
-        mock = MockApphost(
-            routes={f"{OP_INDEX}?id={OID}": Accept(objects=[("eos", b"")])}
-        )
-        async with mock:
-            api = await self.auth(mock)
-            with self.assertRaises(ProtocolError) as caught:
-                await api.index(OID)
-        self.assertIn(OP_INDEX, str(caught.exception))
-
-    @bounded()
-    async def test_a_rejected_query_surfaces_as_query_rejected(self):
-        """The routing layer refuses a query before the op runs, and the shape
-        it produces is pinned here so the distinction from an `error_message`
-        is kept: a rejection carries a code and no message."""
-        mock = MockApphost(routes={f"{OP_INDEX}?id={OID}": Reject(1)})
-        async with mock:
-            api = await self.auth(mock)
-            with self.assertRaises(QueryRejected):
-                await api.index(OID)
-
-
-class IndexManyOpTest(AuthCase):
-    """`auth.index` with no `id`: the IDs on the body, one answer each."""
-
-    async def node(self, *answers: tuple[str, bytes]) -> tuple[
-        Auth, IndexingNode, MockApphost
-    ]:
-        route = IndexingNode(*answers)
-        mock = MockApphost(routes={OP_INDEX: route})
-        await self.enterAsyncContext(mock)
-        return await self.auth(mock), route, mock
-
-    @bounded()
-    async def test_the_ids_travel_on_the_body_with_an_eos_after_them(self):
-        api, route, mock = await self.node()
-        other = ObjectID(size=7, hash=bytes(range(1, 33)))
-        self.assertIsNone(await api.index_many([OID, str(other)]))
-        self.assertEqual(self.sent(mock), OP_INDEX)
-        self.assertEqual(route.types, ["object_id.sha256", "object_id.sha256", "eos"])
-        self.assertEqual(route.received[0][1], payload_bytes(OID))
-        self.assertEqual(route.received[1][1], payload_bytes(other))
-        self.assertEqual(api.client.live_streams, 0)
-
-    @bounded()
-    async def test_the_first_error_message_raises_and_nothing_after_it_is_sent(self):
-        api, route, _ = await self.node(ACK_FRAME, frame_error("object not found"))
-        with self.assertRaises(RemoteError) as caught:
-            await api.index_many([OID, OID, OID])
-        self.assertIn("object not found", str(caught.exception))
-        self.assertEqual(route.types, ["object_id.sha256", "object_id.sha256"])
-
-    @bounded()
-    async def test_an_answer_that_is_not_an_ack_is_a_protocol_error(self):
-        api, _, _ = await self.node(("eos", b""))
-        with self.assertRaises(ProtocolError):
-            await api.index_many([OID])
-
-    @bounded()
-    async def test_an_empty_batch_sends_no_query(self):
-        api, _, mock = await self.node()
-        self.assertIsNone(await api.index_many([]))
-        self.assertEqual(mock.queries, [])
-
-    @bounded()
-    async def test_a_value_that_is_not_an_object_id_is_refused_before_the_query(self):
-        api, _, mock = await self.node()
-        with self.assertRaises(ParseError):
-            await api.index_many([OID, "not-an-object-id"])
-        self.assertEqual(mock.queries, [])
 
 
 class SignContractOpTest(AuthCase):
@@ -1116,10 +951,14 @@ class AuthPlumbingTest(AuthCase):
 
     @bounded()
     async def test_query_keywords_reach_the_client(self):
-        mock = MockApphost(routes={f"{OP_INDEX}?id={OID}": Accept(objects=[ACK_FRAME])})
+        mock = MockApphost(
+            routes={OP_REMOVE_AUTHORIZER: Accept(objects=[ACK_FRAME])}
+        )
         async with mock:
             api = await self.auth(mock)
-            await api.index(OID, caller=FURRY_BOLT, target=OTHER)
+            await api.remove_authorizer(
+                "mod.auth.see_objects_action", caller=FURRY_BOLT, target=OTHER
+            )
         query = mock.queries[0]
         self.assertEqual(query.caller, FURRY_BOLT)
         self.assertEqual(query.target, OTHER)
@@ -1129,15 +968,28 @@ class AuthPlumbingTest(AuthCase):
         async with MockApphost() as mock:
             api = await self.auth(mock)
             with self.assertRaises(RouteNotFound):
-                await api.index(OID)
+                await api.remove_authorizer("mod.auth.see_objects_action")
+
+    @bounded()
+    async def test_a_rejected_query_surfaces_as_query_rejected(self):
+        """The routing layer refuses a query before the op runs, and the shape
+        it produces is pinned here so the distinction from an `error_message`
+        is kept: a rejection carries a code and no message."""
+        mock = MockApphost(routes={OP_REMOVE_AUTHORIZER: Reject(1)})
+        async with mock:
+            api = await self.auth(mock)
+            with self.assertRaises(QueryRejected):
+                await api.remove_authorizer("mod.auth.see_objects_action")
 
     @bounded()
     async def test_every_op_closes_its_stream(self):
         """A stream left open burns one of the node's 32 workers until the node
-        restarts, so both ops are run and the client is then asserted idle."""
+        restarts, so every op is run and the client is then asserted idle."""
         mock = MockApphost(
             routes={
-                f"{OP_INDEX}?id={OID}": Accept(objects=[ACK_FRAME]),
+                OP_LIST_AUTHORIZERS: Accept(eos=True),
+                OP_REMOVE_AUTHORIZER: Accept(objects=[ACK_FRAME]),
+                OP_SET_AUTHORIZER: Accept(objects=[ACK_FRAME]),
                 OP_SIGN_CONTRACT: SigningNode(
                     ("mod.auth.signed_contract", payload_bytes(a_signed_contract()))
                 ),
@@ -1145,7 +997,9 @@ class AuthPlumbingTest(AuthCase):
         )
         async with mock:
             api = await self.auth(mock)
-            await api.index(OID)
+            await api.list_authorizers()
+            await api.remove_authorizer("mod.auth.see_objects_action")
+            await api.set_authorizer("mod.auth.see_objects_action", "astral://localnode:x")
             await api.sign_contract(a_contract())
             self.assertEqual(api.client.live_streams, 0)
 
@@ -1156,17 +1010,13 @@ class AuthPlumbingTest(AuthCase):
 class LiveAuthTest(live_support.LiveCase):
     """The read-only half against a real node.
 
-    Nothing here signs, stores or indexes. `auth.index` gets an empty batch and
-    IDs of objects no repository holds: the op loads before it indexes and
-    answers `object not found` without reaching the index
-    (`mod/auth/src/op_index.go` at astrald `48ae88b2`, `indexOne`).
-    `auth.sign_contract` is opened and closed with nothing on the body, so the
-    node has nothing to sign. Both are the ops' refusal shapes and both are
-    verified rather than assumed.
+    Nothing here signs or stores. `auth.sign_contract` is opened and closed
+    with nothing on the body, so the node has nothing to sign. That is the op's
+    refusal shape, verified rather than assumed.
     """
 
     @bounded(30.0)
-    async def test_the_module_s_op_surface_is_exactly_these_five(self):
+    async def test_the_module_s_op_surface_is_exactly_these_four(self):
         """`shell.spec` is the node's own op registry, so this is the inventory
         rather than a copy of it."""
         async with await self.client() as client:
@@ -1179,7 +1029,6 @@ class LiveAuthTest(live_support.LiveCase):
         self.assertEqual(
             {name for name in names if name.startswith("auth.")},
             {
-                OP_INDEX,
                 OP_LIST_AUTHORIZERS,
                 OP_REMOVE_AUTHORIZER,
                 OP_SET_AUTHORIZER,
@@ -1199,21 +1048,6 @@ class LiveAuthTest(live_support.LiveCase):
             with self.subTest(action=assignment.action):
                 self.assertIsInstance(assignment, AuthorizerAssignment)
                 self.assertEqual(assignment.token_value, "")
-        await self.assert_no_open_sockets()
-
-    @bounded(30.0)
-    async def test_the_index_op_s_object_id_is_optional(self):
-        """The node's own flag, and the pin on the batch mode: `id` is optional
-        and its absence selects the batch `index_many()` drives."""
-        async with await self.client() as client:
-            spec = json.loads(
-                (await client.call_raw(f"shell.spec?op={OP_INDEX}&out=json", timeout=20.0))
-                .decode()
-                .splitlines()[0]
-            )["Object"]
-        required = {p["Name"]: p["Required"] for p in spec["Parameters"]}
-        self.assertEqual(required["id"], False)
-        self.assertEqual(spec["Parameters"][0]["Type"], "object_id.sha256")
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
@@ -1309,33 +1143,6 @@ class LiveAuthTest(live_support.LiveCase):
                     self.assertEqual(embedded.spec, NODE_ACTION_EMBEDDED_SPEC)
 
     @bounded(30.0)
-    async def test_an_empty_batch_is_answered_by_the_mirrored_eos_alone(self):
-        """No `id` and a bare `eos` on the body: nothing to load and nothing to
-        index, and `channel.Batch` answers the terminator with its own."""
-        async with await self.client() as client:
-            async with client.stream(OP_INDEX, timeout=20.0) as stream:
-                await stream.send_eos()
-                answers = [obj async for obj in stream.raw_objects()]
-            self.assertEqual(answers, [])
-            self.assertEqual(stream.terminated_by, "eos")
-        await self.assert_no_open_sockets()
-
-    @bounded(30.0)
-    async def test_an_id_no_repository_holds_is_refused_in_both_forms(self):
-        """A random 32-byte hash names no stored object, so both forms stop at
-        the load and index nothing. `index_many` raises on the first answer and
-        `index` on its only one, with the node's text in both."""
-        absent = ObjectID(size=32, hash=os.urandom(32))
-        async with await self.client() as client:
-            with self.assertRaises(RemoteError) as caught:
-                await client.auth.index_many([absent, absent], timeout=20.0)
-            self.assertEqual(caught.exception.message, "object not found")
-            with self.assertRaises(RemoteError) as caught:
-                await client.auth.index(absent, timeout=20.0)
-            self.assertEqual(caught.exception.message, "object not found")
-        await self.assert_no_open_sockets()
-
-    @bounded(30.0)
     async def test_sign_contract_accepts_and_says_nothing_until_it_is_given_one(self):
         """The WA shape, verified without signing anything: the op accepts and
         then blocks on its own reader, so a caller that waits for an answer it
@@ -1370,13 +1177,12 @@ class DocstringTest(unittest.TestCase):
             "the module docstring and `Client` disagree about `client.auth`",
         )
 
-    def test_the_op_table_names_the_five_ops_and_no_others(self):
+    def test_the_op_table_names_the_four_ops_and_no_others(self):
         doc = auth_module.__doc__ or ""
         found = set(re.findall(r"`(auth\.[a-z_]+)`", doc))
         self.assertEqual(
             found,
             {
-                OP_INDEX,
                 OP_LIST_AUTHORIZERS,
                 OP_REMOVE_AUTHORIZER,
                 OP_SET_AUTHORIZER,
@@ -1386,7 +1192,8 @@ class DocstringTest(unittest.TestCase):
 
 
 class ReaderSourceTest(unittest.TestCase):
-    """Both ops read with `channel.Batch`, read out of astrald and astral-go.
+    """`auth.sign_contract` reads with `channel.Batch`, read out of astrald and
+    astral-go.
 
     The module carried `ch.Switch(handler, channel.BreakOnEOS)` for
     `auth.sign_contract` while the op had been `channel.Batch` at every revision
@@ -1405,12 +1212,6 @@ class ReaderSourceTest(unittest.TestCase):
         self.assertIn("return channel.Batch(ch, func(c *auth.Contract)", src)
         self.assertNotIn("ch.Switch", src)
         self.assertNotIn("BreakOnEOS", src)
-
-    def test_index_reads_with_batch_too(self):
-        """The two ops share a reader, which is why they share a terminator
-        contract and an `expect=n` reader on this side."""
-        src = self.source(reference.ASTRALD, "mod/auth/src/op_index.go")
-        self.assertIn("channel.Batch", src)
 
     def test_batch_mirrors_an_explicit_terminator_and_not_an_eof(self):
         """The half the module's `eos` claim rests on: a stream the caller ends

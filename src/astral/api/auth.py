@@ -1,7 +1,7 @@
 """`auth`: contracts, permits and actions -- the node's authorization vocabulary.
 
-Tier 1, five ops, four wire types and one field base. Two ops sign and index
-contracts and three administer external authorizers; the types are the largest
+Tier 1, four ops, four wire types and one field base. One op signs contracts
+and three administer external authorizers; the types are the largest
 part of the module, because
 `mod.auth.contract` and `mod.auth.signed_contract` are what two other modules
 exchange -- `user.accept_contract`, `user.accept_membership`, `user.adopt`,
@@ -13,16 +13,14 @@ a per-op contract and is not discoverable from the wire):
 
 | Op | Mode | Answer | Effect |
 |---|---|---|---|
-| `auth.index` | RR, BD with no `id` | `ack` \\| `error_message`, one per input | **mutates** the local contract index |
 | `auth.list_authorizers` | ST | `mod.auth.authorizer_assignment` x n ++ `eos` | read-only |
 | `auth.remove_authorizer` | RR | `ack` \\| `error_message` | **mutates** |
 | `auth.set_authorizer` | RR | `ack` \\| `error_message` | **mutates** |
 | `auth.sign_contract` | WA | `mod.auth.signed_contract` \\| `error_message`, one per input | privileged, no state written |
 
-The five are the whole of the module. `shell.spec` on an isolated astrald built
-from `48ae88b2` lists exactly these five, verified; `furry-bolt` and astrald
-`26bb51d5` listed `auth.index` and `auth.sign_contract` alone. astral-go's
-`api/auth/module.go` declares one op-name constant for each of the five.
+The four are the module's client surface. `shell.spec` on an isolated astrald
+built from `48ae88b2` lists each of the four, verified, and astral-go's
+`api/auth/module.go` declares one op-name constant for each of the four.
 
 **An external authorizer is the last word on one action type.** The node asks
 its handlers, then the contract chain, and then the authorizer assigned to the
@@ -38,26 +36,11 @@ astral endpoint naming the actor itself is refused
 `mod.auth.admin_manage_apps_action` and reject before accepting when it is
 refused.
 
-**`auth.index` takes its object ID in the query string or its object IDs on the
-body.** `opIndexArgs.ID` is optional (`mod/auth/src/op_index.go` at astrald
-`48ae88b2`), and an omitted `id` makes the op read `object_id.sha256` objects
-off the channel until `eos` or EOF, answering one `ack` or `error_message` per
-input and carrying on past a failed one -- the RR/BD hybrid `objects.contains`,
-`objects.delete`, `objects.load` and `objects.probe` already have. The batch
-goes through astral-go's `channel.Batch`, which answers an explicit `eos` with a
-final `eos` and ends silently after EOF (`astral/channel/batch.go` at astral-go
-`8972f283`). `index()` is the single form and `index_many()` the batch. Verified
-on astrald `26bb51d5`: the spec flags `id` `"Required":false`, a bare `eos` on
-the body answers a bare `eos`, two IDs no repository holds answer two `object
-not found` and an `eos`, and the single form answers `object not found` and EOF.
-
-**A contract is signed and indexed in two separate steps, and the op that signs
-does not store.** `auth.sign_contract` builds a fresh `SignedContract` around
-the contract it reads, signs it as issuer and as subject, sends it back, and
-writes nothing (`astrald/mod/auth/src/op_sign_contract.go`). `auth.index` takes
-an **object ID**, loads that object from the default read repository, and
-refuses anything that is not a `mod.auth.signed_contract`. The sequence is
-therefore: sign, `objects.store` the answer, index the ID that store returns.
+**The op that signs a contract does not store it.** `auth.sign_contract`
+builds a fresh `SignedContract` around the contract it reads, signs it as issuer
+and as subject, sends it back, and writes nothing
+(`astrald/mod/auth/src/op_sign_contract.go`). `objects.store` makes the answer
+durable and answers with its object ID, and
 `astral.objectid.object_id(signed)` computes the same ID locally without a
 query.
 
@@ -85,8 +68,8 @@ unclaimed node (`sign_contract_guard.go` `IsNodeClaim`).
 
 **`auth.sign_contract` is a batch op, and takes an `eos` that is not inferable
 from the wire.** Its reader is `channel.Batch`
-(`astrald/mod/auth/src/op_sign_contract.go`), the same reader `auth.index`'s
-batch form uses: it reads contracts until `eos` or EOF, answers one
+(`astrald/mod/auth/src/op_sign_contract.go`): it reads contracts until `eos` or
+EOF, answers one
 `mod.auth.signed_contract` or `error_message` per input in input order, and
 **mirrors the input stream's terminator** -- an explicit `eos` is answered with a
 final `eos`, a stream ended by EOF is not (`astral/channel/batch.go` at astral-go
@@ -194,7 +177,7 @@ what `Client` actually carries, so the two cannot drift apart.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Final, Iterable, Sequence
+from typing import Any, Final, Sequence
 
 from .. import querystring
 from ..errors import BadArgument, BadArgumentType, ProtocolError
@@ -202,7 +185,7 @@ from ..object import Ack, Bundle
 from ..objectid import object_id
 from ..record import record, wire
 from ..spec import Primitive, Ptr, Slice, Spec
-from ..types import Duration, Identity, Nonce, ObjectID, Time
+from ..types import Duration, Identity, Nonce, Time
 from .base import ModuleClient
 
 __all__ = [
@@ -211,7 +194,6 @@ __all__ = [
     "Auth",
     "AuthorizerAssignment",
     "Contract",
-    "OP_INDEX",
     "OP_LIST_AUTHORIZERS",
     "OP_REMOVE_AUTHORIZER",
     "OP_SET_AUTHORIZER",
@@ -220,7 +202,6 @@ __all__ = [
     "SignedContract",
 ]
 
-OP_INDEX: Final = "auth.index"
 OP_LIST_AUTHORIZERS: Final = "auth.list_authorizers"
 OP_REMOVE_AUTHORIZER: Final = "auth.remove_authorizer"
 OP_SET_AUTHORIZER: Final = "auth.set_authorizer"
@@ -228,7 +209,6 @@ OP_SIGN_CONTRACT: Final = "auth.sign_contract"
 
 # The parameter specs, so every value travels as the bare payload half of its
 # type's text encoding and nothing re-derives one (design section 5.1, rule 2).
-_INDEX: Final[dict[str, Spec]] = {"id": Primitive("object_id.sha256")}
 _AUTHORIZER: Final[dict[str, Spec]] = {
     "action": Primitive("string8"),
     "endpoint": Primitive("string8"),
@@ -471,69 +451,13 @@ class AuthorizerAssignment:
 
 
 class Auth(ModuleClient):
-    """The `auth` module's five ops, over one `Client`.
+    """The `auth` module's four ops, over one `Client`.
 
     Constructed as `Auth(client)`. The scaffolding and the `**kw` contract are
     `ModuleClient`'s.
     """
 
     __slots__ = ()
-
-    async def index(self, id: ObjectID | str, **kw: Any) -> None:  # noqa: A002
-        """Index a stored signed contract by its object ID. RR. **Mutates.**
-
-        The node loads `id` from its default read repository, refuses anything
-        that is not a `mod.auth.signed_contract` with
-        `error_message("invalid contract")`, verifies both signatures, and
-        stores the row. Idempotent: a contract already in the index returns
-        without re-verifying (`astrald/mod/auth/src/contracts.go`).
-
-        `id` is the ID of the **signed** contract, so the object must exist on
-        the node first -- `objects.store` puts it there and answers with this
-        ID, and `astral.objectid.object_id(signed)` computes the same value
-        locally.
-
-        Every failure arrives as an `error_message`, which surfaces as
-        `RemoteError`: object not found, invalid contract, a signature that does
-        not verify, a database fault.
-
-        One ID per call; `index_many()` sends several over one query.
-        """
-        qs = querystring.build(
-            OP_INDEX, querystring.encode_params(_INDEX, {"id": _object_id(id)})
-        )
-        self._expect(await self._c.call_one(qs, **kw), Ack, OP_INDEX)
-
-    async def index_many(self, ids: Iterable[ObjectID | str], **kw: Any) -> None:
-        """Index several stored signed contracts over one query. BD. **Mutates.**
-
-        The IDs travel on the **channel body**, one `object_id.sha256` each,
-        with no `id` in the query string: its absence is what selects the
-        batch. The node answers one `ack` or `error_message` per ID, in order,
-        and each one is `index()`'s answer for that ID.
-
-        One send, then one read, and an `eos` after the last ID, which the node
-        mirrors. The first `error_message` raises `RemoteError` and ends the
-        exchange: every ID before it was indexed, and no ID after it was sent.
-        The error does not name its position. `index()` is idempotent on a
-        contract already in the index, so re-sending the tail or indexing the
-        IDs one at a time is safe.
-
-        An empty `ids` sends no query.
-        """
-        objects = [_object_id(i) for i in ids]
-        if not objects:
-            return
-        answers = await self._c.call_with(
-            OP_INDEX, *objects, eos=True, expect=len(objects), **kw
-        )
-        if len(answers) != len(objects):
-            raise ProtocolError(
-                f"{OP_INDEX}: sent {len(objects)} object ID(s) and got "
-                f"{len(answers)} answer(s)"
-            )
-        for answer in answers:
-            self._expect(answer, Ack, OP_INDEX)
 
     async def sign_contract(self, contract: Contract, **kw: Any) -> SignedContract:
         """Sign a contract as both issuer and subject. WA. **Privileged.**
@@ -548,7 +472,7 @@ class Auth(ModuleClient):
         issuer, then as the subject, and any refusal or failure is an
         `error_message` and a `RemoteError` here. It writes
         nothing: the answer is durable only after `objects.store`, and it
-        authorizes nothing until `index()`.
+        authorizes nothing until astrald indexes it.
 
         An `eos` terminates the input, because this op's reader is
         `channel.Batch` and breaks on one. A body-input op whose reader omits an
@@ -560,8 +484,7 @@ class Auth(ModuleClient):
         answers as it goes. The op mirrors the terminator, so the stream does
         end in a final `eos`; reading to it would be `expect=None`, and the
         exchange is one contract and one answer, so there is nothing to wait
-        for after it. The mirrored `eos` is left unread, as `index_many` leaves
-        its own.
+        for after it. The mirrored `eos` is left unread.
         """
         if not isinstance(contract, Contract):
             raise BadArgumentType(
@@ -652,11 +575,6 @@ class Auth(ModuleClient):
 
 
 # --- argument discipline --------------------------------------------------
-
-
-def _object_id(value: ObjectID | str, op: str = OP_INDEX) -> ObjectID:
-    """An `object_id.sha256` parameter, naming the op that refused it."""
-    return ModuleClient._object_id(value, op)
 
 
 def _required(value: str, key: str, op: str) -> str:
