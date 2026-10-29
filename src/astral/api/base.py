@@ -129,8 +129,8 @@ class ModuleClient:
     # `_params(op, **values)` -- plus three copies of `_object_id` in two
     # behaviours. That last divergence was caller-visible: one form named the op
     # it failed in and the other did not, so `objects.probe('nope')` said which
-    # op refused and `auth.index('nope')` did not. This is exactly what the class
-    # docstring above says one base class exists to prevent.
+    # op refused and `apphost.hold_object('nope')` did not. This is exactly what
+    # the class docstring above says one base class exists to prevent.
 
     @staticmethod
     def _param(spec: Spec, value: Any) -> str:
@@ -179,7 +179,7 @@ class ModuleClient:
 
         The op is named in the failure, which is the form `objects.py` had and
         the two copies in `apphost.py` and `auth.py` did not: `'nope' has no
-        'data1' prefix` does not say that `auth.index` is what refused it.
+        'data1' prefix` does not say which op refused it.
         """
         if isinstance(value, ObjectID):
             return value

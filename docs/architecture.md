@@ -1411,7 +1411,7 @@ crypto.verify_*_signature user.* (reject code 2 on an unclaimed node — itself 
 ```
 
 Nothing that mutates state ever runs: no `dir.set_alias`, no `tree.set/delete`, no
-`objects.create/store/delete/purge/push/new_mem/register_*`, no `auth.index`, no
+`objects.create/store/delete/purge/push/new_mem/register_*`, no `auth.set_authorizer/remove_authorizer`, no
 `services.advertise` binding, no `apphost.register/set_app_register_policy/bind/register_handler/cancel`,
 no `user.*` writes, no `nodes.*` writes, no `nat.punch`.
 

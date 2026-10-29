@@ -1011,7 +1011,7 @@ class ModulePatternPolicyTest(unittest.TestCase):
         partial application and its body is one call -- but may not grow a second
         body for it. The divergence this catches was caller-visible:
         `objects.probe('nope')` named the op that refused the id and
-        `auth.index('nope')` did not."""
+        `apphost.hold_object('nope')` did not."""
         import ast
 
         from astral.api.base import ModuleClient
