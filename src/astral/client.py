@@ -213,7 +213,7 @@ def resolve_token(token: str | None = None) -> str | None:
 
     `None` means a token-less session. astrald confines one to the ops on its
     `anonymous_allowlist` -- six on an unclaimed node, three on a claimed one
-    (`mod/apphost/src/config.go:55-69` at astrald `5f17900d`) -- and refuses it
+    (`mod/apphost/src/config.go:55-69` at astrald `a499928a`) -- and refuses it
     every registration, even on the zero identity.
     """
     if token:

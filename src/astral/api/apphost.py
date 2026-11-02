@@ -3,9 +3,12 @@
 apphost is the node module the IPC protocol is named after: it owns the guest
 sessions, the access tokens that authenticate them, the inbound-handler
 registrations, and the object holds a local app uses to keep an object from
-being collected. Eleven ops have a client below, all of them confirmed present
-on the live node's `shell.spec` registry. astrald's apphost registry holds more
-than this SDK drives; *Authorization* counts it at a named revision.
+being collected. Fifteen ops have a client below. Eleven were confirmed present
+on the live node's `shell.spec` registry. The four grant ops -- `grant`,
+`request_grant`, `list_grants` and `revoke` -- and `register` were run through
+these clients on an isolated astrald built from `a499928a`. astrald's apphost
+registry holds more than this SDK drives; *Authorization* counts it at a named
+revision.
 
 | Op | Mode | Answer | Notes |
 |---|---|---|---|
@@ -13,7 +16,11 @@ than this SDK drives; *Authorization* counts it at a named revision.
 | `apphost.list_tokens` | ST | `apphost.access_token`* + `eos` | local-only, admin action, see below |
 | `apphost.list_held_objects` | ST | `object_id.sha256`* + `eos` | local-only, per caller |
 | `apphost.create_token` | RR | `apphost.access_token` | local-only, admin action, see below |
-| `apphost.register` | RR | `apphost.access_token` \\| `error_message` | local-only, policy-gated, no token needed, **mutates** |
+| `apphost.register` | WA | `apphost.access_token` \\| `error_message` | local-only, policy-gated, no token needed, **mutates** |
+| `apphost.grant` | WA | `ack` \\| `error_message` | local-only, admin action, **mutates** |
+| `apphost.request_grant` | WA | `ack` \\| `error_message` | local-only, session identity, policy-gated, **mutates** |
+| `apphost.list_grants` | ST | `mod.apphost.grant`* + `eos` | local-only, admin action |
+| `apphost.revoke` | RR | `ack` \\| `error_message` | local-only, admin action, **mutates** |
 | `apphost.set_app_register_policy` | RR | `ack` \\| `error_message` | admin action, **mutates** |
 | `apphost.hold_object` | RR | `ack` | local-only, needs a caller, `store_objects` |
 | `apphost.unhold_object` | RR | `ack` | local-only, needs a caller |
@@ -53,7 +60,7 @@ a property of astrald rather than an omission here:
 ## Authorization
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `5f17900d` and astral-go `a2b41561`.** An identity argument travels
+pins, astrald `a499928a` and astral-go `08ead7ce`.** An identity argument travels
 under the key `identity` and `apphost.cancel`'s nonce under `query_id`.
 
 **Every op accepts the query before it refuses one.** A refused caller reads an
@@ -85,8 +92,8 @@ authority. The action's name is astral-go's
 
 `apphost.delete_token` carries the same pair (`op_delete_token.go:23,27`) and so
 does the grant surface beside it -- `apphost.grant`, `apphost.list_grants`,
-`apphost.revoke`. `grant()` below is the client of `apphost.grant`; the other
-three have none here. `apphost.cancel` refuses the network origin too
+`apphost.revoke`; `grant()`, `list_grants()` and `revoke()` below are their
+clients. `apphost.cancel` refuses the network origin too
 (`op_cancel.go:30`) and authorizes on ownership instead:
 a session cancels what it launched, and the action is the way past that
 (`op_cancel.go:57-63`).
@@ -98,7 +105,7 @@ it asks the authority (`authorize_admin_manage_apps.go:20-22`) and takes the
 session's authenticated identity rather than `q.Caller()`. The token and grant
 ops do not use it.
 
-**The census, re-derived at `5f17900d`.** Seventeen `op_*.go` files. Fifteen
+**The census, re-derived at `a499928a`.** Seventeen `op_*.go` files. Fifteen
 refuse a network origin; the two that do not are `whoami` and
 `set_app_register_policy`, whose file also serves
 `apphost.set_grant_request_policy`. Seven ask
@@ -110,31 +117,59 @@ One asks `mod.auth.serve_apps_action`: `register_handler`
 their `mod.nodes.relay_for_action` contracts and has no client here. One asks
 `mod.auth.store_objects_action`: `hold_object` (`op_hold_object.go:36`).
 `request_grant` asks no action: it refuses a session with no authenticated
-identity and asks the grant request policy (`op_request_grant.go:40-62`); it
-has no client here. The other five ask no action.
+identity and asks the grant request policy (`op_request_grant.go:42-62`);
+`request_grant()` below is its client. The other five ask no action.
 
 **`apphost.set_app_register_policy` delegates the decision on every
 `apphost.register` to an op of another identity**, or with no delegate named
-restores the bundled accept-all policy (`op_set_app_register_policy.go:60-66`);
+restores the bundled accept-all policy (`op_set_app_register_policy.go:122-124`);
 `set_app_register_policy()` below is its client. It accepts, then asks the
 action and answers `not permitted` when it is refused, and it refuses no
 origin, so a network caller holding the permit reaches it
-(`op_set_app_register_policy.go:53-58`). The node stores the delegate as a
+(`op_set_app_register_policy.go:46-51`). The node stores the delegate as a
 `policy.delegate` (`astral.api.policy`), asks it with a
 `mod.apphost.app_register_request` and reads a
 `mod.apphost.app_register_decision` back; both are declared below.
 
-**`apphost.register` takes three arguments, and the policy reads all three.**
-`grant_permits` and `contract_permits` are each one comma-separated string of
-action names, and `name` is the app's own unverified claim
-(`op_register.go:23-39`). The node splits each list on every comma, trims
-each piece, and drops a blank one (`parse_permits.go:12-17`). The grant
-request always opens with `mod.auth.serve_apps_action` and
-`mod.auth.use_blueprints_action` (`register_grant_request.go:17-20`), and the
-contract request is the asked list alone (`op_register.go:51`). The op accepts,
-then answers a network origin with `origin not allowed: network`
-(`op_register.go:55-62`). The bundled policy answers with both lists as asked
-(`mod/apphost/register_policy.go:29-34`).
+**`apphost.register`, `apphost.grant` and `apphost.request_grant` each read
+one object off the channel after they accept.** The query carries no argument,
+and the object carries everything the op needs:
+`mod.apphost.register_request` (`api/apphost/register_request.go:10-22`),
+`mod.apphost.grant_request` (`api/apphost/grant_request.go:10-19`) and
+`mod.apphost.request_grant_request`
+(`api/apphost/request_grant_request.go:10-19`), each permit a whole
+`mod.auth.permit` with its constraints. astral-go's client sends the object
+even when it is empty (`api/apphost/client/register.go:49-50`). Grants add up:
+a grant never replaces another, granting a permit identical to a held one sets
+that grant's expiry to the new value, and narrowing is granting the narrow
+permit and then revoking the wide one (`api/apphost/client/grant.go:15-17`).
+An unknown action, missing required constraints, or constraints the action's
+validator refuses are refused with `invalid permit: <action>: <detail>` before
+anything is written (`api/auth/errors.go:16-19`).
+
+**The node reads the object and refuses the removed query arguments.**
+Each of the three reads its object and fails on EOF (`op_register.go:196-199`,
+`op_grant.go:45-48`, `op_request_grant.go:83-86`). Each refuses a query that
+still names an argument the object replaced -- `name`, `grant_permits` and
+`contract_permits` on register (`op_register.go:192`), `identity`, `action`,
+`duration` and `constrained` on grant (`op_grant.go:41`), `permits` on
+request_grant (`op_request_grant.go:79`) -- with an `error_message`, so a
+caller sending the old form is answered rather than left waiting for an object
+(`validate_permits.go:25-31`). Every permit is validated before a policy is
+asked or a grant written (`validate_permits.go:10-16`). grant and
+request_grant refuse an empty permit list with `missing permits` and a negative
+duration with `negative duration` (`op_grant.go:50-57`,
+`op_request_grant.go:87-92`). `list_grants` answers one `mod.apphost.grant` per
+unexpired grant, then `eos` (`op_list_grants.go:15-17,50-56`). `revoke` reads
+a zero `id` as absent, because grant IDs start at 1 (`op_revoke.go:49-57`).
+The grant request policy is the stored delegate, else `accept_all` when that
+mode is set, else refuse-all (`register_policy.go:64-78`);
+`apphost.set_grant_request_policy` sets it and has no client here. The register
+grant request opens with `mod.auth.serve_apps_action` and
+`mod.auth.use_blueprints_action` (`register_grant_request.go:17-20`), the op
+answers a network origin with `origin not allowed: network`
+(`op_register.go:47-50`), and the bundled policy answers with both lists as
+asked (`mod/apphost/register_policy.go:29-34`).
 
 **A session holding a token that names the node passes every action check.**
 `mod/user/src/authorize_user_or_node.go:17-22` allows the user identity and the
@@ -163,7 +198,7 @@ from typing import Any, Final, Iterable, Sequence
 
 from .. import querystring
 from ..errors import BadArgument, BadArgumentType, ProtocolError
-from ..object import Ack, Bundle
+from ..object import Ack
 from ..record import record, wire
 from ..session import (
     HANDSHAKE_TIMEOUT,
@@ -204,8 +239,12 @@ __all__ = [
     "AuthSuccessMsg",
     "AuthTokenMsg",
     "BindMsg",
+    "ERR_GRANT_DECLINED",
+    "ERR_GRANT_NOT_FOUND",
     "ERR_REGISTRATION_DECLINED",
     "ErrorMsg",
+    "Grant",
+    "GrantRequest",
     "HandleQueryMsg",
     "HostInfoMsg",
     "IncomingQueryMsg",
@@ -214,18 +253,23 @@ __all__ = [
     "OP_CREATE_TOKEN",
     "OP_GRANT",
     "OP_HOLD_OBJECT",
+    "OP_LIST_GRANTS",
     "OP_LIST_HELD_OBJECTS",
     "OP_LIST_TOKENS",
     "OP_REGISTER",
     "OP_REGISTER_HANDLER",
+    "OP_REQUEST_GRANT",
+    "OP_REVOKE",
     "OP_SET_APP_REGISTER_POLICY",
     "OP_UNHOLD_OBJECT",
     "OP_WHOAMI",
     "PingMsg",
     "QueryAcceptedMsg",
     "QueryRejectedMsg",
+    "RegisterRequest",
     "RegisterServiceMsg",
     "RejectIncomingMsg",
+    "RequestGrantRequest",
     "RouteQueryMsg",
 ]
 
@@ -238,9 +282,12 @@ __all__ = [
 OP_CREATE_TOKEN: Final = "apphost.create_token"
 OP_GRANT: Final = "apphost.grant"
 OP_HOLD_OBJECT: Final = "apphost.hold_object"
+OP_LIST_GRANTS: Final = "apphost.list_grants"
 OP_LIST_HELD_OBJECTS: Final = "apphost.list_held_objects"
 OP_LIST_TOKENS: Final = "apphost.list_tokens"
 OP_REGISTER: Final = "apphost.register"
+OP_REQUEST_GRANT: Final = "apphost.request_grant"
+OP_REVOKE: Final = "apphost.revoke"
 OP_SET_APP_REGISTER_POLICY: Final = "apphost.set_app_register_policy"
 OP_UNHOLD_OBJECT: Final = "apphost.unhold_object"
 
@@ -249,8 +296,24 @@ ERR_REGISTRATION_DECLINED: Final = "registration declined"
 
 The node accepts the query before its policy decides and then sends this as
 an `error_message`, which surfaces as `RemoteError` with this `message`
-(`api/apphost/errors.go:5-7` at astral-go `a2b41561`, sent at
-`mod/apphost/src/op_register.go:75-86`).
+(`api/apphost/errors.go:5-7` at astral-go `08ead7ce`, sent at
+`mod/apphost/src/op_register.go:63-74`).
+"""
+
+ERR_GRANT_DECLINED: Final = "grant declined"
+"""`request_grant`: the grant request policy refused, or could not decide.
+
+The node accepts the query before its policy decides and then sends this as
+an `error_message`, which surfaces as `RemoteError` with this `message`
+(`api/apphost/errors.go:9-11` at astral-go `08ead7ce`, sent at
+`mod/apphost/src/op_request_grant.go:56-63`).
+"""
+
+ERR_GRANT_NOT_FOUND: Final = "grant not found"
+"""`revoke`: the identity holds no grant the arguments name.
+
+Sent as an `error_message` (`mod/apphost/src/op_revoke.go:63-64`), which
+surfaces as `RemoteError` with this `message`.
 """
 
 
@@ -277,12 +340,6 @@ _IDENTITY: Final[dict[str, Spec]] = {
     "identity": Primitive("string8"),
     "duration": Primitive("duration"),
 }
-_GRANT: Final[dict[str, Spec]] = {
-    "identity": Primitive("string8"),
-    "action": Primitive("string8"),
-    "duration": Primitive("duration"),
-    "constrained": Primitive("bool"),
-}
 _OBJECT_ID: Final[dict[str, Spec]] = {
     "id": Primitive("object_id.sha256"),
     "duration": Primitive("duration"),
@@ -295,13 +352,14 @@ _CANCEL: Final[dict[str, Spec]] = {
     "query_id": Primitive("nonce64"),
     "cause": Primitive("string8"),
 }
-# `routing.op_spec` reports a Go `string` argument as `string8`
-# (`lib/query/field_editor.go:41-42` at astral-go `a2b41561`); the node binds the
-# whole value to the field, so the joined permit list carries no 255-byte bound.
-_REGISTER: Final[dict[str, Spec]] = {
-    "grant_permits": Primitive("string8"),
-    "contract_permits": Primitive("string8"),
-    "name": Primitive("string8"),
+# `apphost.revoke` names one grant by `id` or every grant for an action by
+# `action`. astral-go's clients send `id` as an `astral.Uint64` and `action` as
+# a string (`api/apphost/client/revoke.go:14,27`), and the node's `Action` is an
+# `astral.String8` (`opRevokeArgs`, `mod/apphost/src/op_revoke.go:13-20`).
+_REVOKE: Final[dict[str, Spec]] = {
+    "identity": Primitive("string8"),
+    "id": Primitive("uint64"),
+    "action": Primitive("string8"),
 }
 
 _STRING8_MAX: Final = 255
@@ -362,7 +420,7 @@ class AppRegisterRequest:
     contract. astral-go's comment says the origin's trusted-source entitlement
     is joined into `contract_permits` (`api/apphost/app_register_policy.go:12-26`);
     astrald joins nothing and sends the asked list
-    (`mod/apphost/src/op_register.go:51`). The grant request always opens with
+    (`mod/apphost/src/op_register.go:211`). The grant request always opens with
     `mod.auth.serve_apps_action` and `mod.auth.use_blueprints_action`
     (`mod/apphost/src/register_grant_request.go:17-20`).
     """
@@ -383,7 +441,7 @@ class AppRegisterDecision:
     (`api/apphost/app_register_policy.go:46-58`). An assignment that is nil,
     invalid, or names an `actor` fails astral-go's
     `AppRegisterDecision.Validate`, and the node refuses the registration on it
-    (`mod/apphost/src/op_register.go:83-86`): the delegate names the authorizer
+    (`mod/apphost/src/op_register.go:71-74`): the delegate names the authorizer
     and the node names the actor.
     """
 
@@ -393,6 +451,76 @@ class AppRegisterDecision:
     authorizers: list[AuthorizerAssignment | None] = wire(
         "Authorizers", Slice("mod.auth.authorizer_assignment")
     )
+
+
+# --- the grant types --------------------------------------------------------
+#
+# One grant as `apphost.list_grants` reports it, and the three objects
+# `apphost.register`, `apphost.grant` and `apphost.request_grant` read off the
+# channel. Each is astral-go's `api/apphost` type at `08ead7ce`, whose field
+# order is the wire order, and each field list is `astral.BlueprintOf`'s answer
+# there, which is what the node's `objects.get_blueprint` sends
+# (`mod/objects/src/module.go:237-255` at astrald `a499928a`).
+
+
+@record("mod.apphost.grant")
+class Grant:
+    """One node-local grant (`api/apphost/grant.go:10-21`).
+
+    `id` names the grant to `apphost.revoke`, and the node never assigns the ID
+    of a deleted grant to another grant. `permit` is the recorded permit, with
+    its constraints as written. `expires_at` is the instant the grant lapses;
+    `None` means the grant lasts until revoked.
+    """
+
+    id: int = wire("ID", Primitive("uint64"))
+    permit: Permit | None = wire("Permit", Ptr("mod.auth.permit"))
+    expires_at: Time | None = wire("ExpiresAt", Ptr("time"))
+
+
+@record("mod.apphost.register_request")
+class RegisterRequest:
+    """What an app sends `apphost.register`
+    (`api/apphost/register_request.go:10-22`).
+
+    The node hands it to the app register policy as an `AppRegisterRequest`,
+    which adds the caller's web origin. `name` is the app's own claim and the
+    node does not verify it. `grant_permits` are the permits the app asks to
+    hold as node-local grants and `contract_permits` the permits it asks to hold
+    in a signed node-to-app contract, each with its constraints.
+    """
+
+    name: str = wire("Name", Primitive("string8"))
+    grant_permits: list[Permit | None] = wire("GrantPermits", Slice("mod.auth.permit"))
+    contract_permits: list[Permit | None] = wire("ContractPermits", Slice("mod.auth.permit"))
+
+
+@record("mod.apphost.grant_request")
+class GrantRequest:
+    """The grants a caller asks `apphost.grant` to write for one identity
+    (`api/apphost/grant_request.go:10-19`).
+
+    Each permit becomes one node-local grant for `identity`. `duration` is the
+    lifetime of each grant; zero writes grants that last until revoked.
+    """
+
+    identity: Identity | None = wire("Identity", Ptr("identity"))
+    duration: Duration = wire("Duration", Primitive("duration"))
+    permits: list[Permit | None] = wire("Permits", Slice("mod.auth.permit"))
+
+
+@record("mod.apphost.request_grant_request")
+class RequestGrantRequest:
+    """The grants a session asks `apphost.request_grant` for
+    (`api/apphost/request_grant_request.go:10-19`).
+
+    The grantee is the identity of the session's access token, and the request
+    names no identity. `duration` is the lifetime asked for each grant; zero
+    asks for grants that last until revoked.
+    """
+
+    permits: list[Permit | None] = wire("Permits", Slice("mod.auth.permit"))
+    duration: Duration = wire("Duration", Primitive("duration"))
 
 
 # --- argument coercion ---------------------------------------------------
@@ -430,58 +558,46 @@ def _duration(value: Duration | int | _dt.timedelta | None) -> Duration | None:
     return Duration(int(value))
 
 
-def _permits(values: Iterable[str] | None, key: str) -> str | None:
-    """A permit-list argument of `apphost.register`, joined as the node splits it.
+def _permit_list(
+    values: Iterable[Permit | str] | None, key: str, op: str
+) -> list[Permit | None]:
+    """A permit list of a request object: whole `mod.auth.permit`s.
 
-    `None` and an empty list send no argument, as astral-go's client does
-    (`api/apphost/client/register.go:70-73`). The node splits on every comma and
-    trims each piece (`parse_permits.go:12-17`), so a name that carries a comma,
-    is blank, or has surrounding whitespace would be read as an action the
-    caller did not name; each is refused. An action name is a `string8` in
-    `mod.auth.permit`, and the node fails the registration after minting the
-    identity when it cannot encode one (`op_register.go:133-137`), so a name
-    over 255 UTF-8 bytes is refused too. A bare `str` is refused rather than
-    iterated character by character.
+    `None` is the empty list. A `Permit` is sent as given, constraints and all;
+    a `str` names an action and becomes `Permit(action=...)` with no
+    constraints. A bare `str`, `bytes` or `Permit` is refused rather than read
+    as a list, and so is an entry of any other type. An action is a `string8`
+    in `mod.auth.permit`, so an empty one or one over 255 UTF-8 bytes raises
+    `BadArgument` before a query leaves.
     """
     if values is None:
-        return None
-    if isinstance(values, (str, bytes)):
+        return []
+    if isinstance(values, (str, bytes, Permit)):
         raise BadArgumentType(
-            f"{OP_REGISTER}: {key} expects a list of action names, got "
-            f"{type(values).__name__}"
+            f"{op}: {key} expects a list of permits, got {type(values).__name__}"
         )
-    names = list(values)
-    for name in names:
-        if not isinstance(name, str):
+    permits: list[Permit | None] = []
+    for value in values:
+        if isinstance(value, str):
+            value = Permit(action=value)
+        elif not isinstance(value, Permit):
             raise BadArgumentType(
-                f"{OP_REGISTER}: {key} expects action names, got "
-                f"{type(name).__name__}"
+                f"{op}: {key} expects Permit or action-name entries, got "
+                f"{type(value).__name__}"
             )
-        if "," in name:
+        size = len(value.action.encode("utf-8"))
+        if not size or size > _STRING8_MAX:
             raise BadArgument(
-                f"{OP_REGISTER}: {key} entry {name!r} contains a comma; the node "
-                "splits the list on commas and would read two actions"
+                f"{op}: {key} entry names an action of {size} bytes; an action "
+                f"is a string8 of 1 to {_STRING8_MAX}"
             )
-        if not name or name != name.strip():
-            raise BadArgument(
-                f"{OP_REGISTER}: {key} entry {name!r} is blank or padded; the "
-                "node trims every entry and drops a blank one"
-            )
-        if len(name.encode("utf-8")) > _STRING8_MAX:
-            raise BadArgument(
-                f"{OP_REGISTER}: {key} entry is {len(name.encode('utf-8'))} bytes; "
-                f"an action name is a string8 of at most {_STRING8_MAX}"
-            )
-    return ",".join(names) if names else None
+        permits.append(value)
+    return permits
 
 
 def _app_name(value: str | None) -> str | None:
-    """`apphost.register`'s `name`: a `string8` in the request the policy reads.
-
-    A name over 255 UTF-8 bytes fails to encode when the node puts the request
-    to a delegate, and the node then declines the registration
-    (`op_register.go:69-78`), so it is refused here.
-    """
+    """`RegisterRequest.name`: a `string8`, so a name over 255 UTF-8 bytes
+    cannot be encoded and is refused here with the op named."""
     if value is None:
         return None
     if not isinstance(value, str):
@@ -514,7 +630,8 @@ class Apphost(ModuleClient):
     `Apphost(client)` constructs the same object directly. The scaffolding and
     the `**kw` contract are `ModuleClient`'s.
 
-    Two methods take an identity that may be a **directory name**, which costs
+    Five methods -- `list_tokens`, `create_token`, `grant`, `list_grants` and
+    `revoke` -- take an identity that may be a **directory name**, which costs
     one `dir.resolve` before the op's own query. That resolution runs inside the
     caller's `timeout` -- `kw` is forwarded into it -- so a name target cannot
     make a bounded call unbounded.
@@ -616,99 +733,235 @@ class Apphost(ModuleClient):
     async def grant(
         self,
         identity: Identity | str,
-        action: str,
+        permits: Iterable[Permit | str],
         *,
         duration: Duration | int | _dt.timedelta | None = None,
-        constraints: Bundle | None = None,
         **kw: Any,
     ) -> None:
-        """Grant `identity` one action on this node. RR, one `ack`. **Mutates.**
-        With `constraints`, WA: one bundle in, one `ack` out. Either way the
-        stream ends at EOF with no `eos`; the op reads one object
-        (`op_grant.go:70`).
+        """Grant `identity` the permits named, on this node. WA: one
+        `mod.apphost.grant_request` in, one `ack` out, then EOF. **Mutates.**
 
-        The node records a node-local grant and replaces whatever `identity`
-        held for the same action (`op_grant.go:21-23`). Local-only, and gated on
-        `mod.auth.admin_manage_apps_action`; the node accepts, then answers a
-        caller off a link with `origin not allowed: network` and a caller
-        without the action with `not permitted`, each a `RemoteError`
-        (`op_grant.go:29-40`).
+        Each permit, with its constraints, becomes one node-local grant for
+        `identity`. Grants add up: a grant never replaces another, and granting
+        a permit identical to one `identity` holds sets that grant's expiry to
+        the new value (`api/apphost/client/grant.go:10-17`). The answer carries
+        no ID; `list_grants()` names each grant. Constraints on an action that
+        evaluates none are written as sent and change nothing it allows, as
+        `Permit` states.
 
-        `identity` travels under the wire key `identity`, as the hex of the
-        identity this client resolves. The node refuses the zero identity,
-        `anyone`, with `missing identity` (`op_grant.go:47-49`). `action` is the
-        action's object type, e.g.
-        `mod.services.service_discovery_action`. `duration` omitted grants until
-        the grant is revoked (`op_grant.go:57-61`).
+        Local-only, and gated on `mod.auth.admin_manage_apps_action`; the node
+        accepts, then answers a caller off a link with
+        `origin not allowed: network` and a caller without the action with
+        `not permitted`, each a `RemoteError` (`op_grant.go:28-39`). An invalid
+        permit is a `RemoteError` reading `invalid permit: <action>: <detail>`
+        (`api/auth/errors.go:16-19`).
 
-        `constraints` given sends `constrained=true` and the bundle on the body,
-        because a bundle is not a query argument (`op_grant.go:65-74`). An action
-        that evaluates no constraints refuses the constrained permit when it is
-        checked.
+        `identity` is resolved by this client, so a directory name costs one
+        `dir.resolve` first, and travels in the request's `Identity`. The node
+        refuses the zero identity, `anyone`, with `missing identity`
+        (`op_grant.go:51-52`). Each entry of `permits` is a `Permit` or an
+        action name, which becomes a `Permit` with no constraints. An empty
+        list raises `BadArgument` before a query leaves, because a request
+        with no permits writes nothing. `duration` omitted or zero writes
+        grants that last until revoked (`api/apphost/grant_request.go:13-14`).
         """
-        resolved = await self._c.resolve_identity(identity, **kw)
-        params: dict[str, Any] = {"identity": resolved.text(), "action": action}
+        permit_list = _permit_list(permits, "permits", OP_GRANT)
+        if not permit_list:
+            raise BadArgument(f"{OP_GRANT}: permits is empty")
         span = _duration(duration)
-        if span is not None:
-            params["duration"] = span
-        if constraints is None:
-            qs = querystring.build(OP_GRANT, _encode(_GRANT, params))
-            self._expect(await self._c.call_one(qs, **kw), Ack, OP_GRANT)
-            return
-        if not isinstance(constraints, Bundle):
-            raise BadArgumentType(
-                f"{OP_GRANT}: constraints: expected a Bundle, got "
-                f"{type(constraints).__name__}"
-            )
-        params["constrained"] = True
-        qs = querystring.build(OP_GRANT, _encode(_GRANT, params))
-        answers = await self._c.call_with(qs, constraints, expect=1, **kw)
+        req = GrantRequest(
+            identity=await self._c.resolve_identity(identity, **kw),
+            duration=Duration(0) if span is None else span,
+            permits=permit_list,
+        )
+        answers = await self._c.call_with(OP_GRANT, req, expect=1, **kw)
+        if not answers:
+            raise ProtocolError(f"{OP_GRANT}: the stream ended without answering the request")
+        self._expect(answers[0], Ack, OP_GRANT)
+
+    async def request_grant(
+        self,
+        permits: Iterable[Permit | str],
+        *,
+        duration: Duration | int | _dt.timedelta | None = None,
+        **kw: Any,
+    ) -> None:
+        """Ask the node to grant this session's identity the permits named.
+        WA: one `mod.apphost.request_grant_request` in, one `ack` out, then
+        EOF. **Mutates** when the policy approves.
+
+        The grantee is the identity of this session's access token; the request
+        names no identity (`api/apphost/request_grant_request.go:10-12`). The
+        node answers a network origin with `origin not allowed: network` and a
+        session with no authenticated identity with `not permitted`
+        (`op_request_grant.go:35-44`). It accepts the query before its grant
+        request policy decides and asks the policy on every call, even for
+        permits the session already holds; approved grants add to those the
+        session holds (`api/apphost/client/request_grant.go:10-18`). A refusal
+        is a `RemoteError` reading `ERR_GRANT_DECLINED`, and an invalid permit
+        one reading `invalid permit: <action>: <detail>`
+        (`request_grant.go:20-21`). `apphost.set_grant_request_policy` sets
+        the policy and has no client here.
+
+        Each entry of `permits` is a `Permit` or an action name, as for
+        `grant()`, and an empty list raises `BadArgument` before a query
+        leaves. `duration` omitted or zero asks for grants that last until
+        revoked (`api/apphost/request_grant_request.go:14-15`).
+
+        A delegated policy may wait on a person, and the node bounds one
+        question at ten minutes (`api/policy/delegate.go:14-16`), so `timeout`
+        defaults to 610 s here rather than the client's 60 s: the ten seconds
+        past the node's bound let a delegate that never answers arrive as the
+        node's `ERR_GRANT_DECLINED` rather than as `QueryTimeout`. The call
+        holds one of the node's 32 apphost workers while it waits.
+
+        A discovery permit scoped to one service, the shape smithd asks for::
+
+            await client.apphost.request_grant([
+                Permit(
+                    action=ServiceDiscoveryAction.ASTRAL_TYPE,
+                    constraints=Bundle([
+                        DiscoveryScope(rules=[DiscoveryRule(services=["inference"])])
+                    ]),
+                )
+            ])
+        """
+        permit_list = _permit_list(permits, "permits", OP_REQUEST_GRANT)
+        if not permit_list:
+            raise BadArgument(f"{OP_REQUEST_GRANT}: permits is empty")
+        span = _duration(duration)
+        req = RequestGrantRequest(
+            permits=permit_list, duration=Duration(0) if span is None else span
+        )
+        kw.setdefault("timeout", 610.0)
+        answers = await self._c.call_with(OP_REQUEST_GRANT, req, expect=1, **kw)
         if not answers:
             raise ProtocolError(
-                f"{OP_GRANT}: the stream ended without answering the constraints"
+                f"{OP_REQUEST_GRANT}: the stream ended without answering the request"
             )
-        self._expect(answers[0], Ack, OP_GRANT)
+        self._expect(answers[0], Ack, OP_REQUEST_GRANT)
+
+    async def list_grants(self, identity: Identity | str, **kw: Any) -> list[Grant]:
+        """The unexpired node-local grants `identity` holds. ST: zero or more
+        `mod.apphost.grant`, then `eos`.
+
+        Each grant's `id` names it to `revoke()`
+        (`api/apphost/client/list_grants.go:10-13`), and the node leaves an
+        expired grant out (`op_list_grants.go:19-20`). Local-only and gated on
+        `mod.auth.admin_manage_apps_action`, as `grant()` is; a refusal is a
+        `RemoteError`.
+
+        `identity` travels under the wire key `identity`, as the hex of the
+        identity this client resolves; a directory name costs one `dir.resolve`
+        first.
+        """
+        resolved = await self._c.resolve_identity(identity, **kw)
+        qs = querystring.build(
+            OP_LIST_GRANTS, _encode(_IDENTITY, {"identity": resolved.text()})
+        )
+        return [
+            self._expect(obj, Grant, OP_LIST_GRANTS)
+            for obj in await self._c.call(qs, **kw)
+        ]
+
+    async def revoke(
+        self,
+        identity: Identity | str,
+        *,
+        id: int | None = None,  # noqa: A002
+        action: str | None = None,
+        **kw: Any,
+    ) -> None:
+        """Delete node-local grants of `identity`. RR, one `ack`. **Mutates.**
+
+        Exactly one of `id` or `action`. `id` deletes the one grant
+        `list_grants()` reported under it, which must be a grant `identity`
+        holds; `action` deletes every grant `identity` holds for that action
+        (`api/apphost/client/revoke.go:9-12,23-25`). Both or neither raises
+        `BadArgument` before a query leaves. `id` is an `int` from 1 to
+        2**64 - 1: grant IDs start at 1 and the node reads a zero `id` as
+        absent (`op_revoke.go:56`), so `id=0` raises `BadArgument` too.
+        `action` is an action name of 1 to 255 UTF-8 bytes.
+
+        A grant the node does not find is a `RemoteError` reading
+        `ERR_GRANT_NOT_FOUND`. Local-only and gated on
+        `mod.auth.admin_manage_apps_action`, as `grant()` is. `identity`
+        travels as the hex of the identity this client resolves.
+        """
+        if (id is None) == (action is None):
+            raise BadArgument(f"{OP_REVOKE}: give exactly one of id and action")
+        params: dict[str, Any] = {}
+        if id is not None:
+            if isinstance(id, bool) or not isinstance(id, int):
+                raise BadArgumentType(
+                    f"{OP_REVOKE}: id expects an int, got {type(id).__name__}"
+                )
+            if not 0 < id < 1 << 64:
+                raise BadArgument(f"{OP_REVOKE}: id {id} is not a grant ID, 1 to 2**64 - 1")
+            params["id"] = id
+        else:
+            if not isinstance(action, str):
+                raise BadArgumentType(
+                    f"{OP_REVOKE}: action expects a str, got {type(action).__name__}"
+                )
+            size = len(action.encode("utf-8"))
+            if not size or size > _STRING8_MAX:
+                raise BadArgument(
+                    f"{OP_REVOKE}: action is {size} bytes; it is a string8 of 1 "
+                    f"to {_STRING8_MAX}"
+                )
+            params["action"] = action
+        params["identity"] = (await self._c.resolve_identity(identity, **kw)).text()
+        qs = querystring.build(OP_REVOKE, _encode(_REVOKE, params))
+        self._expect(await self._c.call_one(qs, **kw), Ack, OP_REVOKE)
 
     async def register(
         self,
-        grant_permits: Iterable[str] | None = None,
-        contract_permits: Iterable[str] | None = None,
         *,
         name: str | None = None,
+        grant_permits: Iterable[Permit | str] | None = None,
+        contract_permits: Iterable[Permit | str] | None = None,
         **kw: Any,
     ) -> AccessToken:
-        """Provision a fresh guest identity and a token for it. RR, one object,
-        then EOF. **Mutates.**
+        """Provision a fresh guest identity and a token for it. WA: one
+        `mod.apphost.register_request` in, one `apphost.access_token` out, then
+        EOF. **Mutates.**
 
         The node generates a key pair, signs an app contract for it and answers
         with the token, so this is the bootstrap an app with no credentials
-        starts from. The token and every permit written expire after ten years
-        (`op_register.go:17,128,178`).
+        starts from (`api/apphost/client/register.go:22-26`). The token and
+        every permit written expire after ten years
+        (`op_register.go:17,116,166`).
 
-        `grant_permits` names the actions to hold as node-local grants and
-        `contract_permits` the actions to hold in a signed node-to-app contract;
-        `name` is shown to a delegated policy and the node does not verify it.
-        Asking is not receiving: the node's register policy decides what is
-        written, on which rail, and the answer carries the token alone. Each
-        list travels as one comma-joined argument, and an omitted or empty list
-        sends none. An action name that carries a comma, is blank, has
-        surrounding whitespace, or exceeds 255 UTF-8 bytes raises `BadArgument`
-        before a query leaves, as does a `name` over 255 bytes.
+        `grant_permits` are the permits to hold as node-local grants and
+        `contract_permits` those to hold in a signed node-to-app contract; each
+        entry is a `Permit`, constraints and all, or an action name. `name` is
+        shown to a delegated policy and the node does not verify it. Asking is
+        not receiving: the node's register policy decides what is written, on
+        which rail, and the answer carries the token alone
+        (`register.go:28-32`). Grants add up. All three are keyword-only, and
+        the request travels as one object even when every field is empty
+        (`register.go:49-50`). An action name that is empty or over 255 UTF-8
+        bytes, or a `name` over 255 bytes, raises `BadArgument` before a query
+        leaves.
 
         The node accepts the query before its register policy decides, so a
         refusal is an `error_message` reading `ERR_REGISTRATION_DECLINED` and
-        arrives as `RemoteError` (`op_register.go:53-55,75-86`).
-
-        astral-go's `Register(ctx, permits...)` sends `grant_permits` alone
-        (`api/apphost/client/register.go:38-82`).
+        arrives as `RemoteError` (`register.go:37-39`).
         """
-        params = {
-            "grant_permits": _permits(grant_permits, "grant_permits"),
-            "contract_permits": _permits(contract_permits, "contract_permits"),
-            "name": _app_name(name),
-        }
-        qs = querystring.build(OP_REGISTER, _encode(_REGISTER, params))
-        return self._expect(await self._c.call_one(qs, **kw), AccessToken, OP_REGISTER)
+        req = RegisterRequest(
+            name=_app_name(name) or "",
+            grant_permits=_permit_list(grant_permits, "grant_permits", OP_REGISTER),
+            contract_permits=_permit_list(
+                contract_permits, "contract_permits", OP_REGISTER
+            ),
+        )
+        answers = await self._c.call_with(OP_REGISTER, req, expect=1, **kw)
+        if not answers:
+            raise ProtocolError(
+                f"{OP_REGISTER}: the stream ended without answering the request"
+            )
+        return self._expect(answers[0], AccessToken, OP_REGISTER)
 
     async def set_app_register_policy(
         self,
@@ -725,16 +978,16 @@ class Apphost(ModuleClient):
         `identity` through its directory. Both omitted restore the bundled
         accept-all policy, and one without the other is refused here, as the
         node refuses it. `timeout` bounds one question in Go's duration syntax;
-        omitted, the node waits ten minutes (`op_set_app_register_policy.go:14-24`).
+        omitted, the node waits ten minutes (`op_set_app_register_policy.go:15-25`).
 
         Accepts, then answers `not permitted` when the caller lacks
         `mod.auth.admin_manage_apps_action`, and refuses no origin
-        (`op_set_app_register_policy.go:53-58`). A delegate the node cannot
+        (`op_set_app_register_policy.go:46-51`). A delegate the node cannot
         resolve, the node itself, or a `timeout` above ten minutes is an
         `error_message` too; every one arrives as `RemoteError`
-        (`op_set_app_register_policy.go:68-71,83-93`).
+        (`op_set_app_register_policy.go:126-129,136-147`).
 
-        astral-go `a2b41561` has no client for this op.
+        astral-go `08ead7ce` has no client for this op.
         """
         qs = setter_query(OP_SET_APP_REGISTER_POLICY, identity, operation, timeout)
         self._expect(
@@ -931,14 +1184,18 @@ APPHOST_TYPES: Final[Sequence[type]] = (
     AuthTokenMsg,
     BindMsg,
     ErrorMsg,
+    Grant,
+    GrantRequest,
     HandleQueryMsg,
     HostInfoMsg,
     IncomingQueryMsg,
     PingMsg,
     QueryAcceptedMsg,
     QueryRejectedMsg,
+    RegisterRequest,
     RegisterServiceMsg,
     RejectIncomingMsg,
+    RequestGrantRequest,
     RouteQueryMsg,
 )
 """Every wire type this module declares or re-exports, for a registry sweep.

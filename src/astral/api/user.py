@@ -92,8 +92,7 @@ form. Verified again on astrald `26bb51d5` for `mod.user.see_swarm_action` and
 `mod.user.adopt_action` and `mod.user.expel_action` with
 `mod.user.admin_swarm_action`, and `mod.user.info_action` with
 `mod.user.see_swarm_action` (`api/user/admin_swarm_action.go` and
-`api/user/see_swarm_action.go` at astral-go `a2b41561`, the revision astrald
-`5f17900d` pins). On `26bb51d5`, `objects.new` answers `nil` for the three old
+`api/user/see_swarm_action.go` at astral-go `08ead7ce`). On `26bb51d5`, `objects.new` answers `nil` for the three old
 names and `objects.get_blueprint` answers `blueprint not found`, both verified.
 A permit naming an old type matches no action the node authorizes, so it grants
 nothing, and this module no longer declares them.
@@ -109,7 +108,7 @@ and the op's target (the node being adopted or expelled) are different nodes.
 **An empty target is the zero identity, and the node refuses it.**
 `user.adopt`, `user.expel` and `user.sync_with` tag `Identity string` with
 `query:"required"`, and the tag tests that the key is present, not that it
-holds a value (`lib/routing/op.go` `checkRequired` at astral-go `a2b41561`). An
+holds a value (`lib/routing/op.go` `checkRequired` at astral-go `08ead7ce`). An
 `identity=` carrying no value therefore reaches `Dir.ResolveIdentity("")`,
 which maps the empty string to the zero identity
 (`astrald/mod/dir/src/module.go:58`) rather than failing. All three ops test
@@ -120,17 +119,17 @@ and a name that does not resolve with `unknown identity`
 Every one of those arguments is mandatory here and an empty name is refused
 client-side.
 
-**`user.list_siblings`'s `zone` is inert on astrald `5f17900d`.** It builds a
+**`user.list_siblings`'s `zone` is inert on astrald `a499928a`.** It builds a
 context the op then never uses -- `mod.getSiblings()` takes none
 (`astrald/mod/user/src/op_list_siblings.go:27`). It is still sent when the caller
 names one, because a declared argument is the op's own statement of its
 interface, and the value is forwarded to the routing zone too, where it is not
 inert. Defect filed against astrald.
 
-**`user.sync_with` declares no `start` on astrald `5f17900d`.** Its argument
+**`user.sync_with` declares no `start` on astrald `a499928a`.** Its argument
 struct is an identity and an output format and nothing else, and the argument
 binder skips a key the op does not declare (`lib/query/editor.go`
-`Editor.SetMany` at astral-go `a2b41561`), so a `start` sent there is accepted and
+`Editor.SetMany` at astral-go `08ead7ce`), so a `start` sent there is accepted and
 ignored. `sync_with` therefore accepts no `start` and sends only `identity`.
 
 **Every refusal is an `error_message` after the op accepts.** No op here
@@ -199,7 +198,7 @@ substitutes the module's user identity for an absent `user` and answers
 `user id missing: pass -user <identity>; the node has no active contract to
 default from` when that identity is zero; a named `user` that resolves to the
 zero identity answers `user id missing`
-(`mod/user/src/op_new_node_contract.go:48-53` at `5f17900d`). Verified on an
+(`mod/user/src/op_new_node_contract.go:48-53` at `a499928a`). Verified on an
 unclaimed node built from `5f17900d`: both texts, the second for
 `user=anyone`, and the same query with a real `user` named answers the
 contract.
@@ -296,7 +295,7 @@ is inferred from the sources above.
 
 Reached as `client.user`, a `functools.cached_property` on `Client` built on
 first use (design section 5.1). Every source citation resolves at astrald
-`5f17900d` and astral-go `a2b41561`, the revisions `tests/reference.py` pins;
+`a499928a` and astral-go `08ead7ce`, the revisions `tests/reference.py` pins;
 `tests/test_api_user.py` reads every `path:line` back there and fails when it
 stops landing.
 """
@@ -782,7 +781,7 @@ class AdminSwarmAction(Action):
     `remove_asset` and `sync_with`. `subject` names the node an op adopts,
     expels or syncs with, and `object_id` the asset it adds or removes; an op
     leaves unset the one it does not name, and the node evaluates neither yet
-    (`api/user/admin_swarm_action.go` at astral-go `a2b41561`).
+    (`api/user/admin_swarm_action.go` at astral-go `08ead7ce`).
 
     Granted with `Delegation: 1` on a management node's contract, so the node
     can contract it out one hop to an app it hosts. The zero payload is eleven
@@ -958,7 +957,7 @@ class User(ModuleClient):
 
         `zone` is sent as the op's argument **and** as the routing zone, the
         way `Objects` sends its one scope to both levers. The op's own
-        argument is inert on astrald `5f17900d` -- the context built from it is
+        argument is inert on astrald `a499928a` -- the context built from it is
         never used (`mod/user/src/op_list_siblings.go:27`) -- and the routing
         zone is not.
 
@@ -1538,7 +1537,7 @@ def new_node_contract_local(
     The same object `user.new_node_contract` answers with, constructed here:
     one `mod.user.swarm_membership_action` permit, plus admin-swarm and
     see-swarm permits with `Delegation: 1` for a management node, in that
-    order (`api/user/contract.go` at astral-go `a2b41561`, `NewNodeContract`).
+    order (`api/user/contract.go` at astral-go `08ead7ce`, `NewNodeContract`).
 
     The op passes `managementNode=true` unconditionally, so its answer always
     carries three permits; this helper defaults to `False`, which is the shape

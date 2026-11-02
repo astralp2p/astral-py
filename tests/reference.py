@@ -43,11 +43,37 @@ ASTRALD: Final = "astrald"
 ASTRAL_GO: Final = "astral-go"
 
 PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
-    # The revisions the modules were read against: astrald `5f17900d` and the
-    # astral-go its `go.mod` requires (v0.0.0-20261030015815-a2b41561385f).
-    # The SDK supports the current node and no older one, so every `path:line`
+    # The revisions the modules were read against: astrald `a499928a`, the
+    # head of astrald pull request #349, which reads the apphost grant objects,
+    # and astral-go `08ead7ce`, the merge of astral-go pull request #167, which
+    # defines them and which astrald `a499928a` requires. Every `path:line`
     # citation in `astral/api/*.py` resolves at one of these two and none names
     # another revision. Bumping one means re-reading the citations that name it.
+    #
+    # Bumped from astrald `5f17900d` / astral-go `dbc27574`, the head of #167.
+    # `08ead7ce` has the tree of `dbc27574`. Re-read at the bump, every cited
+    # astrald file that differs between the two: `mod/apphost/src`
+    # (`op_grant.go`, `op_list_grants.go`, `op_register.go`,
+    # `op_request_grant.go`, `op_revoke.go`, `op_set_app_register_policy.go`,
+    # `register_grant_request.go` and `register_policy.go`). Claims rewritten:
+    # register, grant and request_grant read their request object and refuse
+    # the removed query arguments; list_grants answers `mod.apphost.grant`;
+    # revoke takes `id` or `action`; the grant request policy has a mode; the
+    # register-policy setter refuses `mode`.
+    #
+    # astral-go bumped from `a2b41561`, the revision astrald `5f17900d`
+    # requires. Re-read at the bump, every cited file that differs between the
+    # two: `api/apphost/client/register.go` (rewritten), `api/auth/action.go`,
+    # `api/auth/errors.go`, `api/apphost/grant_request_policy.go`,
+    # `api/dir/client/apply_filters.go`, `api/services/client/services.go`,
+    # `watch.go`, `api/services/service_discovery_action.go`,
+    # `api/user/client/accept_contract.go`, `accept_membership.go`,
+    # `bootstrap.go` and `lib/apphost/host.go`. Claims rewritten: the
+    # `register` and `grant` clients, the `mod.auth.action` registration line,
+    # `ErrStreamEnded`'s line and the grant request policy's type name. Surface
+    # added: `mod.apphost.grant`, `register_request`, `grant_request`,
+    # `request_grant_request` and the `request_grant`, `list_grants` and
+    # `revoke` clients.
     #
     # Bumped from astrald `48ae88b2` / astral-go `8972f283`. Re-read at the bump,
     # every cited file that differs between the old pin and the new one: in
@@ -79,8 +105,8 @@ PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
     # `mod.user.bootstrap_result`'s `Token`, `user.derive_identity`,
     # `user.join`, `user.set_contract_accept_policy` and their types and error
     # texts; the apphost census counts seventeen files.
-    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "5f17900d"),
-    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "a2b41561"),
+    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "a499928a"),
+    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "08ead7ce"),
 }
 
 

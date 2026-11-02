@@ -11,9 +11,11 @@ amendments that supersede the sections they name. **Section 11.4 is deferred**:
 the wire core's `Any`/nil behaviour stays as it is.
 
 Authorities, in precedence order: the live node, astral-go
-(`../astral-go/main` @ `a2b41561`, the revision astrald `5f17900d` requires), astrald, astral-docs.
-The SDK supports the node at those revisions and no older one, so a claim about
-an earlier astrald or astral-go has no place in this tree.
+(`../astral-go/main` @ `08ead7ce`, the merge of the astral-go grant-objects pull
+request #167), astrald (`a499928a`, the head of the astrald object-input pull
+request #349), astral-docs. The SDK supports the node at those revisions and no
+older one, so a claim about an earlier astrald or astral-go has no place in
+this tree. astrald `a499928a` requires astral-go `08ead7ce` (`go.mod:7`).
 
 **Every type is read at the pins.** `mod.objects.repository_info`'s `Kind`,
 `Children` and `Concurrent` were the one exception: they arrived in astrald

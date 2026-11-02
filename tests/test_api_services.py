@@ -1045,7 +1045,7 @@ class CitationTest(unittest.TestCase):
         ("api/services/reach.go", 11, 'ReachLocal Reach = "local"'),
         ("api/services/reach.go", 14, 'ReachSwarm Reach = "swarm"'),
         ("api/services/client/advertise.go", 81, "if err == nil && u != nil {"),
-        ("api/services/client/services.go", 16, 'ErrStreamEnded = errors.New("discovery stream ended")'),
+        ("api/services/client/services.go", 17, 'ErrStreamEnded = errors.New("discovery stream ended")'),
         ("lib/query/field_editor.go", 143, "case reflect.Bool:"),
     )
 

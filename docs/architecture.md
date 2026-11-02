@@ -15,8 +15,8 @@ document states the resolution, and the resolution is binding.
 | Rank | Authority | Location |
 |---|---|---|
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
-| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `a2b41561` (the commit the node pins) |
-| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `5f17900d` — authoritative for session semantics the client never exercises |
+| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `08ead7ce` (the merge of astral-go pull request #167, which defines the apphost grant objects) |
+| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `a499928a` (the head of astrald pull request #349, which reads the apphost grant objects) — authoritative for session semantics the client never exercises |
 | 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `415c28c`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
@@ -1412,7 +1412,8 @@ crypto.verify_*_signature user.* (reject code 2 on an unclaimed node — itself 
 
 Nothing that mutates state ever runs: no `dir.set_alias`, no `tree.set/delete`, no
 `objects.create/store/delete/purge/push/new_mem/register_*`, no `auth.set_authorizer/remove_authorizer`, no
-`services.advertise` binding, no `apphost.register/set_app_register_policy/bind/register_handler/cancel`,
+`services.advertise` binding, no
+`apphost.register/set_app_register_policy/grant/request_grant/revoke/bind/register_handler/cancel`,
 no `user.*` writes, no `nodes.*` writes, no `nat.punch`.
 
 Tier C runs with `max_concurrency=4`, every test inside `async with`, and a module-level
@@ -1717,7 +1718,7 @@ and the node's key is not signable through the op surface.
 Section 2.5 lists `mod.nodes.node_info` among the four types with a hand-written codec, and
 section 0.1 describes its numeric endpoint tags. Both describe astral-go before `4b18f24`. From
 that commit on, `NodeInfo.WriteTo` and `ReadFrom` are `astral.Objectify`
-(`api/nodes/node_info.go:24-29` at `a2b41561`), so the binary form is the reflective field walk:
+(`api/nodes/node_info.go:24-29` at `08ead7ce`), so the binary form is the reflective field walk:
 `string8` alias, `Ptr(identity)`, then a `uint32` count of type-tagged endpoints. astrald pins
 that encoding from `032271d4`.
 
@@ -1734,7 +1735,7 @@ Risk R-15 no longer applies.
 
 Section 3.4 says anonymous guests may route queries when the node allows it, section 5.2 calls
 `bip137sig.derive_key` anonymous-callable, and section 7.3 runs the live tier anonymously.
-astrald `5f17900d` confines every session without a token, IPC and WebSocket alike, to the ops
+astrald `a499928a` confines every session without a token, IPC and WebSocket alike, to the ops
 named in `apphost.yaml`'s `anonymous_allowlist` for the node's claim state and denies every
 other query with `error_msg{denied}` before routing (`mod/apphost/src/setup_guard.go`
 `admitsAnonymous`, called at `mod/apphost/src/guest.go:150`). The default lists are `user.info`,
