@@ -167,16 +167,18 @@ class CitationTest(unittest.TestCase):
     }
     ASTRALD_LINES = {
         ("mod/apphost/src/register_policy.go", 12): '"/mod/apphost/policy"',
-        ("mod/apphost/src/register_policy.go", 21): "tree.Value[*policy.Delegate]",
-        ("mod/apphost/src/register_policy.go", 45): "policy.Ask(",
-        ("mod/apphost/src/register_policy.go", 51): "obj.(*apphost.AppRegisterDecision)",
-        ("mod/apphost/src/register_policy.go", 53): "NewErrUnexpectedObject",
+        ("mod/apphost/src/register_policy.go", 14): "An unset AppRegister",
+        ("mod/apphost/src/register_policy.go", 16): "apphostmod.RefuseAllGrants",
+        ("mod/apphost/src/register_policy.go", 22): "AppRegister  tree.Value[*policy.Delegate]",
+        ("mod/apphost/src/register_policy.go", 23): "GrantRequest tree.Value[*policy.Delegate]",
+        ("mod/apphost/src/register_policy.go", 47): "policy.Ask(",
+        ("mod/apphost/src/register_policy.go", 53): "obj.(*apphost.AppRegisterDecision)",
+        ("mod/apphost/src/register_policy.go", 55): "NewErrUnexpectedObject",
         ("mod/user/src/swarm_policy.go", 12): '"/mod/user/policy"',
-        ("mod/user/src/swarm_policy.go", 17): "SwarmJoin   tree.Value[*policy.Delegate]",
-        ("mod/user/src/swarm_policy.go", 18): "SwarmInvite tree.Value[*policy.Delegate]",
-        ("mod/apphost/src/op_set_app_register_policy.go", 13):
-            "type opSetAppRegisterPolicyArgs struct",
-        ("mod/apphost/src/op_set_app_register_policy.go", 23): "}",
+        ("mod/user/src/swarm_policy.go", 18): "SwarmJoin      tree.Value[*policy.Delegate]",
+        ("mod/user/src/swarm_policy.go", 20): "ContractAccept tree.Value[*policy.Delegate]",
+        ("mod/apphost/src/op_set_app_register_policy.go", 14): "type opSetPolicyArgs struct",
+        ("mod/apphost/src/op_set_app_register_policy.go", 24): "}",
         ("mod/user/src/op_set_swarm_policy.go", 14): "type opSetSwarmPolicyArgs struct",
         ("mod/user/src/op_set_swarm_policy.go", 24): "}",
     }

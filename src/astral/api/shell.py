@@ -7,8 +7,13 @@ rather than against a document: the inventory in `survey-go-api.md` is a dump of
 this op, and astral-go's own `module.go` constant lists disagree with it (the
 survey's finding 10).
 
-It answers **anonymously**, which is what makes it usable as a self-check: no
-token, no claimed node, no state touched.
+It touches no state and needs no claimed node, which is what makes it usable
+as a self-check. The same handler answers at two paths: `shell.spec` and the
+root `.spec` (`astrald/mod/shell/src/loader.go:36-41` at `5f17900d`). Only
+`.spec` is on astrald's `anonymous_allowlist`, so a session without a token is
+denied `shell.spec` and this module's `spec()` needs a token; verified on an
+isolated astrald built from `5f17900d`, where a token-less session was denied
+`shell.spec` and answered `.spec`.
 
 | Op | Mode | Answer | Effect |
 |---|---|---|---|
@@ -161,7 +166,8 @@ class Shell(ModuleClient):
     async def spec(self, **kw: Any) -> list[OpSpec]:
         """Every op the node has registered. ST, ends at `eos`.
 
-        Anonymous and read-only. The answer is the node's whole routing table --
+        Read-only, and denied to a session without a token, which reaches the
+        same handler only as `.spec`. The answer is the node's whole routing table --
         118 specs on `furry-bolt` -- so it is one query and not one per module,
         and there is no per-module `.spec` op: `<module>.spec` answers
         `route_not_found` for every in-scope module, verified live.

@@ -15,10 +15,13 @@ on:
   ending at `eos`, and the refusal of an answer of the wrong type.
 - **Tier C** runs it against a real node. This is the op the SDK's own inventory
   came from, so the live assertion is the inventory's: the node answers more
-  than a hundred specs anonymously, and every op this SDK sends is one of them.
+  than a hundred specs, and every op this SDK sends is one of them.
 
-Read-only and anonymous throughout: `shell.spec` touches no node state and needs
-no token, which is what makes it usable as a self-check.
+Read-only throughout: `shell.spec` touches no node state, which is what makes
+it usable as a self-check. A session without a token reaches the same handler
+only as `.spec` (`mod/shell/src/loader.go`, astrald `5f17900d`); `shell.spec`
+is not on `anonymous_allowlist`, so the live tier asks it under
+`ASTRAL_TEST_NODE_TOKEN`.
 """
 
 from __future__ import annotations
@@ -214,13 +217,13 @@ class ClientAttachmentTest(unittest.TestCase):
 class LiveShellTest(live_support.LiveCase):
     """Tier C: the op the SDK's own inventory was read off.
 
-    Anonymous and read-only. Design section 7.3 lists `shell.spec` in the live
+    Read-only. Design section 7.3 lists `shell.spec` in the live
     op set for exactly this: it is the one query that can check the SDK against
     the node it is talking to.
     """
 
     @bounded(60.0)
-    async def test_the_node_answers_its_whole_registry_anonymously(self):
+    async def test_the_node_answers_its_whole_registry(self):
         async with await self.client() as client:
             specs = await client.shell.spec()
         self.assertGreater(len(specs), 100, "the survey counted 118 on this node")

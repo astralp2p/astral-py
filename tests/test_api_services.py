@@ -12,8 +12,8 @@ must agree:
 - **Tier B** pins both ops against `MockApphost`: the query string each one
   builds, the binding's ask/answer/change exchange, the discovery events and
   their initial outcome, and the watcher's offering set.
-- **Tier C** runs against a real node, read-only: the op surface, the two
-  refusals an anonymous caller meets, and every v1 type round-tripped through
+- **Tier C** runs against a real node, read-only, as the node through
+  `ASTRAL_TEST_NODE_TOKEN`: the op surface, the two refusals the node meets, and every v1 type round-tripped through
   the node's own registry.
 """
 
@@ -705,13 +705,25 @@ class AdvertiseOpTest(ServicesCase):
 
     @bounded()
     async def test_a_rejection_raises_and_leaves_nothing_open(self):
-        """The node rejects a network origin, a caller without ServeApps and
-        the node itself."""
+        """A rejected query raises `QueryRejected` and opens nothing."""
         async with MockApphost(routes={OP_ADVERTISE: Reject(1)}) as mock:
             s = await self.services(mock)
             with self.assertRaises(QueryRejected):
                 async with s.advertise(["chat"], offer(CHAT)):
                     self.fail("the body ran on a rejected query")
+            self.assertEqual(s.client.live_streams, 0)
+
+    @bounded()
+    async def test_an_accepted_refusal_raises_and_leaves_nothing_open(self):
+        """The node accepts, then answers a network origin, a caller without
+        ServeApps and the node itself with an `error_message`."""
+        route = AdvertisingNode(frame_error("not permitted"))
+        async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+            s = await self.services(mock)
+            with self.assertRaises(RemoteError) as caught:
+                async with s.advertise(["chat"], offer(CHAT)):
+                    self.fail("the body ran without an ack")
+            self.assertEqual(caught.exception.message, "not permitted")
             self.assertEqual(s.client.live_streams, 0)
 
     @bounded()
@@ -1007,9 +1019,9 @@ class CitationTest(unittest.TestCase):
     """
 
     ASTRALD_LINES = (
-        ("mod/services/src/op_advertise.go", 25, "astral.OriginNetwork"),
-        ("mod/services/src/op_advertise.go", 31, "auth.ServeAppsAction"),
-        ("mod/services/src/op_advertise.go", 39, "id.IsEqual(mod.node.Identity())"),
+        ("mod/services/src/op_advertise.go", 28, "astral.OriginNetwork"),
+        ("mod/services/src/op_advertise.go", 34, "auth.ServeAppsAction"),
+        ("mod/services/src/op_advertise.go", 42, "id.IsEqual(mod.node.Identity())"),
         ("mod/services/src/op_advertise.go", 49, "astral.Err(err)"),
         ("mod/services/src/op_advertise.go", 55, "astral.Err(err)"),
         ("mod/services/src/op_advertise.go", 65, "ch.Switch("),
@@ -1084,8 +1096,8 @@ class CitationTest(unittest.TestCase):
 
 
 class LiveServicesTest(live_support.LiveCase):
-    """`services` against a real node. Read-only: an anonymous client, which
-    the node treats as itself, binds nothing and discovers nothing."""
+    """`services` against a real node. Read-only: the live tier's token names
+    the node, which binds nothing and discovers nothing."""
 
     @bounded(30.0)
     async def test_the_module_s_op_surface_is_exactly_these_two(self):
@@ -1129,20 +1141,21 @@ class LiveServicesTest(live_support.LiveCase):
 
     @bounded(30.0)
     async def test_the_node_cannot_advertise(self):
-        """An anonymous caller arrives as the node, and the op rejects the
-        node's own identity before it binds anything."""
+        """A session holding the node's token arrives as the node, and the op
+        answers the node's own identity with `not permitted` before it binds
+        anything."""
         async with await self.client() as client:
-            with self.assertRaises(QueryRejected) as caught:
+            with self.assertRaises(RemoteError) as caught:
                 async with client.services.advertise(["astral-py-live-tier"], offer(None)):
                     self.fail("the node acknowledged an advertisement by itself")
-            self.assertEqual(caught.exception.code, 1)
+            self.assertEqual(caught.exception.message, "not permitted")
             self.assertEqual(client.live_streams, 0)
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
     async def test_the_node_holds_no_discovery_permit(self):
         """Discovery is granted per service and the node identity holds none,
-        so the anonymous caller is refused before any provider is asked."""
+        so a caller that is the node is refused before any provider is asked."""
         async with await self.client() as client:
             with self.assertRaises(RemoteError) as caught:
                 await client.services.discover(["astral-py-live-tier"], timeout=20.0)

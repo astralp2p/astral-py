@@ -279,10 +279,11 @@ class QueryCanceled(SessionError):
 class QueryRejected(SessionError):
     """`query_rejected_msg{Code}`: the responder declined.
 
-    Codes are surfaced numerically and no semantic mapping above 4 is claimed:
-    0 success, 1 rejected, 2 invalid query, 3 canceled, 4 internal error, and
-    5 upwards are op-specific. Rejection codes and `error_msg` codes are
-    different namespaces.
+    Codes are surfaced numerically: 0 success, 1 rejected, 2 invalid query,
+    3 canceled, 4 internal error, 6 timeout and 7 unavailable (astral-go
+    `astral/codes.go`). 5 is not generic and no meaning is claimed for it or
+    for 8 upwards. Rejection codes and `error_msg` codes are different
+    namespaces.
 
     `query` names the query string that was rejected when the raising layer knew
     it. A program that issues ten queries and is told only "rejected with code 1"

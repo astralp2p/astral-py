@@ -32,7 +32,7 @@ on the channel body (`mod/crypto/src/op_verify_hash_signature.go`,
 `op_verify_text_signature.go`), so an implementation that never streams one
 gets an accepted query, no answer, EOF -- and, if it reports that as success,
 **silently never verifies**. Every shape below was read out of astrald's
-`mod/crypto/src` at `48ae88b2`, never out of a sibling SDK.
+`mod/crypto/src` at `5f17900d`, never out of a sibling SDK.
 
 **One rule decides where each value travels**, and it is stated once here so no
 method has to argue it again:
@@ -64,11 +64,13 @@ dereferenced; astral-go recovers a panicking op into `ErrPanic`
 (`lib/routing/op.go` `invoke`) and closes the connection it abandons, which is
 the second of two independent guards.
 
-**No authentication stands between a caller and it.** An IPC guest is never
-gated -- `blocksAnonymousWeb` returns false for an empty web origin, so a local
-process needs no token at all -- and an unauthenticated *browser* guest reaches
-it too while the node is unclaimed, because `crypto.public_key` is on the
-`anonymous_web_allowlist.Unclaimed` list (`mod/apphost/src/config.go`, line 82).
+**No action gates it, and a session needs a token to reach it.** The op reads
+no node secret and asks no authorizer (`mod/crypto/src/op_public_key.go`, the
+comment above `OpPublicKey`). apphost confines a session without a token,
+IPC and WebSocket alike, to `anonymous_allowlist`
+(`mod/apphost/src/setup_guard.go` `admitsAnonymous`), and neither of its lists
+names any `crypto.*` op (`mod/apphost/src/config.go:55-69`), so such a session
+is denied before the op runs.
 
 **`crypto.sign_text` honours a public key streamed on its body.** `OpSignText`
 builds the text signer per signature inside `signAndSend`, as its sibling
@@ -76,19 +78,25 @@ builds the text signer per signature inside `signAndSend`, as its sibling
 verify op, which is parsed before the switch, so nothing here reads the streamed
 form.
 
-**A caller signs as itself, and an anonymous caller cannot sign at all.** Every
-signature passes `AuthorizeSigner`
-(`mod/crypto/src/sign_guard.go` at `48ae88b2`): the key must be the caller's
+**A caller signs as itself, and the node's own identity cannot sign at all.**
+Every signature passes `AuthorizeSigner`
+(`mod/crypto/src/sign_guard.go` at `5f17900d`): the key must be the caller's
 own identity, or one the caller holds a `mod.auth.sudo_action` for, and the
-node's own key is refused on the self branch. The core router substitutes the
-node's identity for an anonymous caller, so an anonymous IPC guest is refused
-whatever it asks for: `cannot sign with the node's key` with no `key`, and
-`cannot sign with another identity's key` naming any other key. Both sign ops
-also reject a network-origin query. An app signs under its own token. Verified
-on astrald `26bb51d5`: both refusals from an anonymous caller, and with a token
-from `apphost.register`, a `sign_hash` and a `sign_text` signature the node
-verified, and a tampered text it did not. The same authenticated caller naming
-the node's key was answered `cannot sign with another identity's key`.
+node's own key is refused on the self branch. A session holding a token that
+names the node speaks as the node (`mod/apphost/src/guest.go:154-158`), so it
+is refused whatever it asks for: `cannot sign with the node's key` with no
+`key`, and `cannot sign with another identity's key` naming any other key. A
+session without a token never reaches either op, because apphost denies it
+first (`mod/apphost/src/setup_guard.go` `admitsAnonymous`). Both sign ops accept
+the query and answer a network-origin one with `origin not allowed: network`
+(`mod/crypto/src/op_sign_hash.go`, `op_sign_text.go`). An app signs under its
+own token. Verified on astrald `26bb51d5`: with a token from
+`apphost.register`, a `sign_hash` and a `sign_text` signature the node
+verified, and a tampered text it did not; the same caller naming the node's key
+was answered `cannot sign with another identity's key`. Verified on an isolated
+astrald built from `5f17900d`: a session holding the node's token was answered
+`cannot sign with the node's key` by both ops with no `key`, and a session
+without a token was denied `crypto.sign_hash`.
 
 **A failed verification is an `error_message`, not a failure.** Both verify ops
 answer `ack` on success and `astral.Err(err)` on anything else, so an exception
@@ -122,7 +130,7 @@ Reached as `client.crypto`, the `functools.cached_property` design section 5.1
 asks for, or as `Crypto(client)`, which constructs the same object and is what
 the tests here use.
 
-Source citations are pinned to astrald `48ae88b2` and astral-go `8972f283`, the
+Source citations are pinned to astrald `5f17900d` and astral-go `a2b41561`, the
 revisions `tests/reference.py` names. The SDK supports the node at those
 revisions and no older one, so every citation here resolves at a pin.
 `tests/test_api_crypto.py` reads those directories rather than trusting this
@@ -374,7 +382,7 @@ def _split_key_text(text: str, type_name: str) -> tuple[str, str]:
     A missing colon is `invalid format` there and a `ParseError` here. **An empty
     prefix is not refused**, because astral-go does not refuse it -- its
     `UnmarshalText` checks the part count and nothing else (`api/crypto/
-    public_key.go` at `8972f283`) -- and because the zero value of all three types
+    public_key.go` at `a2b41561`) -- and because the zero value of all three types
     is exactly the one this used to reject: `PublicKey().text()` is `":"`, so a
     parser that refused it refused its own encoder's output and the text channel
     was the one framing of four that could not carry a zero key.
@@ -674,9 +682,8 @@ class Crypto(ModuleClient):
         nor leaves a key behind on it. That is what makes a read-only live test
         of it legitimate, and there is one.
 
-        Callable with no credential from an IPC guest, which is not gated at
-        all; it is **not** on the anonymous-web allowlist, so a browser guest
-        needs a token for it.
+        No action gates it, and it is **not** on astrald's
+        `anonymous_allowlist`, so a session needs a token for it.
 
         The key crosses the IPC socket in the clear, which is what
         `generate_key_local()` avoids at the cost of the optional extra.
@@ -729,12 +736,13 @@ class Crypto(ModuleClient):
         **Privileged.** The node signs with the private key it holds for `key`,
         and only when `key` is the caller's own identity or one the caller may
         sudo to. `key` defaults to the query's caller. For
-        an anonymous IPC guest that is **the node's own identity** -- astrald's
-        core router substitutes it for a nil caller -- and the node's key is
-        never signable through this op, so an anonymous call answers
-        `cannot sign with the node's key` without `key` and
-        `cannot sign with another identity's key` with one. Observed on astrald
-        `26bb51d5`.
+        a session holding a token that names the node, that is **the node's own
+        identity**, and the node's key is never signable through this op, so
+        such a call answers `cannot sign with the node's key` without `key`
+        and `cannot sign with another identity's key` with one. Observed on
+        astrald `26bb51d5` for an anonymous caller, which the core router
+        names the node, and on `5f17900d` for the node's token without `key`.
+        A session without a token is denied before the op runs.
 
         The digest goes in the query string because that is the op's own
         request/response path: with `hash` present `OpSignHash` answers one
@@ -795,8 +803,8 @@ class Crypto(ModuleClient):
         """Sign one text with a node-held key. WA, text on the body.
 
         **Privileged**, and with the same caller default and the same refusals
-        `sign_hash` has: no `key` means the caller's own key, and an anonymous
-        guest is answered `cannot sign with the node's key`.
+        `sign_hash` has: no `key` means the caller's own key, and a session
+        holding the node's token is answered `cannot sign with the node's key`.
 
         The text goes on the body and not in the query string, although the op
         accepts either. Two reasons, and both are about the text rather than
@@ -859,9 +867,9 @@ class Crypto(ModuleClient):
         shape of the bug that made two earlier SDKs report success without ever
         verifying anything.
 
-        Read-only. `key` defaults to the caller, which for an anonymous IPC
-        guest is the node's own identity, so an omitted key asks "did this node
-        sign this?".
+        Read-only. `key` defaults to the caller, which for a session holding
+        the node's token is the node's own identity, so an omitted key asks
+        "did this node sign this?".
 
         Returns a `Verdict`: false with `invalid signature` is a forged or
         mismatched signature, false with `unsupported` is a node whose engines

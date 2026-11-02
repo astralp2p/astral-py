@@ -864,12 +864,18 @@ class AstraldParityTest(unittest.TestCase):
         self.assertIn("Path string", declaration)
         self.assertNotIn('Path string `query:"required"`', declaration)
 
-    def test_the_four_ops_are_anonymous_callable_on_an_unclaimed_node(self):
+    def test_no_action_gates_the_four_and_no_anonymous_allowlist_names_them(self):
+        """The module docstring's access claim: a token reaches the four, and
+        a session without one is denied by apphost before any op runs."""
         source = self.source(reference.ASTRALD, "mod/apphost/src/config.go")
-        unclaimed = source.split("Unclaimed:")[1].split("Claimed:")[0]
+        allowlist = source.split("AnonymousAllowlist: AnonymousAllowlist{")[1]
         for op in (OP_NEW_ENTROPY, OP_MNEMONIC, OP_SEED, OP_DERIVE_KEY):
+            name = op[len("bip137sig.") :]
             with self.subTest(op=op):
-                self.assertIn(f'"{op}"', unclaimed)
+                self.assertNotIn(f'"{op}"', allowlist)
+                body = self.source(reference.ASTRALD, f"{self.ASTRALD}/op_{name}.go")
+                self.assertIn("no action gates this op", body)
+                self.assertNotIn("Authorize", body)
 
     def test_astral_go_derives_a_seed_without_normalising_it(self):
         """astral-go defect G-BIP39-NFKD, from the source that causes it. When

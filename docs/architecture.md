@@ -15,8 +15,8 @@ document states the resolution, and the resolution is binding.
 | Rank | Authority | Location |
 |---|---|---|
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
-| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `8972f283` (the commit the node pins) |
-| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `48ae88b2` — authoritative for session semantics the client never exercises |
+| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `a2b41561` (the commit the node pins) |
+| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `5f17900d` — authoritative for session semantics the client never exercises |
 | 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `415c28c`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
@@ -1717,7 +1717,7 @@ and the node's key is not signable through the op surface.
 Section 2.5 lists `mod.nodes.node_info` among the four types with a hand-written codec, and
 section 0.1 describes its numeric endpoint tags. Both describe astral-go before `4b18f24`. From
 that commit on, `NodeInfo.WriteTo` and `ReadFrom` are `astral.Objectify`
-(`api/nodes/node_info.go:24-29` at `8972f283`), so the binary form is the reflective field walk:
+(`api/nodes/node_info.go:24-29` at `a2b41561`), so the binary form is the reflective field walk:
 `string8` alias, `Ptr(identity)`, then a `uint32` count of type-tagged endpoints. astrald pins
 that encoding from `032271d4`.
 
@@ -1729,3 +1729,26 @@ base62 string of the binary payload, because `NodeInfo` keeps its `MarshalText` 
 `tests/test_api_nodes.py` are astral-go `221ce52`'s own output, and `objects.new` on an isolated
 astrald built from `1286a469` answers the six-byte zero value, which decodes to `NodeInfo()`.
 Risk R-15 no longer applies.
+
+## 11.8 Sections 3.4, 5.2 and 7.3 — a session without a token reaches `anonymous_allowlist` alone (AMENDED, implemented)
+
+Section 3.4 says anonymous guests may route queries when the node allows it, section 5.2 calls
+`bip137sig.derive_key` anonymous-callable, and section 7.3 runs the live tier anonymously.
+astrald `5f17900d` confines every session without a token, IPC and WebSocket alike, to the ops
+named in `apphost.yaml`'s `anonymous_allowlist` for the node's claim state and denies every
+other query with `error_msg{denied}` before routing (`mod/apphost/src/setup_guard.go`
+`admitsAnonymous`, called at `mod/apphost/src/guest.go:150`). The default lists are `user.info`,
+`user.derive_identity`, `user.bootstrap`, `user.join`, `apphost.register` and `.spec` while the
+node is unclaimed, and `user.info`, `apphost.register` and `.spec` once a user claims it
+(`mod/apphost/src/config.go:55-69`). The Network zone bit is still stripped for such a session
+(`mod/apphost/src/guest.go:182-185`), and it still cannot register a service or a handler.
+
+**Amendment: the live tier runs as the node, under `ASTRAL_TEST_NODE_TOKEN`.** `LiveCase`
+presents that variable's token on every client it builds, and the tier's assertions name the
+node as the caller, so the variable names a token the node maps to its own identity
+(`tokens: {"<token>": localnode}` in `apphost.yaml`). `ASTRAL_TEST_TOKEN` keeps its meaning: an
+app identity for the serving and signing tests. With `ASTRAL_TEST_ENDPOINT` set and
+`ASTRAL_TEST_NODE_TOKEN` unset, every live test outside the allowlist fails on `denied`.
+Verified on isolated astrald nodes built from `5f17900d`: the whole suite with the live tier
+opted in and no node token ended with 175 errors, each `apphost error: denied`; with the node
+token it ended `OK` against a claimed node and against an unclaimed one.

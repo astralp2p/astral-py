@@ -43,6 +43,7 @@ from astral.session import CONNECT_TIMEOUT
 from mock_apphost import leaked_sockets, socket_fds
 
 ENDPOINT_VAR: Final = "ASTRAL_TEST_ENDPOINT"
+TOKEN_VAR: Final = "ASTRAL_TEST_NODE_TOKEN"
 
 _VERDICT: str | None = None
 """None until the precheck has run, then a skip reason or "" for healthy."""
@@ -51,6 +52,20 @@ _VERDICT: str | None = None
 def endpoint() -> str | None:
     """The node to test against, or `None` when the tier is not opted into."""
     return os.environ.get(ENDPOINT_VAR) or None
+
+
+def token() -> str | None:
+    """The token every live client presents, or `None` for a token-less one.
+
+    astrald confines a session without a token to `anonymous_allowlist`
+    (`mod/apphost/src/setup_guard.go` `admitsAnonymous` at `5f17900d`), and
+    the read-only ops this tier runs are not on it, so a run against a node at
+    the pin sets `ASTRAL_TEST_NODE_TOKEN` to a token the node maps to its own
+    identity, which is the caller the tier's assertions call the node.
+    `ASTRAL_TEST_TOKEN` is the serving and signing tests' app identity, a
+    different caller.
+    """
+    return os.environ.get(TOKEN_VAR) or None
 
 
 async def _probe(target: str) -> str:
@@ -121,6 +136,7 @@ class LiveCase(unittest.IsolatedAsyncioTestCase):
 
     async def client(self, **kw: object) -> astral.Client:
         kw.setdefault("max_concurrency", 4)
+        kw.setdefault("token", token())
         return await connect(self.endpoint, **kw)  # type: ignore[arg-type]
 
     async def assert_no_open_sockets(self) -> None:

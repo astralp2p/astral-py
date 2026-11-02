@@ -486,7 +486,7 @@ class ChunkTest(unittest.TestCase):
 class LiveJSONTest(LiveCase):
     """The node's own JSON lines, decoded and re-encoded byte for byte.
 
-    Read-only and anonymous. The bytes are fetched through the raw view rather
+    Read-only. The bytes are fetched through the raw view rather
     than through a JSON channel, because a decoder that agreed with this SDK
     would prove nothing about the node.
     """

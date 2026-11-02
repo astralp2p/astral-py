@@ -211,8 +211,10 @@ def resolve_endpoint(endpoint: str | None = None) -> str:
 def resolve_token(token: str | None = None) -> str | None:
     """The auth token: the argument, then the first non-empty variable.
 
-    `None` means anonymous, which the node allows by default for routing and
-    refuses for every registration -- even on the zero identity.
+    `None` means a token-less session. astrald confines one to the ops on its
+    `anonymous_allowlist` -- six on an unclaimed node, three on a claimed one
+    (`mod/apphost/src/config.go:55-69` at astrald `5f17900d`) -- and refuses it
+    every registration, even on the zero identity.
     """
     if token:
         return token
@@ -411,9 +413,9 @@ class Client:
     def shell(self) -> "Shell":
         """The `shell.spec` op: every op the node has registered, as objects.
 
-        The introspection helper of design section 0.1: one anonymous query
-        answers the node's whole routing table, which is how this SDK checks
-        itself against a node rather than against a document.
+        The introspection helper of design section 0.1: one query answers the
+        node's whole routing table, which is how this SDK checks itself against
+        a node rather than against a document.
         """
         from .api.shell import Shell
 
@@ -497,9 +499,10 @@ class Client:
     def guest_id(self) -> Identity | None:
         """The authenticated identity, or `None` on an anonymous client.
 
-        An anonymous client may route queries when the node allows it (default
-        on), has the network zone stripped server-side whatever it sends, and
-        cannot register a service or a handler.
+        An anonymous client may route only the ops on astrald's
+        `anonymous_allowlist` (default on, six ops on an unclaimed node and
+        three on a claimed one), has the network zone stripped server-side
+        whatever it sends, and cannot register a service or a handler.
         """
         return self._guest_id
 
@@ -936,16 +939,14 @@ class Client:
         guest identity is refused here rather than silently registered under
         another one.
 
-        **The two modes are authenticated differently, and it is astrald's
-        asymmetry rather than this SDK's.** `register_service_msg` is refused
-        outright for a token-less guest, the zero identity included, because
-        `onRegisterServiceMsg` tests `isAuthenticated()` first. The
-        `apphost.register_handler` **op** tests the query's origin and then
-        `mod.auth.serve_apps_action` for `q.Caller()` -- which the core router
-        rewrites to the node's own identity for an anonymous guest, and the node
-        holds that action -- so an anonymous local process can still register a
-        handler, and it registers as the node. `api/apphost.py` carries the
-        citations.
+        **Both modes need a token, by two different astrald checks.**
+        `register_service_msg` is refused outright for a token-less guest, the
+        zero identity included, because `onRegisterServiceMsg` tests
+        `isAuthenticated()` first. The `apphost.register_handler` **op** is not
+        on astrald's `anonymous_allowlist`, so apphost denies it to a token-less
+        session before it is routed; with a token, it tests the query's origin
+        and then `mod.auth.serve_apps_action` for `q.Caller()`.
+        `api/apphost.py` carries the citations.
 
         **Returning means registered.** The first registration cycle runs
         before this returns, bounded by `ready_timeout`, and its failure is this
@@ -974,19 +975,17 @@ class Client:
                 raise Denied(
                     "an anonymous client cannot register a service: astrald "
                     "refuses every registration from a token-less guest, the "
-                    "zero identity included. mode='handler' is not refused -- "
-                    "apphost.register_handler checks only the query's origin -- "
-                    "but it then registers under the caller the core router "
-                    "substitutes, which is the node's own identity"
+                    "zero identity included. mode='handler' needs a token too: "
+                    "apphost.register_handler is not on astrald's "
+                    "anonymous_allowlist"
                 )
         if mode == "handler" and identity is not None and identity != self._guest_id:
             # An anonymous client fails this too, and correctly: its `guest_id`
-            # is `None`, the node substitutes its own identity for the nil
-            # caller, and a client that cannot name the identity it will be
-            # registered under cannot be asked to confirm it.
+            # is `None`, it has no identity to be registered under, and astrald
+            # denies it the op before routing.
             whose = (
-                "which this anonymous client does not know -- the core router "
-                "substitutes the node's own identity for a nil caller"
+                "which this anonymous client does not have -- astrald denies "
+                "apphost.register_handler to a session without a token"
                 if self._guest_id is None
                 else f"which is {self._guest_id.fingerprint()}"
             )

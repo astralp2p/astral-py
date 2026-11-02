@@ -34,12 +34,12 @@ a per-op contract and is not discoverable from the wire):
 | `nodes.resolve_endpoints` | ST | `endpoint_with_ttl` x n ++ `eos` | read-only |
 | `nodes.add_endpoint` | RR | `ack` \\| `error_message` | **mutates** (90-day TTL) |
 | `nodes.close_link` | RR | `ack` \\| `error_message` | **mutates** |
-| `nodes.new_link` | RR (long) | `link_info` \\| `error_message` \\| reject 2-5 | **mutates** |
+| `nodes.new_link` | RR (long) | `link_info` \\| `error_message` | **mutates** |
 | `nodes.migrate_session` | RR | `ack` \\| `error_message` | **mutates** |
 
 `nodes.resolve_endpoints`, `nodes.add_endpoint` and `nodes.new_link` name their
 identity argument `identity`, and `nodes.close_link` names its nonce `link_id`,
-as `nodes.migrate_session` does. astrald `48ae88b2` marks seven parameters
+as `nodes.migrate_session` does. astrald `5f17900d` marks seven parameters
 required in source: `identity` on `nodes.resolve_endpoints`,
 `nodes.add_endpoint` and `nodes.new_link`, `endpoint` on `nodes.add_endpoint`,
 `link_id` on `nodes.close_link`, and `session_id` and `link_id` on
@@ -171,7 +171,7 @@ def require_experimental(op: str, opted_in: bool) -> None:
     `nodes.links` is read-only and answers on any node. What it is, is design
     section 0.1's Tier 3 in force. This surface is the least covered by the
     reference client -- 3 of 7 `nodes` ops have an astral-go client at
-    astral-go `8972f283` -- two of `nat`'s five ops are
+    astral-go `a2b41561` -- two of `nat`'s five ops are
     dropped outright (section 4.5), and four of these seven **mutate node
     state**: `close_link` drops a live link, `add_endpoint` writes a record that
     stands for 90 days. An SDK that let all of that be reached by a typo in an
@@ -547,9 +547,11 @@ class Nodes(ModuleClient):
 
         `name` travels under the wire key `identity` and is resolved by the
         node -- an alias, `localnode`, or a hex key -- because the op declares
-        `Identity string` and hands it to the directory. An
-        identity the node cannot resolve is **rejected with code 2**, which
-        surfaces as `QueryRejected`, not as an `error_message`.
+        `Identity string` and hands it to the directory. The node accepts the
+        query first, then answers a name it cannot resolve with
+        `unknown identity` and the zero identity with `zero identity`, each an
+        `error_message` that surfaces as `RemoteError`
+        (`astrald/mod/nodes/src/op_resolve_endpoints.go`).
 
         The answers are `mod.nodes.endpoint_with_ttl`, whose endpoint field is
         polymorphic, so this is the op that needs `astral.api.endpoints`
@@ -641,12 +643,12 @@ class Nodes(ModuleClient):
         timeout -- so a caller's own `timeout=` is what bounds this, and the
         default one is likely to be too short.
 
-        The failure modes are reject codes, not error messages: 2 for an
-        unresolvable peer or a malformed endpoint, 3 for an endpoint the exonet
-        parser refuses, 4 for a cancelled context or a resolver failure and 5
-        for a scheduler refusal. They surface numerically in `QueryRejected`;
-        design risk R-17 declines to map them to meanings, because the table is
-        source-only.
+        The node accepts the query first and answers every failure with an
+        `error_message`, which surfaces as `RemoteError`: `not permitted` for a
+        caller without `mod.auth.admin_network_action`, `unknown identity` for
+        an unresolvable peer, `invalid endpoint` or `unsupported network` for an
+        endpoint the exonet parser refuses, and the scheduler's or the link
+        task's own error text otherwise (`astrald/mod/nodes/src/op_new_link.go`).
 
         **`peer`, never `target`.** The wire argument is `identity=`. `target`
         is the routing keyword every module-client method forwards to
@@ -665,7 +667,7 @@ class Nodes(ModuleClient):
             if ":" not in endpoint:
                 raise BadArgument(
                     f"{OP_NEW_LINK}: {endpoint!r} is not <network>:<address>; "
-                    "the node rejects this query with code 3 without a colon"
+                    "the node answers `invalid endpoint` without a colon"
                 )
             params["endpoint"] = _param(_STRING8, endpoint)
         if strategies is not None:

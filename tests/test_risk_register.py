@@ -293,10 +293,11 @@ class R6AnyoneJSON(unittest.TestCase):
     `bytes.fromhex("anyone")`. The register records this as settled by
     `apphost.whoami?out=json`; **that probe no longer produces it**. astrald's
     `core/router.go` substitutes the node's own identity for a nil caller
-    before `OpWhoami` reads `query.Caller()`, so an anonymous guest is answered
-    with a non-zero identity and gets hex. The captured bytes below are what the
+    before `OpWhoami` reads `query.Caller()`, and an authenticated session's
+    nil caller is its guest identity, so every caller that reaches the op is
+    answered with a non-zero identity and gets hex. The captured bytes below are what the
     node actually sends today; the `anyone` half is astral-go
-    `astral/identity.go:171` and is pinned against this SDK rather than against
+    `astral/identity.go:174` and is pinned against this SDK rather than against
     a node.
     """
 
@@ -551,7 +552,7 @@ class LiveRiskProbes(LiveCase):
     astrald is not running, which is the failure mode the whole register exists
     to end.
 
-    Read-only and anonymous throughout. `objects.new` is a pure registry read:
+    Read-only throughout. `objects.new` is a pure registry read:
     it constructs a zero value and sends it, storing nothing.
     """
 

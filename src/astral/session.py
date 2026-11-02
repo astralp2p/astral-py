@@ -221,6 +221,8 @@ __all__ = [
     "REJECT_INTERNAL_ERROR",
     "REJECT_INVALID_QUERY",
     "REJECT_REJECTED",
+    "REJECT_TIMEOUT",
+    "REJECT_UNAVAILABLE",
     "RegisterServiceMsg",
     "RejectIncomingMsg",
     "RouteQueryMsg",
@@ -308,13 +310,18 @@ OP_WHOAMI: Final = "apphost.whoami"
 # 0 to 1 and `NewErrRejected` substitutes `DefaultRejectCode`, while
 # `apps.PendingQuery.RejectWithCode` does not check at all and puts 0 on the wire.
 # This SDK raises instead, because a silent rewrite hides a caller's bug and the
-# third path proves the rewrite is not even applied consistently. 5 and above are
-# op-specific and no meaning is claimed for them here.
+# third path proves the rewrite is not even applied consistently. 6 is a
+# router timeout and 7 an unreachable target or next hop; 5 is not generic --
+# a messaging node that predates `ErrNotAdmitted` sends it -- and no meaning is
+# claimed here for 5 or for 8 and above (astral-go `astral/codes.go` at
+# `a2b41561`).
 
 REJECT_REJECTED: Final = 1
 REJECT_INVALID_QUERY: Final = 2
 REJECT_CANCELED: Final = 3
 REJECT_INTERNAL_ERROR: Final = 4
+REJECT_TIMEOUT: Final = 6
+REJECT_UNAVAILABLE: Final = 7
 DEFAULT_REJECT_CODE: Final = REJECT_REJECTED
 
 
