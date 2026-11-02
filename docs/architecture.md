@@ -17,7 +17,7 @@ document states the resolution, and the resolution is binding.
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
 | 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `08ead7ce` (the merge of astral-go pull request #167, which defines the apphost grant objects) |
 | 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `9c466cf3` (the merge of astrald pull request #351, after which an unset grant request policy accepts every request) — authoritative for session semantics the client never exercises |
-| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `504378b`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
+| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `f41ceac`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
 When 1 and 3 disagree, 1 wins and the disagreement is filed in §9. When astral-go
