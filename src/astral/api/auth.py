@@ -120,17 +120,14 @@ registers it with `astral.MustAdd(&Action{})` (line 55).
 That changes what astral-go can derive. `specFromType` probes `tryObjectType`
 ahead of its container dispatch (`astral/blueprint_reflect.go` at `a2b41561`), so
 an embedded `auth.Action` field now yields a `RefSpec` naming
-`mod.auth.action` rather than failing -- inferred from those two sources, with
-no run behind it.
+`mod.auth.action` rather than failing.
 
-**What a node at the pin answers to `objects.get_blueprint` on an action type,
-and to `objects.new?type=mod.auth.action`, is unverified.** The recorded
-answers -- `error_message` carrying `BlueprintFromType <type>.Action: type
-auth.Action does not implement Object and is not a supported container`, `nil`
-to `objects.new`, and `blueprint not found: mod.auth.action` -- were observed on
-`furry-bolt` and on astrald `26bb51d5`, both of which predate the registration.
-`LiveAuthTest` still asserts them and is expected to need re-reading
-against a node at the pin. `Action` below is a plain
+**A node at the pin describes every action type and builds
+`mod.auth.action`.** Verified by `LiveAuthTest` on isolated astrald nodes built
+from `5f17900d`: `objects.get_blueprint` answers for `mod.auth.sudo_action`,
+`mod.objects.create_object_action` and `mod.user.admin_swarm_action`, and
+`objects.new?type=mod.auth.action` answers a nine-byte instance, a nonce and
+one nil pointer. `Action` below is a plain
 dataclass carrying the two field declarations, inherited by a concrete action
 record so the fields flatten under their own names. Declaring it as a record
 would nest the two fields in JSON under a key no node sends.
