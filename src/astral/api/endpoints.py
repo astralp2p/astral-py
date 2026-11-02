@@ -51,7 +51,7 @@ does either.** `Digest.WriteTo` used to write whatever bytes it held while
 `Digest.ReadFrom` demanded exactly 35, so the zero value encoded to nothing and
 no conforming reader could consume it -- and inside a `mod.nodes.link_info` it
 moved every field after it by 35 bytes. astral-go `eeb31e3` (PR #90, in `main`
-at `a2b41561`, the revision astrald `5f17900d` requires) makes the width
+at `dbc27574`) makes the width
 unconditional: `WriteTo` writes `DigestSize` bytes for every digest it accepts,
 the zero value as `DigestSize` nulls, and refuses any other length with
 `ErrInvalidDigestLength` rather than putting a short frame on the wire;
@@ -105,7 +105,7 @@ fields, because a `@record` owns its schema. `nat.endpoint` is a third of the
 same shape -- `IP` ref, `Port` uint16, `Network()` of `kcp` -- and Tier 3 can
 reuse `IPEndpoint` rather than restate it.
 
-Source citations are pinned to astral-go `a2b41561` and astrald `5f17900d`. The
+Source citations are pinned to astral-go `dbc27574` and astrald `5f17900d`. The
 tor paragraphs above name the astral-go commits that made the changes they
 describe, and all three are in `main` at that pin, so every citation here
 resolves at one of the two pinned revisions.
@@ -630,7 +630,7 @@ class GatewayEndpoint(Endpoint):
 
         An absent identity renders as 66 zeros, because astral-go's
         `Identity.String()` answers `anyoneKey` for a nil receiver
-        (`astral/identity.go`, astral-go `a2b41561`).
+        (`astral/identity.go`, astral-go `dbc27574`).
         """
         return f"{_identity_text(self.gateway_id)}:{_identity_text(self.target_id)}"
 

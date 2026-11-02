@@ -98,7 +98,7 @@ package eagerly so registration never depends on the property being touched.
 target and three anchors in this file had already drifted by a line or two, which
 costs a reader more than an absent citation: it makes them distrust the exact
 ones. Line numbers below are pinned to astrald `5f17900d` and astral-go
-`a2b41561`, the revisions `tests/reference.py` pins, and no citation names
+`dbc27574`, the revisions `tests/reference.py` pins, and no citation names
 another revision.
 """
 

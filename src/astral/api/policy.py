@@ -1,8 +1,8 @@
 """`policy.delegate` -- the op a node asks instead of deciding an admission itself.
 
 astral-go's `api/policy` package holds what a node and the app it delegates an
-admission decision to share (`api/policy/delegate.go` at astral-go `a2b41561`,
-the revision astrald `5f17900d` requires). Two node modules store a delegate:
+admission decision to share (`api/policy/delegate.go` at astral-go
+`dbc27574`). Two node modules store a delegate:
 `apphost` for `apphost.register` and `apphost.request_grant`, and `user` for
 `user.request_membership`, `user.accept_membership` and `user.accept_contract`,
 each persisted as a `policy.delegate` in the node's tree under
@@ -12,9 +12,10 @@ each persisted as a `policy.delegate` in the node's tree under
 the answer are the owning module's types -- `mod.apphost.app_register_request`
 and `mod.apphost.app_register_decision` in `astral.api.apphost`, the four
 `mod.user.swarm_*` types and the two `mod.user.contract_accept_*` types in
-`astral.api.user`. The grant request policy's `mod.apphost.grant_request` and
-`mod.apphost.grant_decision` are astral-go's
-(`api/apphost/grant_request_policy.go`) and are not declared in this SDK.
+`astral.api.user`. The grant request policy's
+`mod.apphost.grant_policy_request` and `mod.apphost.grant_decision` are
+astral-go's (`api/apphost/grant_request_policy.go`) and are not declared in
+this SDK.
 
 **The node puts the request to the delegate as itself and reads one object
 back** (`api/policy/ask.go`). An app serving as a delegate therefore answers

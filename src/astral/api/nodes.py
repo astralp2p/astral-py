@@ -171,7 +171,7 @@ def require_experimental(op: str, opted_in: bool) -> None:
     `nodes.links` is read-only and answers on any node. What it is, is design
     section 0.1's Tier 3 in force. This surface is the least covered by the
     reference client -- 3 of 7 `nodes` ops have an astral-go client at
-    astral-go `a2b41561` -- two of `nat`'s five ops are
+    astral-go `dbc27574` -- two of `nat`'s five ops are
     dropped outright (section 4.5), and four of these seven **mutate node
     state**: `close_link` drops a live link, `add_endpoint` writes a record that
     stands for 90 days. An SDK that let all of that be reached by a typo in an

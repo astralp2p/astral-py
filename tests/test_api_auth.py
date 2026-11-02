@@ -1124,8 +1124,8 @@ class LiveAuthTest(live_support.LiveCase):
         container`. `5b1d282` added both, and `specFromType` probes
         `tryObjectType` ahead of its container dispatch, so the embedded field
         now yields a `RefSpec` naming `mod.auth.action`. astrald `5f17900d`
-        requires `a2b41561`, which is past `5b1d282`, so the SDK's own pin is
-        already on this side of it.
+        requires `a2b41561`, which is past `5b1d282`, and the SDK's own pin
+        `dbc27574` is past it too.
         """
         async with await self.client() as client:
             for name in (

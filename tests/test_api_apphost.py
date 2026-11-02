@@ -1,7 +1,7 @@
 """The `apphost` module client, its data types, and the eager-import rule.
 
 Three tiers in one file, because they assert three different things about the
-same eleven ops:
+same fifteen ops:
 
 - **Tier A** pins the wire: `apphost.access_token` byte for byte, the missing
   `mod.` prefix that would make every token frame undecodable, and the registry
@@ -10,7 +10,8 @@ same eleven ops:
   every vector in `POLICY_GO_VECTORS` was produced by a Go program linked
   against astral-go `221ce52`, printing `hex.EncodeToString` of what `WriteTo`
   wrote, `json.Marshal` of the value, the line `channel.TextSender` wrote, and
-  `astral.ResolveObjectID`.
+  `astral.ResolveObjectID`. The four grant types are pinned the same way in
+  `GRANT_GO_VECTORS`, from a program linked against astral-go `dbc27574`.
 - **Tier B** pins the query strings and the shapes against `MockApphost`. A
   module client is argument marshalling plus one call, so the marshalling is
   what can be wrong: a capitalised key is silently dropped by the node, an
@@ -18,9 +19,10 @@ same eleven ops:
   declaration that a test has to make as well.
 - **Tier C** asks the node, as the node through `ASTRAL_TEST_NODE_TOKEN`, and
   only through the three read-only ops and the read-only `objects.get_blueprint`, `objects.new` and
-  `objects.echo` for the two policy types. `apphost.register` and
-  `apphost.set_app_register_policy` mutate the node and are exercised against
-  the mock alone (design section 7.3). Skipped with a reason when
+  `objects.echo` for the two policy types. `apphost.register`,
+  `apphost.set_app_register_policy`, `apphost.grant`, `apphost.request_grant`
+  and `apphost.revoke` mutate the node and are exercised against the mock alone
+  (design section 7.3). Skipped with a reason when
   `ASTRAL_TEST_ENDPOINT` is unset.
 
 The assertion that is not about apphost at all: **importing `astral.api` imports
@@ -47,24 +49,34 @@ from astral.api.apphost import (
     OP_CREATE_TOKEN,
     OP_GRANT,
     OP_HOLD_OBJECT,
+    OP_LIST_GRANTS,
     OP_LIST_HELD_OBJECTS,
     OP_LIST_TOKENS,
     OP_REGISTER,
     OP_REGISTER_HANDLER,
+    OP_REQUEST_GRANT,
+    OP_REVOKE,
     OP_SET_APP_REGISTER_POLICY,
     OP_UNHOLD_OBJECT,
     OP_WHOAMI,
+    ERR_GRANT_DECLINED,
+    ERR_GRANT_NOT_FOUND,
     ERR_REGISTRATION_DECLINED,
     AccessToken,
     APPHOST_TYPES,
     Apphost,
     AppRegisterDecision,
     AppRegisterRequest,
+    Grant,
+    GrantRequest,
+    RegisterRequest,
+    RequestGrantRequest,
     _duration,
     _object_id,
     apphost_types,
 )
 from astral.api.auth import AuthorizerAssignment, Permit
+from astral.api.services import DiscoveryRule, DiscoveryScope, ServiceDiscoveryAction
 from astral.blueprint import of as blueprint_of
 from astral.blueprint import spec_of
 from astral.client import Client, connect
@@ -82,10 +94,9 @@ from astral.errors import (
 )
 from astral.object import Ack, Bundle
 from astral.objectid import object_id
-from astral.querystring import QueryStringTooLong
 from astral.registry import default_blueprints
 from astral.session import Session, flush_cancels
-from astral.spec import Primitive, Slice
+from astral.spec import Primitive, Ptr, Slice
 from astral.transport import Transport
 from astral.types import Duration, Identity, Nonce, ObjectID, Time, Zone
 from astral.wire import Writer
@@ -108,7 +119,7 @@ from mock_apphost import (
 # frame and a constructed one are comparable.
 ID_HEX = "03b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae1"
 TOKEN = "R6mLmR21IajGVMhcXvbPtjfNiXKuJpsO"
-# 2027-07-27T11:02:23.112712094Z, as read off the live node.
+# 2027-07-26T19:42:23.112712094Z, as read off the live node.
 EXPIRES = Time(1816630943112712094)
 # The secp256k1 base point: a valid identity by construction, and one no node has
 # ever issued a token to. The node refuses an identity parameter that is not a
@@ -235,6 +246,190 @@ POLICY_BLUEPRINTS = {
         ("ContractPermits", Slice("mod.auth.permit")),
         ("Authorizers", Slice("mod.auth.authorizer_assignment")),
     ],
+}
+
+DISCOVERY_PERMIT = Permit(
+    action=ServiceDiscoveryAction.ASTRAL_TYPE,
+    constraints=Bundle([DiscoveryScope(rules=[DiscoveryRule(services=["inference"])])]),
+)
+
+# Name -> (value, payload hex, JSON, text line, ObjectID), each string astral-go
+# `dbc27574`'s output for the Go struct literal the value mirrors.
+GRANT_GO_VECTORS: dict[str, tuple[object, str, str, str, str]] = {
+    "grant_full": (
+        Grant(id=7, permit=DISCOVERY_PERMIT, expires_at=EXPIRES),
+        "000000000000000701256d6f642e73657276696365732e736572766963655f646973636f"
+        "766572795f616374696f6e0100000001000000351c6d6f642e73657276696365732e6469"
+        "73636f766572795f73636f70650000000101000000010109696e666572656e6365000000"
+        "0000011935f837c4374f9e",
+        '{"ExpiresAt":"2027-07-26T19:42:23.112712094Z","ID":7,"Permit":{"Action":"mod'
+        '.services.service_discovery_action","Constraints":[{"Type":"mod.services.dis'
+        'covery_scope","Object":{"Rules":[{"Nodes":[],"Services":["inference"]}]}}],"'
+        'Delegation":0}}',
+        "#[mod.apphost.grant]:AAAAAAAAAAcBJW1vZC5zZXJ2aWNlcy5zZXJ2aWNlX2Rpc2NvdmVyeV9"
+        "hY3Rpb24BAAAAAQAAADUcbW9kLnNlcnZpY2VzLmRpc2NvdmVyeV9zY29wZQAAAAEBAAAAAQEJaW5"
+        "mZXJlbmNlAAAAAAABGTX4N8Q3T54=",
+        "data1e43t9nqpoaoet5w895mpwzbojhfg4fkt1ncksq8rjse1t6mpuweu3",
+    ),
+    "grant_until_revoked": (
+        Grant(id=8, permit=GRANT),
+        "0000000000000008011e6d6f642e6f626a656374732e726561645f6f626a6563745f6163"
+        "74696f6e000000",
+        '{"ExpiresAt":null,"ID":8,"Permit":{"Action":"mod.objects.read_object_action"'
+        ',"Constraints":null,"Delegation":0}}',
+        "#[mod.apphost.grant]:AAAAAAAAAAgBHm1vZC5vYmplY3RzLnJlYWRfb2JqZWN0X2FjdGlvbgA"
+        "AAA==",
+        "data1rdb5jry7rgo4wch5h1dp6ehdsxzsfuk5dtpkjmtohhe78b69dt791",
+    ),
+    "grant_zero": (
+        Grant(),
+        "00000000000000000000",
+        '{"ExpiresAt":null,"ID":0,"Permit":null}',
+        "#[mod.apphost.grant]:AAAAAAAAAAAAAA==",
+        "data1nyhex4tb8nwew7thbmo7sx63nyidn15r359xwh1kzr9snwwmxcjae",
+    ),
+    "register_request_full": (
+        RegisterRequest(
+            name="smithd",
+            grant_permits=[DISCOVERY_PERMIT],
+            contract_permits=[CONTRACT_PERMIT],
+        ),
+        "06736d697468640000000101256d6f642e73657276696365732e736572766963655f6469"
+        "73636f766572795f616374696f6e0100000001000000351c6d6f642e7365727669636573"
+        "2e646973636f766572795f73636f70650000000101000000010109696e666572656e6365"
+        "000000000000000001011b6d6f642e617574682e7365655f6f626a656374735f61637469"
+        "6f6e0001",
+        '{"ContractPermits":[{"Action":"mod.auth.see_objects_action","Constraints":nu'
+        'll,"Delegation":1}],"GrantPermits":[{"Action":"mod.services.service_discover'
+        'y_action","Constraints":[{"Type":"mod.services.discovery_scope","Object":{"R'
+        'ules":[{"Nodes":[],"Services":["inference"]}]}}],"Delegation":0}],"Name":"sm'
+        'ithd"}',
+        "#[mod.apphost.register_request]:BnNtaXRoZAAAAAEBJW1vZC5zZXJ2aWNlcy5zZXJ2aWNl"
+        "X2Rpc2NvdmVyeV9hY3Rpb24BAAAAAQAAADUcbW9kLnNlcnZpY2VzLmRpc2NvdmVyeV9zY29wZQAA"
+        "AAEBAAAAAQEJaW5mZXJlbmNlAAAAAAAAAAABARttb2QuYXV0aC5zZWVfb2JqZWN0c19hY3Rpb24A"
+        "AQ==",
+        "data1mmcbbp8f9c6exhdcpxahbaanmhxi69fxgicuz5jen4f4w7hj3yt1h",
+    ),
+    "register_request_zero": (
+        RegisterRequest(),
+        "000000000000000000",
+        '{"ContractPermits":[],"GrantPermits":[],"Name":""}',
+        "#[mod.apphost.register_request]:AAAAAAAAAAAA",
+        "data1nimzs4rzda6o37sqoogcdj834dgkz6dtbqezeoy4kfqigukt83mgt",
+    ),
+    "grant_request_full": (
+        GrantRequest(
+            identity=Identity.parse(ID_HEX),
+            duration=Duration(3600 * 10**9),
+            permits=[DISCOVERY_PERMIT, GRANT],
+        ),
+        "0103b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae10000"
+        "034630b8a0000000000201256d6f642e73657276696365732e736572766963655f646973"
+        "636f766572795f616374696f6e0100000001000000351c6d6f642e73657276696365732e"
+        "646973636f766572795f73636f70650000000101000000010109696e666572656e636500"
+        "00000000011e6d6f642e6f626a656374732e726561645f6f626a6563745f616374696f6e"
+        "0000",
+        '{"Duration":3600000000000,"Identity":"03b2704948bb2e4603ccb1bcd5f01f5df9aa52'
+        'cbf94b6b54a3978df81185bd7ae1","Permits":[{"Action":"mod.services.service_dis'
+        'covery_action","Constraints":[{"Type":"mod.services.discovery_scope","Object'
+        '":{"Rules":[{"Nodes":[],"Services":["inference"]}]}}],"Delegation":0},{"Acti'
+        'on":"mod.objects.read_object_action","Constraints":null,"Delegation":0}]}',
+        "#[mod.apphost.grant_request]:AQOycElIuy5GA8yxvNXwH135qlLL+UtrVKOXjfgRhb164QA"
+        "AA0YwuKAAAAAAAgElbW9kLnNlcnZpY2VzLnNlcnZpY2VfZGlzY292ZXJ5X2FjdGlvbgEAAAABAAA"
+        "ANRxtb2Quc2VydmljZXMuZGlzY292ZXJ5X3Njb3BlAAAAAQEAAAABAQlpbmZlcmVuY2UAAAAAAAE"
+        "ebW9kLm9iamVjdHMucmVhZF9vYmplY3RfYWN0aW9uAAA=",
+        "data1pe3hzt7338d9e1fzcbkqqfsdpbyky6d98j36pc4nf9q4fyk4cbutm",
+    ),
+    "grant_request_zero": (
+        GrantRequest(),
+        "00000000000000000000000000",
+        '{"Duration":0,"Identity":null,"Permits":[]}',
+        "#[mod.apphost.grant_request]:AAAAAAAAAAAAAAAAAA==",
+        "data1nswk8o4rtnedxazs3xogyxi8q1fw99z1cwhjxuz1gs7gzogfw4yic",
+    ),
+    "request_grant_request_full": (
+        RequestGrantRequest(
+            permits=[DISCOVERY_PERMIT], duration=Duration(3600 * 10**9)
+        ),
+        "0000000101256d6f642e73657276696365732e736572766963655f646973636f76657279"
+        "5f616374696f6e0100000001000000351c6d6f642e73657276696365732e646973636f76"
+        "6572795f73636f70650000000101000000010109696e666572656e636500000000000000"
+        "034630b8a000",
+        '{"Duration":3600000000000,"Permits":[{"Action":"mod.services.service_discove'
+        'ry_action","Constraints":[{"Type":"mod.services.discovery_scope","Object":{"'
+        'Rules":[{"Nodes":[],"Services":["inference"]}]}}],"Delegation":0}]}',
+        "#[mod.apphost.request_grant_request]:AAAAAQElbW9kLnNlcnZpY2VzLnNlcnZpY2VfZGl"
+        "zY292ZXJ5X2FjdGlvbgEAAAABAAAANRxtb2Quc2VydmljZXMuZGlzY292ZXJ5X3Njb3BlAAAAAQE"
+        "AAAABAQlpbmZlcmVuY2UAAAAAAAAAA0YwuKAA",
+        "data1jt4pomr5n7ho5ukyaowh7dbb8ums8bnaperdwk35yitg5jcbf31gz",
+    ),
+    "request_grant_request_zero": (
+        RequestGrantRequest(),
+        "000000000000000000000000",
+        '{"Duration":0,"Permits":[]}',
+        "#[mod.apphost.request_grant_request]:AAAAAAAAAAAAAAAA",
+        "data1dfuiero3q69zui5q9zq8pa53en7g3yzxxharzry4pwwiz7mxpez3o",
+    ),
+}
+
+# `astral.BlueprintOf` at astral-go `dbc27574`, the function the node's
+# `objects.get_blueprint` answers with (`mod/objects/src/module.go:237-255` at
+# astrald `5f17900d`), decoded.
+GRANT_BLUEPRINTS = {
+    "mod.apphost.grant": [
+        ("ID", Primitive("uint64")),
+        ("Permit", Ptr("mod.auth.permit")),
+        ("ExpiresAt", Ptr("time")),
+    ],
+    "mod.apphost.register_request": [
+        ("Name", Primitive("string8")),
+        ("GrantPermits", Slice("mod.auth.permit")),
+        ("ContractPermits", Slice("mod.auth.permit")),
+    ],
+    "mod.apphost.grant_request": [
+        ("Identity", Ptr("identity")),
+        ("Duration", Primitive("duration")),
+        ("Permits", Slice("mod.auth.permit")),
+    ],
+    "mod.apphost.request_grant_request": [
+        ("Permits", Slice("mod.auth.permit")),
+        ("Duration", Primitive("duration")),
+    ],
+}
+
+# The four blueprints as astral-go `dbc27574` writes them, `astral.blueprint`
+# payloads in hex, for decoding rather than for trusting the table above.
+GRANT_BLUEPRINT_PAYLOADS = {
+    "mod.apphost.grant": (
+        "00116d6f642e617070686f73742e6772616e740000000301000249441f61737472616c2e"
+        "626c75657072696e742e7072696d69746976655f73706563000675696e74363401000650"
+        "65726d69741961737472616c2e626c75657072696e742e7074725f73706563000f6d6f64"
+        "2e617574682e7065726d69740100094578706972657341741961737472616c2e626c7565"
+        "7072696e742e7074725f73706563000474696d650000"
+    ),
+    "mod.apphost.register_request": (
+        "001c6d6f642e617070686f73742e72656769737465725f72657175657374000000030100"
+        "044e616d651f61737472616c2e626c75657072696e742e7072696d69746976655f737065"
+        "630007737472696e673801000c4772616e745065726d6974731b61737472616c2e626c75"
+        "657072696e742e736c6963655f73706563000f6d6f642e617574682e7065726d69740100"
+        "0f436f6e74726163745065726d6974731b61737472616c2e626c75657072696e742e736c"
+        "6963655f73706563000f6d6f642e617574682e7065726d69740000"
+    ),
+    "mod.apphost.grant_request": (
+        "00196d6f642e617070686f73742e6772616e745f72657175657374000000030100084964"
+        "656e746974791961737472616c2e626c75657072696e742e7074725f7370656300086964"
+        "656e746974790100084475726174696f6e1f61737472616c2e626c75657072696e742e70"
+        "72696d69746976655f7370656300086475726174696f6e0100075065726d6974731b6173"
+        "7472616c2e626c75657072696e742e736c6963655f73706563000f6d6f642e617574682e"
+        "7065726d69740000"
+    ),
+    "mod.apphost.request_grant_request": (
+        "00216d6f642e617070686f73742e726571756573745f6772616e745f7265717565737400"
+        "0000020100075065726d6974731b61737472616c2e626c75657072696e742e736c696365"
+        "5f73706563000f6d6f642e617574682e7065726d69740100084475726174696f6e1f6173"
+        "7472616c2e626c75657072696e742e7072696d69746976655f7370656300086475726174"
+        "696f6e0000"
+    ),
 }
 
 
@@ -393,6 +588,210 @@ class AppRegisterPolicyTypesTest(unittest.TestCase):
                 except reference.Unavailable as exc:  # pragma: no cover
                     self.skipTest(str(exc))
                 self.assertIn(fragment, line)
+
+
+class GrantTypesTest(unittest.TestCase):
+    """The grant and the three request objects, against astral-go `dbc27574`."""
+
+    def test_every_value_encodes_to_the_go_bytes(self):
+        for name, (value, payload, _, _, _) in GRANT_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                self.assertEqual(payload_bytes(value).hex(), payload)
+
+    def test_the_go_bytes_decode_to_every_value(self):
+        for name, (value, payload, _, _, _) in GRANT_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                got = type(value).read_payload(object_reader(bytes.fromhex(payload)))
+                self.assertEqual(got, value)
+
+    def test_the_go_json_decodes_to_every_value(self):
+        for name, (value, _, go_json, _, _) in GRANT_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                got = jsoncodec.unmarshal(value.ASTRAL_TYPE, json.loads(go_json))
+                self.assertEqual(got, value)
+
+    def test_every_value_survives_its_own_json(self):
+        """The SDK's JSON differs from Go's only where `AppRegisterPolicyTypesTest`
+        pins it, an empty list as `null`, so the round trip is the check for the
+        vectors that hold one."""
+        for name, (value, _, _, _, _) in GRANT_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                mine = jsoncodec.marshal(value)
+                self.assertEqual(jsoncodec.unmarshal(value.ASTRAL_TYPE, mine), value)
+
+    def test_an_until_revoked_grant_marshals_to_the_go_json(self):
+        """`ExpiresAt` absent is `null` on both sides, not a zero time: Go's zero
+        `time.Time` encodes in binary as a negative `UnixNano` and in JSON as
+        year 1, which `Time` refuses."""
+        value, payload, go_json, _, _ = GRANT_GO_VECTORS["grant_until_revoked"]
+        self.assertIsNone(value.expires_at)
+        self.assertEqual(jsoncodec.marshal(value), json.loads(go_json))
+        self.assertTrue(payload.endswith("00"))
+
+    def test_an_empty_list_marshals_to_null_where_go_sends_an_array(self):
+        for name in (
+            "register_request_zero",
+            "grant_request_zero",
+            "request_grant_request_zero",
+        ):
+            value, _, go_json, _, _ = GRANT_GO_VECTORS[name]
+            with self.subTest(vector=name):
+                theirs = json.loads(go_json)
+                mine = jsoncodec.marshal(value)
+                lists = {key for key, item in theirs.items() if item == []}
+                self.assertTrue(lists)
+                self.assertEqual({key: mine[key] for key in lists}, dict.fromkeys(lists))
+                self.assertEqual(
+                    {k: v for k, v in mine.items() if k not in lists},
+                    {k: v for k, v in theirs.items() if k not in lists},
+                )
+
+    def test_the_text_line_is_the_go_line_both_ways(self):
+        for name, (value, _, _, line, _) in GRANT_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                self.assertEqual(text_encode(value), line)
+                self.assertEqual(text_decode(line), value)
+
+    def test_every_object_id_is_the_go_object_id(self):
+        for name, (value, _, _, _, oid) in GRANT_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                self.assertEqual(str(object_id(value)), oid)
+
+    def test_every_field_declaration_matches_the_go_blueprint(self):
+        for cls in (Grant, RegisterRequest, GrantRequest, RequestGrantRequest):
+            with self.subTest(type=cls.ASTRAL_TYPE):
+                expected = GRANT_BLUEPRINTS[cls.ASTRAL_TYPE]
+                self.assertEqual([(f.wire_name, f.spec) for f in cls.FIELDS], expected)
+                got = blueprint_of(cls)
+                self.assertEqual([(f.name, spec_of(f.spec)) for f in got.fields], expected)
+                name = b"astral.blueprint"
+                go = decode(
+                    bytes([len(name)]) + name
+                    + bytes.fromhex(GRANT_BLUEPRINT_PAYLOADS[cls.ASTRAL_TYPE])
+                )
+                self.assertEqual(str(go.type), cls.ASTRAL_TYPE)
+                self.assertEqual(
+                    [(str(f.name), spec_of(f.spec)) for f in go.fields], expected
+                )
+
+    def test_every_anchor_lands_on_its_claim(self):
+        """The `path:line` citations of the grant types and the grant prose."""
+        cites = (
+            (reference.ASTRAL_GO, "api/apphost/grant.go", 10,
+             "Grant is one node-local grant"),
+            (reference.ASTRAL_GO, "api/apphost/grant.go", 20, "ExpiresAt *astral.Time"),
+            (reference.ASTRAL_GO, "api/apphost/grant.go", 21, "}"),
+            (reference.ASTRAL_GO, "api/apphost/register_request.go", 10,
+             "RegisterRequest is the registration an app sends"),
+            (reference.ASTRAL_GO, "api/apphost/register_request.go", 22, "}"),
+            (reference.ASTRAL_GO, "api/apphost/grant_request.go", 10,
+             "GrantRequest is the grants a caller asks apphost.grant"),
+            (reference.ASTRAL_GO, "api/apphost/grant_request.go", 13,
+             "zero"),
+            (reference.ASTRAL_GO, "api/apphost/grant_request.go", 14,
+             "writes grants that last until revoked"),
+            (reference.ASTRAL_GO, "api/apphost/grant_request.go", 19, "}"),
+            (reference.ASTRAL_GO, "api/apphost/request_grant_request.go", 10,
+             "RequestGrantRequest is the grants a session asks"),
+            (reference.ASTRAL_GO, "api/apphost/request_grant_request.go", 12,
+             "no identity"),
+            (reference.ASTRAL_GO, "api/apphost/request_grant_request.go", 15,
+             "zero asks for grants that last until revoked"),
+            (reference.ASTRAL_GO, "api/apphost/request_grant_request.go", 19, "}"),
+            (reference.ASTRAL_GO, "api/apphost/errors.go", 9, "ErrGrantDeclined is the answer"),
+            (reference.ASTRAL_GO, "api/apphost/errors.go", 11, 'NewError("grant declined")'),
+            (reference.ASTRAL_GO, "api/auth/errors.go", 16, "ErrInvalidPermit refuses a permit"),
+            (reference.ASTRAL_GO, "api/auth/errors.go", 18,
+             'A refusal reads "invalid permit: <action>: <detail>"'),
+            (reference.ASTRAL_GO, "api/auth/errors.go", 19, 'NewError("invalid permit")'),
+            (reference.ASTRAL_GO, "api/apphost/client/grant.go", 10,
+             "Grant asks the target node to write the node-local grants"),
+            (reference.ASTRAL_GO, "api/apphost/client/grant.go", 15,
+             "Grants add up: a grant never replaces another"),
+            (reference.ASTRAL_GO, "api/apphost/client/grant.go", 17,
+             "is granting the narrow permit, then revoking the wide one"),
+            (reference.ASTRAL_GO, "api/apphost/client/request_grant.go", 10,
+             "RequestGrant asks the target node to grant the calling session"),
+            (reference.ASTRAL_GO, "api/apphost/client/request_grant.go", 16,
+             "asks the policy on every call"),
+            (reference.ASTRAL_GO, "api/apphost/client/request_grant.go", 18,
+             "closes the query and returns ctx's error"),
+            (reference.ASTRAL_GO, "api/apphost/client/request_grant.go", 20,
+             "A refusal arrives as apphost.ErrGrantDeclined, an invalid permit as"),
+            (reference.ASTRAL_GO, "api/apphost/client/request_grant.go", 21,
+             "auth.ErrInvalidPermit"),
+            (reference.ASTRAL_GO, "api/apphost/client/list_grants.go", 10,
+             "ListGrants returns the node-local grants identity holds"),
+            (reference.ASTRAL_GO, "api/apphost/client/list_grants.go", 11,
+             "Each grant's ID names it to RevokeGrant"),
+            (reference.ASTRAL_GO, "api/apphost/client/revoke.go", 9,
+             "RevokeGrant deletes the one node-local grant named id"),
+            (reference.ASTRAL_GO, "api/apphost/client/revoke.go", 10,
+             "must name a grant identity holds"),
+            (reference.ASTRAL_GO, "api/apphost/client/revoke.go", 14,
+             '"id": id'),
+            (reference.ASTRAL_GO, "api/apphost/client/revoke.go", 23,
+             "RevokeAction deletes every node-local grant identity holds for action"),
+            (reference.ASTRAL_GO, "api/apphost/client/revoke.go", 27,
+             '"action": action'),
+            (reference.ASTRAL_GO, "api/apphost/client/register.go", 22,
+             "Register provisions a fresh guest identity end to end"),
+            (reference.ASTRAL_GO, "api/apphost/client/register.go", 26,
+             "being asked for is the one the caller does not have yet"),
+            (reference.ASTRAL_GO, "api/apphost/client/register.go", 30,
+             "Asking is not receiving"),
+            (reference.ASTRAL_GO, "api/apphost/client/register.go", 32,
+             "caller learns what it holds by using it"),
+            (reference.ASTRAL_GO, "api/apphost/client/register.go", 38,
+             "apphost.ErrRegistrationDeclined"),
+            (reference.ASTRAL_GO, "api/apphost/client/register.go", 49,
+             "The query carries no arguments; req travels"),
+            (reference.ASTRAL_GO, "api/apphost/client/register.go", 50,
+             "on the channel as one object, even when it is empty"),
+            (reference.ASTRAL_GO, "api/policy/delegate.go", 14,
+             "MaxTimeout bounds one admission question"),
+            (reference.ASTRAL_GO, "api/policy/delegate.go", 16,
+             "MaxTimeout = 10 * time.Minute"),
+            (reference.ASTRALD, "mod/objects/src/module.go", 237,
+             "func (mod *Module) GetBlueprint(typeName string)"),
+            (reference.ASTRALD, "mod/objects/src/module.go", 254, "astral.BlueprintOf(proto)"),
+            (reference.ASTRALD, "mod/apphost/src/op_grant.go", 12, "type opGrantArgs struct"),
+            (reference.ASTRALD, "mod/apphost/src/op_grant.go", 19, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 12,
+             "type opRequestGrantArgs struct"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 15, "Permits string"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 18, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 33,
+             "why: a grant authorizes on this node alone"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 35, "OriginNetwork"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 41,
+             "auth.ErrNotPermitted"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 56, "switch {"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 63, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 17,
+             "the listing drops an expired grant"),
+            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 19,
+             "could not mark them as lapsed"),
+            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 43, "mod.activeGrants(identity)"),
+            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 50, "ch.Send(permit)"),
+            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 55, "astral.EOS{}"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 13, "type opRevokeArgs struct"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 15, "Action   astral.String8"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 17, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 50, "gorm.ErrRecordNotFound"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 51, 'NewError("grant not found")'),
+        )
+        for repo, path, number, fragment in cites:
+            with self.subTest(citation=f"{path}:{number}"):
+                try:
+                    line = reference.cited_line(repo, path, number)
+                except reference.Unavailable as exc:  # pragma: no cover
+                    self.skipTest(str(exc))
+                self.assertIn(fragment, line)
+
+    def test_the_error_texts_are_the_node_s(self):
+        self.assertEqual(ERR_GRANT_DECLINED, "grant declined")
+        self.assertEqual(ERR_GRANT_NOT_FOUND, "grant not found")
 
 
 class RegistryTest(unittest.TestCase):
@@ -625,11 +1024,11 @@ class ListHeldObjectsTest(ApphostCase):
         self.assertEqual(mock.queries[-1].query, OP_LIST_HELD_OBJECTS)
 
 
-def read_bundle_then(*replies: tuple[str, bytes]):  # type: ignore[no-untyped-def]
-    """astrald's `apphost.grant` with `constrained=true`: accept, read the
-    bundle, answer, then read to EOF so every frame the client sent is recorded.
+def read_one_then(*replies: tuple[str, bytes]):  # type: ignore[no-untyped-def]
+    """astrald's WA apphost ops: accept, read the one request object, answer,
+    then read to EOF so every frame the client sent is recorded.
 
-    A canned `Accept` answers and closes before the client writes the bundle,
+    A canned `Accept` answers and closes before the client writes its object,
     and the input is dropped.
     """
 
@@ -648,83 +1047,303 @@ def read_bundle_then(*replies: tuple[str, bytes]):  # type: ignore[no-untyped-de
     return handler
 
 
+def go_payload(name: str) -> bytes:
+    """A `GRANT_GO_VECTORS` payload: astral-go's bytes, not the SDK's."""
+    return bytes.fromhex(GRANT_GO_VECTORS[name][1])
+
+
+def body(mock: MockApphost) -> list[tuple[str, bytes]]:
+    """The frames the mock received after the session handshake."""
+    received = mock.connections[-1].received
+    for index, (type_name, _) in enumerate(received):
+        if type_name == "mod.apphost.route_query_msg":
+            return received[index + 1 :]
+    return []
+
+
 class GrantTest(ApphostCase):
-    """`apphost.grant`: RR, one `ack`; constraints travel on the body."""
+    """`apphost.grant`: WA, one `mod.apphost.grant_request` in, one `ack` out."""
 
-    DISCOVERY = "mod.services.service_discovery_action"
-
-    @staticmethod
-    def body(mock: MockApphost) -> list[tuple[str, bytes]]:
-        """The frames the mock received after the session handshake."""
-        received = mock.connections[-1].received
-        for index, (type_name, _) in enumerate(received):
-            if type_name == "mod.apphost.route_query_msg":
-                return received[index + 1 :]
-        return []
+    async def grant(self, *args: object, **kw: object) -> MockApphost:
+        async with MockApphost(routes={OP_GRANT: read_one_then(ACK_FRAME)}) as mock:
+            api = await self.apphost(mock)
+            self.assertIsNone(await api.grant(*args, **kw))
+        return mock
 
     @bounded()
-    async def test_grant_sends_the_identity_under_identity(self):
-        """The identity argument travels under `identity`, the name astrald
-        `bd98bbe8` gives it; `id` would be skipped by the node's binding."""
-        async with MockApphost(routes={OP_GRANT: Accept(objects=(ACK_FRAME,))}) as mock:
-            api = await self.apphost(mock)
-            await api.grant(ID_HEX, self.DISCOVERY, duration=dt.timedelta(hours=1))
-        self.assertEqual(
-            mock.queries[-1].query,
-            f"{OP_GRANT}?action={self.DISCOVERY}&duration=1h0m0s&identity={ID_HEX}",
+    async def test_the_request_is_the_one_object_on_the_body(self):
+        """The query is the bare op name; identity, duration and permits all
+        travel in the object, byte for byte what astral-go writes. The handler
+        reads to EOF, so a second frame or an `eos` would show here."""
+        mock = await self.grant(
+            ID_HEX, [DISCOVERY_PERMIT, GRANT.action], duration=dt.timedelta(hours=1)
         )
-        self.assertEqual(self.body(mock), [])
+        self.assertEqual(mock.queries[-1].query, OP_GRANT)
+        self.assertEqual(body(mock), [("mod.apphost.grant_request", go_payload("grant_request_full"))])
 
     @bounded()
-    async def test_grant_with_constraints_sends_the_bundle_on_the_body(self):
-        """A bundle is not a query argument: `constrained=true` on the query,
-        the bundle as the one object on the body."""
-        async with MockApphost(routes={OP_GRANT: read_bundle_then(ACK_FRAME)}) as mock:
-            api = await self.apphost(mock)
-            await api.grant(ID_HEX, self.DISCOVERY, constraints=Bundle([Ack()]))
-        self.assertEqual(
-            mock.queries[-1].query,
-            f"{OP_GRANT}?action={self.DISCOVERY}&constrained=true&identity={ID_HEX}",
-        )
-        # The handler reads to EOF, so an `eos` after the bundle would show here.
-        self.assertEqual([t for t, _ in self.body(mock)], ["bundle"])
+    async def test_no_duration_is_zero_which_is_until_revoked(self):
+        mock = await self.grant(FURRY_BOLT, [GRANT])
+        (type_name, payload), = body(mock)
+        request = GrantRequest.read_payload(object_reader(payload))
+        self.assertEqual(request.duration, Duration(0))
+        self.assertEqual(request.identity, FURRY_BOLT)
+        self.assertEqual(request.permits, [GRANT])
 
     @bounded()
-    async def test_grant_with_constraints_and_no_answer_is_a_protocol_error(self):
-        """A stream that ends before the `ack` recorded nothing the caller can
-        rely on; it is not a success."""
-        async with MockApphost(routes={OP_GRANT: read_bundle_then()}) as mock:
-            api = await self.apphost(mock)
-            with self.assertRaises(ProtocolError):
-                await api.grant(ID_HEX, self.DISCOVERY, constraints=Bundle([Ack()]))
-
-    @bounded()
-    async def test_grant_constraints_must_be_a_bundle(self):
-        async with MockApphost(routes={}) as mock:
-            api = await self.apphost(mock)
-            with self.assertRaises(BadArgumentType):
-                await api.grant(ID_HEX, self.DISCOVERY, constraints=[Ack()])  # type: ignore[arg-type]
-
-    @bounded()
-    async def test_a_refused_grant_is_a_remote_error(self):
-        """The op accepts, then answers a caller without the action with
-        `not permitted` (`op_grant.go:38-40`)."""
+    async def test_a_directory_name_costs_one_resolve_then_the_op(self):
         async with MockApphost(
-            routes={OP_GRANT: Accept(objects=(error_frame("not permitted"),))}
+            routes={
+                "dir.resolve?identity=furry-bolt": Accept(objects=(IDENTITY_FRAME,)),
+                OP_GRANT: read_one_then(ACK_FRAME),
+            }
         ) as mock:
             api = await self.apphost(mock)
-            with self.assertRaises(RemoteError) as caught:
-                await api.grant(ID_HEX, self.DISCOVERY)
-        self.assertEqual(caught.exception.message, "not permitted")
+            await api.grant("furry-bolt", [GRANT])
+        self.assertEqual(
+            [q.query for q in mock.queries], ["dir.resolve?identity=furry-bolt", OP_GRANT]
+        )
+        request = GrantRequest.read_payload(object_reader(body(mock)[0][1]))
+        self.assertEqual(request.identity, FURRY_BOLT)
 
     @bounded()
-    async def test_a_grant_the_node_cannot_record_is_a_remote_error(self):
+    async def test_a_malformed_permit_list_never_reaches_the_node(self):
+        async with MockApphost(routes={OP_GRANT: read_one_then(ACK_FRAME)}) as mock:
+            api = await self.apphost(mock)
+            for permits, error in (
+                ([], BadArgument),
+                ([""], BadArgument),
+                (["x" * 256], BadArgument),
+                (GRANT.action, BadArgumentType),
+                (GRANT, BadArgumentType),
+                ([1], BadArgumentType),
+                ([None], BadArgumentType),
+            ):
+                with self.subTest(permits=permits):
+                    with self.assertRaises(error):
+                        await api.grant(ID_HEX, permits)  # type: ignore[arg-type]
+            self.assertEqual(mock.queries, [])
+
+    @bounded()
+    async def test_an_answer_that_ends_before_the_ack_is_a_protocol_error(self):
+        """A stream that ends before the `ack` recorded nothing the caller can
+        rely on; it is not a success."""
+        async with MockApphost(routes={OP_GRANT: read_one_then()}) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(ProtocolError):
+                await api.grant(ID_HEX, [GRANT])
+
+    @bounded()
+    async def test_a_refusal_is_a_remote_error(self):
+        """The op accepts, then answers a caller without the action with
+        `not permitted` (`op_grant.go:38-40`), and an invalid permit with
+        `invalid permit: <action>: <detail>`."""
+        for answer in (
+            "not permitted",
+            "invalid permit: mod.services.service_discovery_action: "
+            "constraints must hold exactly one discovery scope",
+        ):
+            with self.subTest(answer=answer):
+                async with MockApphost(
+                    routes={OP_GRANT: read_one_then(error_frame(answer))}
+                ) as mock:
+                    api = await self.apphost(mock)
+                    with self.assertRaises(RemoteError) as caught:
+                        await api.grant(ID_HEX, [GRANT])
+                self.assertEqual(caught.exception.message, answer)
+
+    @bounded()
+    async def test_the_old_arguments_are_gone(self):
+        """No `action` positional, no `constraints` keyword: a single action
+        name in the permits slot is a bare `str`, refused as a list."""
+        async with MockApphost(routes={}) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(TypeError):
+                await api.grant(ID_HEX, [GRANT], constraints=Bundle([]))  # type: ignore[call-arg]
+            with self.assertRaises(BadArgumentType):
+                await api.grant(ID_HEX, GRANT.action)  # type: ignore[arg-type]
+            self.assertEqual(mock.queries, [])
+
+
+class RequestGrantTest(ApphostCase):
+    """`apphost.request_grant`: WA, one `mod.apphost.request_grant_request` in,
+    one `ack` out, and a decline that is an `error_message`."""
+
+    @bounded()
+    async def test_the_request_is_the_one_object_on_the_body(self):
         async with MockApphost(
-            routes={OP_GRANT: Accept(objects=(error_frame("missing action"),))}
+            routes={OP_REQUEST_GRANT: read_one_then(ACK_FRAME)}
+        ) as mock:
+            api = await self.apphost(mock)
+            self.assertIsNone(
+                await api.request_grant([DISCOVERY_PERMIT], duration=Duration(3600 * 10**9))
+            )
+        self.assertEqual(mock.queries[-1].query, OP_REQUEST_GRANT)
+        self.assertEqual(
+            body(mock),
+            [("mod.apphost.request_grant_request", go_payload("request_grant_request_full"))],
+        )
+
+    @bounded()
+    async def test_a_decline_and_an_origin_refusal_are_remote_errors(self):
+        for answer in (ERR_GRANT_DECLINED, "origin not allowed: network", "not permitted"):
+            with self.subTest(answer=answer):
+                async with MockApphost(
+                    routes={OP_REQUEST_GRANT: read_one_then(error_frame(answer))}
+                ) as mock:
+                    api = await self.apphost(mock)
+                    with self.assertRaises(RemoteError) as caught:
+                        await api.request_grant([GRANT])
+                self.assertEqual(caught.exception.message, answer)
+
+    @bounded()
+    async def test_an_empty_permit_list_is_refused_locally(self):
+        async with MockApphost(routes={}) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(BadArgument):
+                await api.request_grant([])
+            self.assertEqual(mock.queries, [])
+
+    @bounded()
+    async def test_the_default_timeout_waits_for_a_person(self):
+        """A delegate may wait on a person for up to ten minutes; the client's
+        60 s default would give up first."""
+        async with MockApphost(
+            routes={OP_REQUEST_GRANT: read_one_then(ACK_FRAME)}
+        ) as mock:
+            api = await self.apphost(mock)
+            seen: list[object] = []
+            real = api._c.call_with
+
+            async def spy(*args: object, **kw: object) -> object:
+                seen.append(kw.get("timeout"))
+                return await real(*args, **kw)
+
+            api._c.call_with = spy  # type: ignore[method-assign]
+            await api.request_grant([GRANT])
+            await api.request_grant([GRANT], timeout=5.0)
+        self.assertEqual(seen, [600.0, 5.0])
+
+    @bounded()
+    async def test_an_explicit_timeout_bounds_a_silent_policy(self):
+        async with MockApphost(routes={OP_REQUEST_GRANT: Accept(hold=True)}) as mock:
+            api = await self.apphost(mock)
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+            with self.assertRaises(QueryTimeout):
+                await api.request_grant([GRANT], timeout=0.2)
+            self.assertLess(loop.time() - started, 1.5)
+
+
+class ListGrantsTest(ApphostCase):
+    """`apphost.list_grants`: ST, `mod.apphost.grant` objects, then `eos`."""
+
+    @bounded()
+    async def test_the_grants_decode_with_their_ids(self):
+        frames = (
+            ("mod.apphost.grant", go_payload("grant_full")),
+            ("mod.apphost.grant", go_payload("grant_until_revoked")),
+        )
+        async with MockApphost(
+            routes={OP_LIST_GRANTS: Accept(objects=frames, eos=True)}
+        ) as mock:
+            api = await self.apphost(mock)
+            grants = await api.list_grants(ID_HEX)
+        self.assertEqual(mock.queries[-1].query, f"{OP_LIST_GRANTS}?identity={ID_HEX}")
+        self.assertEqual([g.id for g in grants], [7, 8])
+        self.assertEqual(grants[0].permit, DISCOVERY_PERMIT)
+        self.assertEqual(grants[0].expires_at, EXPIRES)
+        self.assertIsNone(grants[1].expires_at)
+
+    @bounded()
+    async def test_a_directory_name_costs_one_resolve_then_the_op(self):
+        async with MockApphost(
+            routes={
+                "dir.resolve?identity=furry-bolt": Accept(objects=(IDENTITY_FRAME,)),
+                OP_LIST_GRANTS: Accept(eos=True),
+            }
+        ) as mock:
+            api = await self.apphost(mock)
+            self.assertEqual(await api.list_grants("furry-bolt"), [])
+        self.assertEqual(
+            [q.query for q in mock.queries],
+            ["dir.resolve?identity=furry-bolt", f"{OP_LIST_GRANTS}?identity={ID_HEX}"],
+        )
+
+    @bounded()
+    async def test_a_bare_permit_is_a_protocol_error(self):
+        """astrald `5f17900d` answers `mod.auth.permit` objects here
+        (`op_list_grants.go:43-55`); the client declares `mod.apphost.grant`."""
+        permit = (
+            "mod.auth.permit",
+            bytes([len(GRANT.action)]) + GRANT.action.encode() + b"\x00\x00",
+        )
+        async with MockApphost(
+            routes={OP_LIST_GRANTS: Accept(objects=(permit,), eos=True)}
+        ) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(ProtocolError):
+                await api.list_grants(ID_HEX)
+
+    @bounded()
+    async def test_a_refusal_is_a_remote_error(self):
+        async with MockApphost(
+            routes={OP_LIST_GRANTS: Accept(objects=(error_frame("not permitted"),))}
         ) as mock:
             api = await self.apphost(mock)
             with self.assertRaises(RemoteError):
-                await api.grant(ID_HEX, self.DISCOVERY)
+                await api.list_grants(ID_HEX)
+
+
+class RevokeTest(ApphostCase):
+    """`apphost.revoke`: RR, one `ack`; `id` or `action`, never both."""
+
+    async def revoke(self, **kw: object) -> str:
+        async with MockApphost(routes={OP_REVOKE: Accept(objects=(ACK_FRAME,))}) as mock:
+            api = await self.apphost(mock)
+            self.assertIsNone(await api.revoke(ID_HEX, **kw))
+        return mock.queries[-1].query
+
+    @bounded()
+    async def test_an_id_names_one_grant(self):
+        self.assertEqual(await self.revoke(id=3), f"{OP_REVOKE}?id=3&identity={ID_HEX}")
+
+    @bounded()
+    async def test_an_action_names_every_grant_for_it(self):
+        self.assertEqual(
+            await self.revoke(action=GRANT.action),
+            f"{OP_REVOKE}?action={GRANT.action}&identity={ID_HEX}",
+        )
+
+    @bounded()
+    async def test_both_or_neither_never_reaches_the_node(self):
+        async with MockApphost(routes={OP_REVOKE: Accept()}) as mock:
+            api = await self.apphost(mock)
+            for kw, error in (
+                ({}, BadArgument),
+                ({"id": 1, "action": GRANT.action}, BadArgument),
+                ({"id": -1}, BadArgument),
+                ({"id": 1 << 64}, BadArgument),
+                ({"id": True}, BadArgumentType),
+                ({"id": "3"}, BadArgumentType),
+                ({"action": ""}, BadArgument),
+                ({"action": "x" * 256}, BadArgument),
+                ({"action": b"x"}, BadArgumentType),
+            ):
+                with self.subTest(kw=kw):
+                    with self.assertRaises(error):
+                        await api.revoke(ID_HEX, **kw)  # type: ignore[arg-type]
+            self.assertEqual(mock.queries, [])
+
+    @bounded()
+    async def test_a_grant_the_node_does_not_find_is_a_remote_error(self):
+        async with MockApphost(
+            routes={OP_REVOKE: Accept(objects=(error_frame(ERR_GRANT_NOT_FOUND),))}
+        ) as mock:
+            api = await self.apphost(mock)
+            with self.assertRaises(RemoteError) as caught:
+                await api.revoke(ID_HEX, id=9)
+        self.assertEqual(caught.exception.message, "grant not found")
 
 
 class TokenAndContractTest(ApphostCase):
@@ -798,129 +1417,109 @@ class TokenAndContractTest(ApphostCase):
 
 
 class RegisterTest(ApphostCase):
-    """`apphost.register`: RR, one `apphost.access_token`, three optional
-    arguments, and a decline that is an `error_message` rather than a reject."""
+    """`apphost.register`: WA, one `mod.apphost.register_request` in, one
+    `apphost.access_token` out, and a decline that is an `error_message`
+    rather than a reject."""
 
-    async def register(self, *args: object, **kw: object) -> tuple[AccessToken, str]:
+    async def register(self, **kw: object) -> tuple[AccessToken, MockApphost]:
         async with MockApphost(
-            routes={OP_REGISTER: Accept(objects=(TOKEN_FRAME,))}
+            routes={OP_REGISTER: read_one_then(TOKEN_FRAME)}
         ) as mock:
             api = await self.apphost(mock)
-            token = await api.register(*args, **kw)
-        return token, mock.queries[-1].query
+            token = await api.register(**kw)
+        return token, mock
 
     @bounded()
-    async def test_no_arguments_send_none_and_answer_a_token(self):
-        """The bootstrap an app with no credentials starts from: the node makes
-        the key, the contract and the token."""
-        token, query = await self.register()
+    async def test_no_arguments_send_one_zero_request_and_answer_a_token(self):
+        """The bootstrap an app with no credentials starts from. The object
+        travels even when empty, as astral-go's client sends it."""
+        token, mock = await self.register()
         self.assertEqual(token.token, TOKEN)
-        self.assertEqual(query, OP_REGISTER)
-
-    @bounded()
-    async def test_every_argument_travels_lowercase_with_sorted_keys(self):
-        """Each list is one comma-joined value, escaped as Go's
-        `url.QueryEscape` escapes it; `url.ParseQuery` hands the node the
-        commas back."""
-        _, query = await self.register(
-            ["mod.user.see_swarm_action", "mod.objects.read_object_action"],
-            ("mod.auth.see_objects_action",),
-            name="my chat",
-        )
+        self.assertEqual(mock.queries[-1].query, OP_REGISTER)
         self.assertEqual(
-            query,
-            f"{OP_REGISTER}?contract_permits=mod.auth.see_objects_action"
-            "&grant_permits=mod.user.see_swarm_action%2Cmod.objects.read_object_action"
-            "&name=my+chat",
+            body(mock), [("mod.apphost.register_request", go_payload("register_request_zero"))]
         )
 
     @bounded()
-    async def test_the_lists_are_keywords_too_and_any_iterable_serves(self):
-        _, query = await self.register(
-            contract_permits=(a for a in ["a.one", "a.two"])
+    async def test_the_name_and_both_lists_travel_in_the_object(self):
+        """Byte for byte astral-go's request: the discovery permit keeps its
+        scope and the contract permit its delegation."""
+        _, mock = await self.register(
+            name="smithd",
+            grant_permits=[DISCOVERY_PERMIT],
+            contract_permits=(p for p in [CONTRACT_PERMIT]),
         )
-        self.assertEqual(query, f"{OP_REGISTER}?contract_permits=a.one%2Ca.two")
+        self.assertEqual(mock.queries[-1].query, OP_REGISTER)
+        self.assertEqual(
+            body(mock), [("mod.apphost.register_request", go_payload("register_request_full"))]
+        )
 
     @bounded()
-    async def test_an_empty_list_sends_no_argument(self):
-        """astral-go's client sends nothing for no permits; the node reads an
-        absent list and an empty one alike."""
-        _, query = await self.register([], [])
-        self.assertEqual(query, OP_REGISTER)
+    async def test_an_action_name_becomes_an_unconstrained_permit(self):
+        _, mock = await self.register(grant_permits=["mod.user.see_swarm_action"])
+        request = RegisterRequest.read_payload(object_reader(body(mock)[0][1]))
+        self.assertEqual(request.grant_permits, [Permit(action="mod.user.see_swarm_action")])
+        self.assertEqual(request.contract_permits, [])
+        self.assertEqual(request.name, "")
 
     @bounded()
-    async def test_an_empty_name_is_sent_as_given(self):
-        _, query = await self.register(name="")
-        self.assertEqual(query, f"{OP_REGISTER}?name=")
-
-    @bounded()
-    async def test_a_permit_the_node_would_misread_never_reaches_it(self):
-        """The node splits on every comma, trims each piece and drops a blank
-        one, so each of these is an action the caller did not name."""
-        async with MockApphost(routes={OP_REGISTER: Accept()}) as mock:
-            api = await self.apphost(mock)
-            for key in ("grant_permits", "contract_permits"):
-                for bad in ("a,b", "", " ", " a", "a\n", "x" * 256):
-                    with self.subTest(key=key, permit=bad):
-                        with self.assertRaises(BadArgument) as caught:
-                            await api.register(**{key: ["ok.action", bad]})
-                        self.assertIn(key, str(caught.exception))
-            self.assertEqual(mock.queries, [])
-
-    @bounded()
-    async def test_a_255_byte_action_name_is_the_longest_sent(self):
-        name = "\u00e9" * 127 + "x"  # 255 UTF-8 bytes
-        with self.assertWarns(QueryStringTooLong):
-            _, query = await self.register([name])
-        self.assertTrue(query.startswith(f"{OP_REGISTER}?grant_permits="))
-        with self.assertRaises(BadArgument):
-            await self.register(["\u00e9" * 128])
-
-    @bounded()
-    async def test_a_bare_string_or_a_non_string_entry_is_a_type_error(self):
-        """A bare `str` would iterate its characters into single-letter
-        actions."""
-        async with MockApphost(routes={OP_REGISTER: Accept()}) as mock:
-            api = await self.apphost(mock)
-            for value in ("mod.user.see_swarm_action", b"x", [1], [None]):
-                with self.subTest(value=value):
-                    with self.assertRaises(BadArgumentType):
-                        await api.register(value)  # type: ignore[arg-type]
-            with self.assertRaises(BadArgumentType):
-                await api.register(name=b"chat")  # type: ignore[arg-type]
-            self.assertEqual(mock.queries, [])
-
-    @bounded()
-    async def test_a_name_over_255_bytes_never_reaches_the_node(self):
-        """`Name` is a `string8` in the request a delegate reads."""
-        with self.assertWarns(QueryStringTooLong):
-            _, query = await self.register(name="n" * 255)
-        self.assertEqual(query, f"{OP_REGISTER}?name={'n' * 255}")
+    async def test_the_longest_names_are_sent_and_one_byte_more_is_not(self):
+        action = "é" * 127 + "x"  # 255 UTF-8 bytes
+        _, mock = await self.register(name="n" * 255, grant_permits=[action])
+        request = RegisterRequest.read_payload(object_reader(body(mock)[0][1]))
+        self.assertEqual(request.name, "n" * 255)
+        self.assertEqual(request.grant_permits, [Permit(action=action)])
         with self.assertRaises(BadArgument):
             await self.register(name="n" * 256)
+        with self.assertRaises(BadArgument):
+            await self.register(contract_permits=["é" * 128])
+
+    @bounded()
+    async def test_a_malformed_argument_never_reaches_the_node(self):
+        """A bare `str` would iterate its characters into single-letter
+        actions; the lists are keyword-only, so positional ones are refused."""
+        async with MockApphost(routes={OP_REGISTER: read_one_then()}) as mock:
+            api = await self.apphost(mock)
+            for key in ("grant_permits", "contract_permits"):
+                for value, error in (
+                    ("mod.user.see_swarm_action", BadArgumentType),
+                    (b"x", BadArgumentType),
+                    (GRANT, BadArgumentType),
+                    ([1], BadArgumentType),
+                    ([None], BadArgumentType),
+                    ([""], BadArgument),
+                ):
+                    with self.subTest(key=key, value=value):
+                        with self.assertRaises(error) as caught:
+                            await api.register(**{key: value})
+                        self.assertIn(key, str(caught.exception))
+            with self.assertRaises(BadArgumentType):
+                await api.register(name=b"chat")  # type: ignore[arg-type]
+            with self.assertRaises(TypeError):
+                await api.register(["mod.user.see_swarm_action"])  # type: ignore[misc]
+            self.assertEqual(mock.queries, [])
 
     @bounded()
     async def test_a_declined_registration_is_a_remote_error(self):
         """The node accepts before its policy decides, so a refusal is an
         `error_message` in the stream, not `query_rejected_msg`."""
         async with MockApphost(
-            routes={
-                OP_REGISTER: Accept(objects=(error_frame(ERR_REGISTRATION_DECLINED),))
-            }
+            routes={OP_REGISTER: read_one_then(error_frame(ERR_REGISTRATION_DECLINED))}
         ) as mock:
             api = await self.apphost(mock)
             with self.assertRaises(RemoteError) as caught:
-                await api.register(["mod.user.see_swarm_action"])
+                await api.register(grant_permits=["mod.user.see_swarm_action"])
         self.assertEqual(caught.exception.message, "registration declined")
+        self.assertEqual(ERR_REGISTRATION_DECLINED, "registration declined")
 
     @bounded()
-    async def test_an_answer_of_the_wrong_type_is_a_protocol_error(self):
-        async with MockApphost(
-            routes={OP_REGISTER: Accept(objects=(ACK_FRAME,))}
-        ) as mock:
-            api = await self.apphost(mock)
-            with self.assertRaises(ProtocolError):
-                await api.register()
+    async def test_an_answer_of_the_wrong_type_or_none_is_a_protocol_error(self):
+        for route in (read_one_then(ACK_FRAME), read_one_then()):
+            with self.subTest(route=route):
+                async with MockApphost(routes={OP_REGISTER: route}) as mock:
+                    api = await self.apphost(mock)
+                    with self.assertRaises(ProtocolError):
+                        await api.register()
 
 
 class SetAppRegisterPolicyTest(ApphostCase):
@@ -1648,14 +2247,10 @@ class SecurityNoteTest(unittest.TestCase):
             (f"{self.SRC}/op_hold_object.go", 37, "auth.ErrNotPermitted"),
             (f"{self.SRC}/op_request_grant.go", 40, "requester.IsZero()"),
             (f"{self.SRC}/op_request_grant.go", 62, "ErrGrantDeclined"),
-            (f"{self.SRC}/op_grant.go", 21, "OpGrant records"),
             (f"{self.SRC}/op_grant.go", 29, "q.AcceptRaw()"),
             (f"{self.SRC}/op_grant.go", 34, "OriginNetwork"),
             (f"{self.SRC}/op_grant.go", 38, admin),
             (f"{self.SRC}/op_grant.go", 47, "identity.IsZero()"),
-            (f"{self.SRC}/op_grant.go", 58, "args.Duration != 0"),
-            (f"{self.SRC}/op_grant.go", 68, "args.Constrained"),
-            (f"{self.SRC}/op_grant.go", 70, "FailOnEOF"),
         )
         for path, number, fragment in cites:
             with self.subTest(citation=f"{path}:{number}"):
@@ -1668,7 +2263,7 @@ class SecurityNoteTest(unittest.TestCase):
 
 class RegisterCitationTest(unittest.TestCase):
     """Every `path:line` the register and register-policy prose cites, read at
-    the pins, and the separator claim read off the source rather than trusted."""
+    the pins."""
 
     SRC = "mod/apphost/src"
 
@@ -1679,17 +2274,13 @@ class RegisterCitationTest(unittest.TestCase):
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 39, "}"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 51,
              "requestedContractPermits := parsePermits(args.ContractPermits)"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 53, "why accept before deciding"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 55, "query.AcceptRaw()"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 60, "OriginNetwork"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 62, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 69, "GetRegisterAppPolicy()"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 75, "switch {"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 78, "ErrRegistrationDeclined"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 86, "}"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 128, "Add(RegisterDuration)"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 133, "range grantPermits"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 137, "}"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 178, "CreateAccessToken(guestID"),
             (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 14,
              "type opSetPolicyArgs struct"),
@@ -1706,7 +2297,6 @@ class RegisterCitationTest(unittest.TestCase):
             (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 83,
              "func (mod *Module) newDelegate"),
             (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 93, "d.Validate()"),
-            (reference.ASTRALD, f"{self.SRC}/parse_permits.go", 12, "func parsePermits"),
             (reference.ASTRALD, f"{self.SRC}/register_grant_request.go", 17,
              "func registerGrantRequest"),
             (reference.ASTRALD, f"{self.SRC}/register_grant_request.go", 20,
@@ -1714,11 +2304,6 @@ class RegisterCitationTest(unittest.TestCase):
             (reference.ASTRALD, "mod/apphost/register_policy.go", 29, "func AcceptAll"),
             (reference.ASTRAL_GO, "api/apphost/errors.go", 7,
              'NewError("registration declined")'),
-            (reference.ASTRAL_GO, "api/apphost/client/register.go", 38,
-             "func (client *Client) Register(ctx *astral.Context, permits ...string)"),
-            (reference.ASTRAL_GO, "api/apphost/client/register.go", 70, "func registerArgs"),
-            (reference.ASTRAL_GO, "lib/query/field_editor.go", 41, "case reflect.String:"),
-            (reference.ASTRAL_GO, "lib/query/field_editor.go", 42, 'String8("").ObjectType()'),
             (reference.ASTRAL_GO, "astral/string_types.go", 25, "if len(s) > 1<<8-1"),
         )
         for repo, path, number, fragment in cites:
@@ -1728,21 +2313,6 @@ class RegisterCitationTest(unittest.TestCase):
                 except reference.Unavailable as exc:  # pragma: no cover
                     self.skipTest(str(exc))
                 self.assertIn(fragment, line)
-
-    def test_the_node_splits_on_commas_and_trims_each_piece(self):
-        """What `_permits` refuses is what `parsePermits` would misread."""
-        try:
-            src = reference.read(reference.ASTRALD, f"{self.SRC}/parse_permits.go")
-            args = reference.read(reference.ASTRALD, f"{self.SRC}/op_register.go")
-        except reference.Unavailable as exc:  # pragma: no cover
-            self.skipTest(str(exc))
-        self.assertIn('strings.Split(joined, ",")', src)
-        self.assertIn("strings.TrimSpace(action)", src)
-        self.assertIn('action != ""', src)
-        for field in ("GrantPermits string", "ContractPermits string", "Name string"):
-            with self.subTest(field=field):
-                self.assertIn(field, args)
-        self.assertEqual(ERR_REGISTRATION_DECLINED, "registration declined")
 
 
 class ModulePatternTest(ApphostCase):
@@ -1819,9 +2389,16 @@ class ModulePatternTest(ApphostCase):
         self.assertEqual(mod._OBJECT_ID["id"], Primitive("object_id.sha256"))
         self.assertEqual(mod._CANCEL["query_id"], Primitive("nonce64"))
         self.assertEqual(
-            mod._REGISTER,
-            {key: Primitive("string8") for key in ("grant_permits", "contract_permits", "name")},
+            mod._REVOKE,
+            {
+                "identity": Primitive("string8"),
+                "id": Primitive("uint64"),
+                "action": Primitive("string8"),
+            },
         )
+        # The comma-list encoding and the query-argument grant are gone.
+        for name in ("_REGISTER", "_GRANT", "_permits"):
+            self.assertFalse(hasattr(mod, name), name)
 
         # The declaration is what refuses a wrong-typed value. Without it the
         # encoder dispatches on the value and sends base64 for bytes.

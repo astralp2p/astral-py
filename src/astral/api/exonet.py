@@ -1,7 +1,7 @@
 """`exonet`: the endpoint abstraction, and the registry of endpoint types.
 
 Tier 2, and the one module in this package with **no ops at all**.
-`api/exonet/module.go` at astral-go `a2b41561` declares one interface and nothing
+`api/exonet/module.go` at astral-go `dbc27574` declares one interface and nothing
 else -- no method constants, no client package, no docs directory:
 
     type Endpoint interface {
@@ -246,7 +246,7 @@ def _require(types: EndpointTypes, network: str) -> type[Endpoint]:
     """The class for a network name, or the fault of there being none.
 
     astrald answers `ErrUnsupportedNetwork` here, the `unsupported network`
-    error astral-go declares (`api/exonet/errors.go`, astral-go `a2b41561`) and
+    error astral-go declares (`api/exonet/errors.go`, astral-go `dbc27574`) and
     `mod/exonet/errors.go` names (astrald `5f17900d`). This SDK adds no exception
     class for it: an unregistered network is an argument this SDK refuses before
     it sends anything, which is `BadArgument`.

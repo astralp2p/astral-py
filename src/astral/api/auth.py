@@ -79,7 +79,7 @@ EOF, answers one
 `mod.auth.signed_contract` or `error_message` per input in input order, and
 **mirrors the input stream's terminator** -- an explicit `eos` is answered with a
 final `eos`, a stream ended by EOF is not (`astral/channel/batch.go` at astral-go
-`a2b41561`). A body-input op whose reader omits an `eos` branch answers the same
+`dbc27574`). A body-input op whose reader omits an `eos` branch answers the same
 terminator with an `error_message`
 (`astral-go/astral/channel/switch.go:110`), so the terminator is a per-op
 contract rather than a protocol rule.
@@ -113,12 +113,12 @@ promotes anonymous fields. The nesting is astral-go's rule; the flattening is
 Go's default showing through a gap.
 
 **`auth.Action` is a registered astral object at the pin.**
-`api/auth/action.go` at astral-go `a2b41561` declares
+`api/auth/action.go` at astral-go `dbc27574` declares
 `func (Action) ObjectType() string { return "mod.auth.action" }` (line 22) and
-registers it with `astral.MustAdd(&Action{})` (line 55).
+registers it with `astral.MustAdd(&Action{})` (line 61).
 
 That changes what astral-go can derive. `specFromType` probes `tryObjectType`
-ahead of its container dispatch (`astral/blueprint_reflect.go` at `a2b41561`), so
+ahead of its container dispatch (`astral/blueprint_reflect.go` at `dbc27574`), so
 an embedded `auth.Action` field now yields a `RefSpec` naming
 `mod.auth.action` rather than failing.
 
@@ -135,7 +135,7 @@ would nest the two fields in JSON under a key no node sends.
 **`mod.auth.sudo_action` exists, and astral-go's `api/auth` declares it.**
 astral-go `5923624` declares `SudoAction` in `api/auth/sudo_action.go` and
 registers it with `astral.Add`; astrald `09d9df87` stopped declaring it. The
-pins (astral-go `a2b41561`, astrald `5f17900d`) carry both commits, so
+pins (astral-go `dbc27574`, astrald `5f17900d`) carry both commits, so
 `api/auth/sudo_action.go` is the one declaration and `mod/auth/sudo_action.go`
 does not exist there. A node answers `objects.new?type=mod.auth.sudo_action`
 with a ten-byte zero instance, verified on an isolated astrald built from
