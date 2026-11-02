@@ -51,11 +51,12 @@ and `dir.apply_filters?filters=` answers `bool(false)`.
 **`set_alias` needs both arguments, `alias` included when it is empty.**
 astrald declares `Alias *string` with `query:"required"` and the comment
 "required but can be empty" (`mod/dir/src/op_set_alias.go` `opSetAliasArgs.Alias`,
-line 12 at astrald `48ae88b2`); the required
+line 12 at astrald `5f17900d`); the required
 check tests key **presence** in the parsed parameters
-(`astral-go/lib/routing/op.go:166`). Removal is therefore `alias=` with an empty
-value, which is a different query string from an absent `alias`. Design bug
-D-18. `remove_alias()` is the named form of it.
+(`astral-go/lib/routing/op.go:235`), and the op answers an absent `alias` with
+an `error_message` reading `argument required: alias`. Removal is therefore
+`alias=` with an empty value, which is a different query string from an absent
+`alias`. Design bug D-18. `remove_alias()` is the named form of it.
 
 **Four arguments named `identity`, one type, resolved by the node.** astrald
 declares `Identity string` on `dir.resolve`, `dir.get_alias`, `dir.set_alias`
@@ -96,8 +97,8 @@ package eagerly so registration never depends on the property being touched.
 **Source citations name the symbol as well as the line.** astrald is a moving
 target and three anchors in this file had already drifted by a line or two, which
 costs a reader more than an absent citation: it makes them distrust the exact
-ones. Line numbers below are pinned to astrald `48ae88b2` and astral-go
-`8972f283`, the revisions `tests/reference.py` pins, and no citation names
+ones. Line numbers below are pinned to astrald `5f17900d` and astral-go
+`a2b41561`, the revisions `tests/reference.py` pins, and no citation names
 another revision.
 """
 
@@ -147,7 +148,7 @@ OP_SET_ALIAS: Final = "dir.set_alias"
 
 # astrald joins and splits filter names on this byte, so a name containing one
 # is two names on the server (`mod/dir/src/op_apply_filters.go` `OpApplyFilters`,
-# line 30 at astrald `48ae88b2`).
+# line 30 at astrald `5f17900d`).
 FILTER_SEPARATOR: Final = ","
 
 # The parameter specs, so every value travels as the bare payload half of its
@@ -383,8 +384,9 @@ class Dir(ModuleClient):
                     "identity": _param(
                         _STRING8, _identity(identity, OP_SET_ALIAS).text()
                     ),
-                    # Never omitted. An absent key is a rejected query, an empty
-                    # value is a removal, and the two are different bytes.
+                    # Never omitted. An absent key is an `argument required`
+                    # error, an empty value is a removal, and the two are
+                    # different bytes.
                     "alias": _param(_STRING8, alias),
                 },
             ),

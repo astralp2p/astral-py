@@ -16,8 +16,8 @@ claim:
   signature and never verifies anything; the tests below assert on the frames
   the mock received, so an implementation that stopped streaming would fail
   here rather than silently pass everything.
-- **Tier C** runs the read-only half against a real node. Every anonymous sign
-  call is a refusal: the node's own key with no `key`,
+- **Tier C** runs the read-only half against a real node, as the node through
+  `ASTRAL_TEST_NODE_TOKEN`. Every sign call there is a refusal: the node's own key with no `key`,
   and the public key of a private key `secp256k1.new` generated and the node
   stored nowhere with one. The four paths that produce a real signature --
   `sign_hash` in its RR query-argument form, `sign_text` with its payload on the
@@ -130,7 +130,7 @@ names itself so a signature found in a log is traceable to this suite.
 
 NODE_KEY = "cannot sign with the node's key"
 """astrald's `ErrNodeKeyNotSignable`: the answer to a caller that would sign as
-the node, which an anonymous caller is."""
+the node, which a session holding the node's token is."""
 
 FOREIGN_KEY = "cannot sign with another identity's key"
 """astrald's `ErrForeignKey`: the answer to a key that is neither the caller's
@@ -1105,18 +1105,20 @@ class AstraldParityTest(unittest.TestCase):
             'ErrUnsupportedKeyType = errors.New("unsupported key type")', errors
         )
 
-    def test_public_key_is_reachable_with_no_credential_at_all(self):
-        """Both halves of the module docstring's security claim. An IPC guest is
-        never gated -- `blocksAnonymousWeb` returns false for an empty web origin
-        -- and an unauthenticated browser guest reaches the same op while the
-        node is unclaimed."""
-        self.assertIn(
-            'if webOrigin == "" || authenticated {',
-            self.source("mod/apphost/src/setup_guard.go"),
-        )
+    def test_public_key_asks_no_action_and_needs_a_token(self):
+        """Both halves of the module docstring's access claim. The op asks no
+        authorizer, and apphost confines a session without a token, IPC and
+        WebSocket alike, to `anonymous_allowlist`, which names no `crypto.*`
+        op in either claim state."""
+        body = self.source(f"{self.ASTRALD}/op_public_key.go")
+        self.assertIn("no action gates this op", body)
+        self.assertNotIn("Authorize", body)
+        guard = self.source("mod/apphost/src/setup_guard.go")
+        self.assertIn("why every such session, IPC included", guard)
+        self.assertIn("return slices.Contains(allowlist, opPath)", guard)
         source = self.source("mod/apphost/src/config.go")
-        unclaimed = source.split("Unclaimed:")[1].split("Claimed:")[0]
-        self.assertIn('"crypto.public_key"', unclaimed)
+        allowlist = source.split("AnonymousAllowlist: AnonymousAllowlist{")[1]
+        self.assertNotIn('"crypto.', allowlist)
 
     def test_the_node_logs_the_query_string_of_every_routed_query(self):
         """Why `sign_text` keeps its text off the query string. The hook in
@@ -1155,14 +1157,13 @@ class AstraldParityTest(unittest.TestCase):
 
 
 class LiveCryptoTest(live_support.LiveCase):
-    """The read-only half, against a real node, as an anonymous caller.
+    """The read-only half, against a real node, as the node's own token.
 
     Nothing here sends a private key whose type is not `secp256k1`.
 
     **Every sign call here is refused.** A caller signs
-    only as itself, the core router makes an anonymous caller the node, and the
-    node's key is never signable through the op surface. So the anonymous tier
-    asserts the two refusals, and the signatures that prove the RR form, the
+    only as itself, the live tier's token names the node, and the node's key
+    is never signable through the op surface. So this tier asserts the two refusals, and the signatures that prove the RR form, the
     body form and the verdict path come from `LiveSigningTest`, under a token.
     """
 
@@ -1321,8 +1322,8 @@ class LiveCryptoTest(live_support.LiveCase):
             await client.aclose()
 
     @bounded(30)
-    async def test_an_anonymous_caller_cannot_sign_with_the_node_s_key(self):
-        """The core router makes an anonymous caller the node, and the node's
+    async def test_the_node_cannot_sign_with_its_own_key(self):
+        """The live tier's token names the node, and the node's
         key is refused on the self branch of `AuthorizeSigner`. Checked in all
         three forms, because each reaches the guard by a different path."""
         client = await self.client()
@@ -1347,7 +1348,7 @@ class LiveSigningTest(live_support.LiveCase):
 
     Runs only when `ASTRAL_TEST_TOKEN` names an identity whose private key the
     node holds -- `apphost.register` issues one -- because a caller signs only
-    as itself and an anonymous caller is the node, whose key is refused. Registering one here would be a write, which the
+    as itself and the live tier's own token names the node, whose key is refused. Registering one here would be a write, which the
     live tier does not perform, so the token is set out of band.
 
     This tier used to obtain no signature at all, which left the module's most

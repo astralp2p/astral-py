@@ -13,7 +13,10 @@ Tier 2, four ops, and the whole of a wallet's key chain::
 | `bip137sig.derive_key` | WA | `bip137sig.seed` on the body, `path=` | `mod.crypto.private_key` | pure computation |
 
 All four generate or derive and store nothing, on the node's side and on this
-one; all four are on astrald's anonymous-web allowlist for an unclaimed node.
+one. No action gates any of the four (the comment above each `Op` method in
+`astrald/mod/bip137sig/src/op_*.go`), and none is on astrald's
+`anonymous_allowlist` (`astrald/mod/apphost/src/config.go:55-69`), so a session
+reaches them with a token and a session without one is denied.
 
 **The first three have a local form that needs no node**, because the values
 they carry are the master secret of a wallet: `new_entropy_local`,
@@ -200,7 +203,7 @@ class _Bytes8Alias(AliasRecord):
 
         **The length rule holds here too, and in astral-go it does not.** Go
         checks it in `WriteTo`/`ReadFrom` and not in `MarshalText`/`UnmarshalText`
-        (`api/bip137sig/entropy.go` at `8972f283`), so over there a JSON or text
+        (`api/bip137sig/entropy.go` at `a2b41561`), so over there a JSON or text
         channel carries an entropy the binary channel refuses -- and once such a
         value exists nothing can re-emit it, because the only encoding it came
         through is the one that let it in. The rule belongs to the type rather

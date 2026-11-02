@@ -119,11 +119,11 @@ string, sends no zone the caller did not ask for, and sends the `eos`.
 
 **The `zone` argument is not the routing zone, and on four ops it destroys it.**
 Eight ops declare a `zone` query-string argument. astrald sets the op's context
-zone from `route_query_msg.Zone` (`mod/apphost/src/guest.go:170`), and then
+zone from `route_query_msg.Zone` (`mod/apphost/src/guest.go:171`), and then
 `describe`, `find`, `search` and `read` *narrow* it with `LimitZone` when the
-argument is present (`mod/objects/src/op_describe.go:40`,
-`mod/objects/src/op_find.go:32`, `mod/objects/src/op_search.go:41`,
-`mod/objects/src/op_read.go:33`) while `scan`, `delete`, `purge` and `load`
+argument is present (`mod/objects/src/op_describe.go:43`,
+`mod/objects/src/op_find.go:35`, `mod/objects/src/op_search.go:44`,
+`mod/objects/src/op_read.go:37`) while `scan`, `delete`, `purge` and `load`
 *replace* it with `WithZone` -- defaulting to `ZoneAll` when the argument is
 absent. So on those last four a routing zone the caller set is silently
 discarded. This module therefore takes one
@@ -1920,10 +1920,11 @@ class Objects(ModuleClient):
         request the node clamps to its own maximum, and `None` leaves the lease to
         the node's default.
 
-        Local-only: a network-origin query is rejected outright. The caller must
-        have a **non-zero identity that is not the node's own**, so an anonymous
-        guest -- for whom the router substitutes the node's identity -- answers
-        `error_message` rather than registering.
+        Local-only: the node accepts and answers a network-origin query with
+        `origin not allowed: network`. The caller must have a **non-zero
+        identity that is not the node's own**, so a session holding the node's
+        token answers `error_message` rather than registering, and a session
+        without a token is denied the op before it is routed.
         """
         return self._expect(
             await self._c.call_one(_register(OP_REGISTER_SEARCHER, duration), **kw),

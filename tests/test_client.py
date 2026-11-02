@@ -1050,9 +1050,9 @@ class ServeTest(ClientCase):
 
     @bounded()
     async def test_an_anonymous_client_cannot_name_the_identity_it_serves(self):
-        """Its `guest_id` is `None`, the core router substitutes the node's own
-        identity for the nil caller, and a client that cannot name the identity
-        it will be registered under cannot be asked to confirm it."""
+        """Its `guest_id` is `None`, it has no identity to be registered under,
+        and astrald denies `apphost.register_handler` to a session without a
+        token, so it cannot be asked to confirm one."""
         async with MockApphost() as mock:
             client = await self.client(mock)
             with self.assertRaises(BadArgument) as caught:

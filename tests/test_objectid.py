@@ -207,7 +207,7 @@ class PartialTextFormTests(unittest.TestCase):
     The size-71 vector rests on astral-docs alone, which under `CLAUDE.md` does
     not establish a wire fact. It is kept for the one thing the `hello` vector
     cannot show -- a body opening on `b` -- and the parser behaviour it covers
-    is established independently: astral-go `astral/object_id.go:36` at the pin
+    is established independently: astral-go `astral/object_id.go:39` at the pin
     accepts exactly these bodies, and `test_every_derived_id_has_a_partial_form_that_parses_back`
     covers both openers over hashes this module computes itself.
     """

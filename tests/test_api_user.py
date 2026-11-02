@@ -1,4 +1,4 @@
-"""The `user` module client: eighteen ops, fourteen types, one non-`eos` stream.
+"""The `user` module client: twenty-one ops, seventeen types, one non-`eos` stream.
 
 Three tiers in one file, because the same claim is made at each and the three
 must agree:
@@ -11,27 +11,29 @@ must agree:
   frame with **no** `eos` after it. The last is the whole reason design section
   3.10 names a third streaming shape. The fifth is from an unclaimed node at
   astrald `26bb51d5`: `user.new_node_contract` answering the three-permit
-  contract that replaced the four-permit one. The sixth is from an unclaimed
-  node at astrald `48ae88b2`: `user.bootstrap` answering the user the BIP-39
-  test words derive, read raw after hand-framed words.
-- **Tier B** pins the eighteen ops against `MockApphost`: the query string each
+  contract that replaced the four-permit one. The sixth and seventh are from an
+  unclaimed isolated astrald built from `5f17900d`: `user.derive_identity` and
+  `user.bootstrap` answering the user the BIP-39 test words derive, read raw
+  after hand-framed words.
+- **Tier B** pins the twenty-one ops against `MockApphost`: the query string each
   one builds, the answer each one accepts, the three body-input ops' frame order
   and their absent terminator, and the guards that keep an empty target from
   reaching a node that would read it as `anyone`.
 - **Tier C** runs the read-only ops against a real node. Nothing here mutates:
   `adopt`, `expel`, `add_asset`, `remove_asset`, `sync_with`,
   `request_membership`, `accept_contract`, `accept_membership`, `bootstrap`,
-  `set_swarm_join_policy` and `set_swarm_invite_policy` are exercised against
-  the mock alone.
+  `join`, `set_swarm_join_policy`, `set_swarm_invite_policy` and
+  `set_contract_accept_policy` are exercised against the mock alone, and so is
+  `derive_identity`.
 
 `furry-bolt` is **claimed** -- it holds an active contract issued by
 `03a40290…941d` -- so `user.info` and `user.swarm_status` answer there rather than
-rejecting with code 2. Both states are legal and neither is this SDK's to
-choose, so the live tier probes which one it faces and asserts the refusal an
-unclaimed node gives, or the decoded object a claimed one does. Verified
-unclaimed on astrald `26bb51d5`; the claimed path was last verified on
-`furry-bolt`, before astrald `f0f162d0` put an authorizer in front of every swarm
-read.
+answering `no active contract`. Both states are legal and neither is this SDK's
+to choose, so the live tier probes which one it faces and asserts the refusal an
+unclaimed node gives, or the decoded object a claimed one does. The unclaimed
+refusals were verified on an isolated astrald built from `5f17900d`; the claimed
+path was last verified on `furry-bolt`, before astrald `f0f162d0` put an
+authorizer in front of every swarm read.
 """
 
 from __future__ import annotations
@@ -48,6 +50,12 @@ from astral.api.user import (
     AssetSync,
     BootstrapResult,
     DEFAULT_CONTRACT_VALIDITY,
+    DeriveIdentityResult,
+    ERR_ALREADY_CLAIMED,
+    ERR_CONTRACT_DECLINED,
+    ERR_JOIN_SELF,
+    ERR_NO_ACTIVE_CONTRACT,
+    ERR_REQUEST_DECLINED,
     EVENT_ASSETS,
     Expulsion,
     Info,
@@ -59,13 +67,16 @@ from astral.api.user import (
     OP_ADOPT,
     OP_ASSETS,
     OP_BOOTSTRAP,
+    OP_DERIVE_IDENTITY,
     OP_EXPEL,
     OP_INFO,
+    OP_JOIN,
     OP_LIST_EXPELLED,
     OP_LIST_SIBLINGS,
     OP_NEW_NODE_CONTRACT,
     OP_REMOVE_ASSET,
     OP_REQUEST_MEMBERSHIP,
+    OP_SET_CONTRACT_ACCEPT_POLICY,
     OP_SET_SWARM_INVITE_POLICY,
     OP_SET_SWARM_JOIN_POLICY,
     OP_SWARM_STATUS,
@@ -93,7 +104,6 @@ from astral.errors import (
     BadArgumentType,
     ParseError,
     ProtocolError,
-    QueryRejected,
     QueryTimeout,
     RemoteError,
 )
@@ -119,7 +129,6 @@ from mock_apphost import (
     MockApphost,
     MockConn,
     QUERY_ACCEPTED,
-    Reject,
     RouteQuery,
     bounded,
     error_msg_payload,
@@ -206,20 +215,34 @@ BOOTSTRAP_USER = Identity.parse(
     "02ea6286d75732e42ec1204efbb772ecb9016b962e6c0195ba7dd19bd78832fcd2"
 )
 """The user `BOOTSTRAP_WORDS` derive along `m/1791'/0'/0'/0/0` with no
-passphrase. Verified on astrald `48ae88b2` twice: `user.bootstrap` claimed an
-unclaimed node for it, and `bip137sig.seed`, `bip137sig.derive_key` on that path
-and `crypto.public_key` answered the same key."""
+passphrase. Verified on an isolated astrald built from `5f17900d`:
+`user.derive_identity` answered it, and `user.bootstrap` claimed an unclaimed
+node for it (`LIVE_DERIVE_BODY`, `LIVE_BOOTSTRAP_BODY`)."""
 
 LIVE_BOOTSTRAP_BODY = bytes.fromhex(
-    "196d6f642e757365722e626f6f7473747261705f726573756c7400000024"  # frame, 36 B
+    "196d6f642e757365722e626f6f7473747261705f726573756c7400000045"  # frame, 69 B
+    "01"                                                            # Identity present
+    "02ea6286d75732e42ec1204efbb772ecb9016b962e6c0195ba7dd19bd78832fcd2"
+    "0000"                                                          # Mnemonic, empty
+    "20"                                                            # Token, 32 B
+    "66464a4f574c4f746a4a656261464c54696c755039503331457451703965536f"
+)
+"""`user.bootstrap` with `BOOTSTRAP_WORDS` on the body, from a token-less
+session on an unclaimed isolated astrald built from `5f17900d`, read with
+`Stream.read_bytes` after a hand-framed `string16`. One frame, then EOF and no
+`eos`; `Mnemonic` is empty because the caller sent the words, and `Token` is the
+token that node issued for the user (the node is gone, and the token with it)."""
+
+LIVE_BOOTSTRAP_TOKEN = "fFJOWLOtjJebaFLTiluP9P31EtQp9eSo"
+
+LIVE_DERIVE_BODY = bytes.fromhex(
+    "1f6d6f642e757365722e6465726976655f6964656e746974795f726573756c7400000024"
     "01"                                                            # Identity present
     "02ea6286d75732e42ec1204efbb772ecb9016b962e6c0195ba7dd19bd78832fcd2"
     "0000"                                                          # Mnemonic, empty
 )
-"""`user.bootstrap` with `BOOTSTRAP_WORDS` on the body, on an unclaimed node at
-astrald `48ae88b2`, read with `Stream.read_bytes` after a hand-framed `string16`.
-One frame, then EOF and no `eos`; `Mnemonic` is empty because the caller sent
-the words."""
+"""`user.derive_identity` with `BOOTSTRAP_WORDS` on the body, captured the same
+way on the same node before the claim."""
 
 USER_ID = Identity.parse(
     "03a40290fa01b9127b06f3dd990219939274e2e61afab7445f608ad652839f941d"
@@ -301,6 +324,15 @@ class LiveCaptureTest(unittest.TestCase):
         (type_name, payload), = frames_of(LIVE_BOOTSTRAP_BODY)
         self.assertEqual(type_name, BootstrapResult.ASTRAL_TYPE)
         result = BootstrapResult.read_payload(object_reader(payload))
+        self.assertEqual(result.identity, BOOTSTRAP_USER)
+        self.assertEqual(result.mnemonic, "")
+        self.assertEqual(result.token, LIVE_BOOTSTRAP_TOKEN)
+        self.assertEqual(payload_bytes(result), payload)
+
+    def test_the_derive_frame_decodes_to_the_same_user(self):
+        (type_name, payload), = frames_of(LIVE_DERIVE_BODY)
+        self.assertEqual(type_name, DeriveIdentityResult.ASTRAL_TYPE)
+        result = DeriveIdentityResult.read_payload(object_reader(payload))
         self.assertEqual(result.identity, BOOTSTRAP_USER)
         self.assertEqual(result.mnemonic, "")
         self.assertEqual(payload_bytes(result), payload)
@@ -445,24 +477,41 @@ class RoundTripTest(unittest.TestCase):
 
     def test_a_bootstrap_result_round_trips(self):
         self.assert_round_trips(
-            BootstrapResult(identity=BOOTSTRAP_USER, mnemonic=BOOTSTRAP_WORDS)
+            BootstrapResult(
+                identity=BOOTSTRAP_USER, mnemonic=BOOTSTRAP_WORDS, token=LIVE_BOOTSTRAP_TOKEN
+            )
         )
 
     def test_a_bootstrap_result_s_zero_value_is_the_node_s(self):
-        """`objects.new?type=mod.user.bootstrap_result` on astrald `48ae88b2`:
-        one nil flag and an empty `string16` in binary, a null and an empty
-        string in JSON."""
-        self.assertEqual(payload_bytes(BootstrapResult()).hex(), "000000")
+        """`objects.new?type=mod.user.bootstrap_result` on an isolated astrald
+        built from `5f17900d` answered `00000000`: one nil flag, an empty
+        `string16` and an empty `string8`."""
+        self.assertEqual(payload_bytes(BootstrapResult()).hex(), "00000000")
         self.assertEqual(
             jsoncodec.marshal(BootstrapResult()),
-            json.loads('{"Identity":null,"Mnemonic":""}'),
+            json.loads('{"Identity":null,"Mnemonic":"","Token":""}'),
         )
 
-    def test_a_bootstrap_result_s_repr_never_shows_the_words(self):
-        result = BootstrapResult(identity=BOOTSTRAP_USER, mnemonic=BOOTSTRAP_WORDS)
+    def test_a_bootstrap_result_s_repr_never_shows_the_words_or_the_token(self):
+        result = BootstrapResult(
+            identity=BOOTSTRAP_USER, mnemonic=BOOTSTRAP_WORDS, token=LIVE_BOOTSTRAP_TOKEN
+        )
+        self.assertNotIn("abandon", repr(result))
+        self.assertNotIn(LIVE_BOOTSTRAP_TOKEN, repr(result))
+        self.assertIn("<12 words>", repr(result))
+        self.assertIn("token=<set>", repr(result))
+        self.assertIn("<0 words>", repr(BootstrapResult()))
+        self.assertIn("token=<empty>", repr(BootstrapResult()))
+
+    def test_a_derive_identity_result_s_zero_value_is_the_node_s(self):
+        """`objects.new?type=mod.user.derive_identity_result` on the same node
+        answered `000000`: one nil flag and an empty `string16`."""
+        self.assertEqual(payload_bytes(DeriveIdentityResult()).hex(), "000000")
+
+    def test_a_derive_identity_result_s_repr_never_shows_the_words(self):
+        result = DeriveIdentityResult(identity=BOOTSTRAP_USER, mnemonic=BOOTSTRAP_WORDS)
         self.assertNotIn("abandon", repr(result))
         self.assertIn("<12 words>", repr(result))
-        self.assertIn("<0 words>", repr(BootstrapResult()))
 
     def test_every_zero_value_round_trips(self):
         for kind in USER_TYPES:
@@ -474,8 +523,9 @@ class BlueprintParityTest(unittest.TestCase):
     """Every declaration equals the node's own blueprint for that type.
 
     The field orders below were read from `objects.get_blueprint?type=…` on
-    `furry-bolt` this session, one query per type; `mod.user.bootstrap_result`'s
-    on an isolated astrald built from `48ae88b2`, and the policy types' on one
+    `furry-bolt` this session, one query per type; `mod.user.bootstrap_result`'s,
+    `mod.user.derive_identity_result`'s and the two contract accept types' on an
+    isolated astrald built from `5f17900d`, and the swarm policy types' on one
     built from `1286a469`. The action types are
     absent: that op refuses them -- `BlueprintFromType …Action: type auth.Action
     does not implement Object and is not a supported container` -- which is the
@@ -520,7 +570,17 @@ class BlueprintParityTest(unittest.TestCase):
         "mod.user.bootstrap_result": [
             ("Identity", "ptr:identity"),
             ("Mnemonic", "primitive:string16"),
+            ("Token", "primitive:string8"),
         ],
+        "mod.user.derive_identity_result": [
+            ("Identity", "ptr:identity"),
+            ("Mnemonic", "primitive:string16"),
+        ],
+        "mod.user.contract_accept_request": [
+            ("Caller", "ptr:identity"),
+            ("Contract", "ptr:mod.auth.signed_contract"),
+        ],
+        "mod.user.contract_accept_decision": [("Allow", "primitive:bool")],
     }
 
     @staticmethod
@@ -600,16 +660,15 @@ class TypeRegistrationTest(unittest.TestCase):
             with self.subTest(type=kind.ASTRAL_TYPE):
                 self.assertTrue(kind.ASTRAL_TYPE.startswith(("mod.user.", "mod.users.")))
 
-    def test_the_op_names_are_the_eighteen_the_registry_reports(self):
-        """The live `shell.spec` registry answered these `user.*` names: the
-        first fifteen on `furry-bolt`, seventeen on an isolated astrald built
-        from `1286a469`, and all eighteen on one built from `48ae88b2`."""
+    def test_the_op_names_are_the_twenty_one_the_registry_reports(self):
+        """The `shell.spec` registry of an isolated astrald built from
+        `5f17900d` answered exactly these twenty-one `user.*` names."""
         names = sorted(
             value
             for name, value in vars(user_module).items()
             if name.startswith("OP_") and isinstance(value, str)
         )
-        self.assertEqual(len(names), 18)
+        self.assertEqual(len(names), 21)
         self.assertEqual(
             names,
             [
@@ -619,13 +678,16 @@ class TypeRegistrationTest(unittest.TestCase):
                 "user.adopt",
                 "user.assets",
                 "user.bootstrap",
+                "user.derive_identity",
                 "user.expel",
                 "user.info",
+                "user.join",
                 "user.list_expelled",
                 "user.list_siblings",
                 "user.new_node_contract",
                 "user.remove_asset",
                 "user.request_membership",
+                "user.set_contract_accept_policy",
                 "user.set_swarm_invite_policy",
                 "user.set_swarm_join_policy",
                 "user.swarm_status",
@@ -769,8 +831,11 @@ class ErrorTextTest(unittest.TestCase):
         for text in (
             user_module.ERR_INVITATION_DECLINED,
             user_module.ERR_REQUEST_DECLINED,
+            user_module.ERR_CONTRACT_DECLINED,
             user_module.ERR_NO_ACTIVE_CONTRACT,
             user_module.ERR_EXPELLED,
+            user_module.ERR_ALREADY_CLAIMED,
+            user_module.ERR_JOIN_SELF,
         ):
             with self.subTest(text=text):
                 self.assertIn(f'astral.NewError("{text}")', source)
@@ -921,11 +986,11 @@ class InfoOpTest(UserCase):
         self.assert_no_faults()
 
     @bounded()
-    async def test_a_node_with_no_active_contract_rejects_with_code_two(self):
-        api = await self.serving({OP_INFO: Reject(2)})
-        with self.assertRaises(QueryRejected) as caught:
+    async def test_a_node_with_no_active_contract_answers_the_text(self):
+        api = await self.serving({OP_INFO: Accept(objects=[frame_error(ERR_NO_ACTIVE_CONTRACT)])})
+        with self.assertRaises(RemoteError) as caught:
             await api.info()
-        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(caught.exception.message, ERR_NO_ACTIVE_CONTRACT)
 
     @bounded()
     async def test_a_wrong_answer_type_is_a_protocol_error(self):
@@ -1094,7 +1159,7 @@ class ListSiblingsOpTest(UserCase):
     @bounded()
     async def test_a_zone_goes_to_the_op_argument_and_to_the_routing_zone(self):
         """One scope, two levers, as `Objects` does it. The op's own argument is
-        inert on astrald `48ae88b2` -- the context it builds is never used --
+        inert on astrald `5f17900d` -- the context it builds is never used --
         and the routing zone is not, so sending only one of them is wrong
         whichever one it is."""
         api = await self.serving(
@@ -1129,11 +1194,13 @@ class SwarmStatusOpTest(UserCase):
         self.assertEqual(self.sent(), OP_SWARM_STATUS)
 
     @bounded()
-    async def test_no_active_contract_rejects_with_code_two(self):
-        api = await self.serving({OP_SWARM_STATUS: Reject(2)})
-        with self.assertRaises(QueryRejected) as caught:
+    async def test_no_active_contract_answers_the_text(self):
+        api = await self.serving(
+            {OP_SWARM_STATUS: Accept(objects=[frame_error(ERR_NO_ACTIVE_CONTRACT)])}
+        )
+        with self.assertRaises(RemoteError) as caught:
             await api.swarm_status()
-        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(caught.exception.message, ERR_NO_ACTIVE_CONTRACT)
 
 
 class ListExpelledOpTest(UserCase):
@@ -1260,13 +1327,15 @@ class AssetOpTest(UserCase):
         self.assertEqual(self.mock.queries, [])
 
     @bounded()
-    async def test_a_database_failure_arrives_as_a_rejection(self):
-        """`op_add_asset.go` rejects with `internal_error` before it accepts,
-        so the failure is a `QueryRejected` and never an object."""
-        api = await self.serving({f"{OP_ADD_ASSET}?id={OID}": Reject(4)})
-        with self.assertRaises(QueryRejected) as caught:
+    async def test_a_database_failure_arrives_as_a_remote_error(self):
+        """`op_add_asset.go` accepts first and answers a database failure with
+        its text, so the failure is a `RemoteError`."""
+        api = await self.serving(
+            {f"{OP_ADD_ASSET}?id={OID}": Accept(objects=[frame_error("database is locked")])}
+        )
+        with self.assertRaises(RemoteError) as caught:
             await api.add_asset(OID)
-        self.assertEqual(caught.exception.code, 4)
+        self.assertEqual(caught.exception.message, "database is locked")
 
 
 class SyncWithOpTest(UserCase):
@@ -1274,7 +1343,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_sends_the_identity_alone(self):
-        """`start` is undeclared on astrald `48ae88b2`, and the node reads the
+        """`start` is undeclared on astrald `5f17900d`, and the node reads the
         height out of its own tree."""
         query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
@@ -1284,7 +1353,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_accepts_no_start_keyword(self):
-        """`start` is undeclared on astrald `48ae88b2`, so naming one is a
+        """`start` is undeclared on astrald `5f17900d`, so naming one is a
         `TypeError` and nothing reaches the node."""
         api = await self.serving({OP_SYNC_WITH: Accept(objects=[ACK_FRAME])})
         with self.assertRaises(TypeError):
@@ -1294,8 +1363,8 @@ class SyncWithOpTest(UserCase):
     @bounded()
     async def test_a_directory_name_never_reaches_the_node(self):
         """This client parses the argument as an identity and names the fix.
-        The op resolves a name here and rejects one that does not resolve with
-        code 3, so a directory name would travel; refusing it locally is this
+        The op resolves a name here and answers one that does not resolve with
+        `unknown identity`, so a directory name would travel; refusing it locally is this
         client's choice and the error says to resolve it first."""
         api = await self.serving({OP_SYNC_WITH: Accept(objects=[ACK_FRAME])})
         with self.assertRaises(ParseError) as caught:
@@ -1385,11 +1454,13 @@ class AdoptAndExpelOpTest(UserCase):
                 self.assertEqual(self.mock.queries, [])
 
     @bounded()
-    async def test_an_unauthorized_caller_is_a_rejection_with_code_four(self):
-        api = await self.serving({f"{OP_EXPEL}?identity=somebody": Reject(4)})
-        with self.assertRaises(QueryRejected) as caught:
+    async def test_an_unauthorized_caller_is_answered_not_permitted(self):
+        api = await self.serving(
+            {f"{OP_EXPEL}?identity=somebody": Accept(objects=[frame_error("not permitted")])}
+        )
+        with self.assertRaises(RemoteError) as caught:
             await api.expel("somebody")
-        self.assertEqual(caught.exception.code, 4)
+        self.assertEqual(caught.exception.message, "not permitted")
 
     @bounded()
     async def test_a_wrong_answer_type_is_a_protocol_error(self):
@@ -1573,14 +1644,18 @@ class AcceptContractOpTest(UserCase):
         self.assertEqual(caught.exception.message, "invalid contract")
 
     @bounded()
-    async def test_a_node_that_is_already_claimed_rejects_with_code_two(self):
-        mock = MockApphost(routes={OP_ACCEPT_CONTRACT: Reject(2)})
-        await self.enterAsyncContext(mock)
-        self.mock = mock
-        api = await self.user(mock)
-        with self.assertRaises(QueryRejected) as caught:
+    async def test_a_node_that_is_already_claimed_answers_the_text(self):
+        api, _ = await self.node(frame_error(ERR_ALREADY_CLAIMED))
+        with self.assertRaises(RemoteError) as caught:
             await api.accept_contract(a_signed_contract())
-        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(caught.exception.message, ERR_ALREADY_CLAIMED)
+
+    @bounded()
+    async def test_a_declined_contract_answers_the_text(self):
+        api, _ = await self.node(frame_error(ERR_CONTRACT_DECLINED))
+        with self.assertRaises(RemoteError) as caught:
+            await api.accept_contract(a_signed_contract())
+        self.assertEqual(caught.exception.message, ERR_CONTRACT_DECLINED)
 
     @bounded()
     async def test_a_stream_that_answers_nothing_is_reported(self):
@@ -1730,13 +1805,13 @@ class BootstrapOpTest(UserCase):
         self.assertNotIn(EOS, route.types)
 
     @bounded()
-    async def test_a_claimed_node_and_another_caller_are_rejections(self):
-        for code in (2, 4):
-            with self.subTest(code=code):
-                api = await self.serving({OP_BOOTSTRAP: Reject(code)})
-                with self.assertRaises(QueryRejected) as caught:
+    async def test_a_claimed_node_and_another_caller_are_answered_after_accepting(self):
+        for message in (ERR_ALREADY_CLAIMED, "not permitted", "origin not allowed: network"):
+            with self.subTest(message=message):
+                api, _ = await self.node(frame_error(message))
+                with self.assertRaises(RemoteError) as caught:
                     await api.bootstrap(BOOTSTRAP_WORDS)
-                self.assertEqual(caught.exception.code, code)
+                self.assertEqual(caught.exception.message, message)
 
     @bounded()
     async def test_a_refused_claim_surfaces_as_a_remote_error(self):
@@ -1761,6 +1836,95 @@ class BootstrapOpTest(UserCase):
         self.assertIn(BootstrapResult.ASTRAL_TYPE, str(caught.exception))
 
 
+class DeriveIdentityOpTest(UserCase):
+    """`user.derive_identity`: `bootstrap`'s exchange, answered with a
+    `mod.user.derive_identity_result` and no state changed."""
+
+    def result_frame(self, mnemonic: str = "") -> tuple[str, bytes]:
+        return (
+            DeriveIdentityResult.ASTRAL_TYPE,
+            payload_bytes(DeriveIdentityResult(identity=BOOTSTRAP_USER, mnemonic=mnemonic)),
+        )
+
+    @bounded()
+    async def test_the_words_travel_on_the_body_and_the_answer_names_the_user(self):
+        route = BodyReadingNode(self.result_frame(), expect=1)
+        mock = MockApphost(routes={OP_DERIVE_IDENTITY: route})
+        await self.enterAsyncContext(mock)
+        self.mock = mock
+        api = await self.user(mock)
+        result = await api.derive_identity(BOOTSTRAP_WORDS, passphrase="secret")
+        self.assertEqual(self.params(), (OP_DERIVE_IDENTITY, {"passphrase": "secret"}))
+        self.assertNotIn("abandon", self.sent())
+        self.assertEqual(route.types, ["string16"])
+        self.assertEqual(result, DeriveIdentityResult(identity=BOOTSTRAP_USER))
+
+    @bounded()
+    async def test_no_words_sends_generate_and_nothing_on_the_body(self):
+        generated = " ".join(["zoo"] * 23 + ["vote"])
+        route = AnswerThenRead(self.result_frame(generated))
+        mock = MockApphost(routes={OP_DERIVE_IDENTITY: route})
+        await self.enterAsyncContext(mock)
+        self.mock = mock
+        api = await self.user(mock)
+        result = await api.derive_identity()
+        self.assertEqual(self.sent(), "user.derive_identity?generate=true")
+        self.assertEqual(route.received, [])
+        self.assertEqual(result.mnemonic, generated)
+
+    @bounded()
+    async def test_empty_and_invalid_words_never_reach_the_node(self):
+        api = await self.serving({OP_DERIVE_IDENTITY: Accept(objects=[self.result_frame()])})
+        for words in ("", "  ", " ".join(["abandon"] * 12)):
+            with self.subTest(words=words):
+                with self.assertRaises((BadArgument, ParseError)):
+                    await api.derive_identity(words)
+        self.assertEqual(self.mock.queries, [])
+
+    @bounded()
+    async def test_a_bootstrap_result_is_the_wrong_answer(self):
+        frame = (BootstrapResult.ASTRAL_TYPE, payload_bytes(BootstrapResult()))
+        api = await self.serving({OP_DERIVE_IDENTITY: Accept(objects=[frame])})
+        with self.assertRaises(ProtocolError):
+            await api.derive_identity(BOOTSTRAP_WORDS)
+
+
+class JoinOpTest(UserCase):
+    """`user.join`: RR, one `mod.auth.signed_contract`, the swarm node as `node=`."""
+
+    @bounded()
+    async def test_the_swarm_node_travels_as_node(self):
+        query = f"{OP_JOIN}?node={FURRY_BOLT_ALIAS}"
+        frame = (SignedContract.ASTRAL_TYPE, payload_bytes(a_signed_contract()))
+        api = await self.serving({query: Accept(objects=[frame])})
+        signed = await api.join(FURRY_BOLT_ALIAS)
+        self.assertEqual(self.sent(), query)
+        self.assertEqual(signed, a_signed_contract())
+
+    @bounded()
+    async def test_an_identity_travels_as_its_hex(self):
+        frame = (SignedContract.ASTRAL_TYPE, payload_bytes(a_signed_contract()))
+        api = await self.serving({OP_JOIN: Accept(objects=[frame])})
+        await api.join(FURRY_BOLT)
+        self.assertEqual(self.params(), (OP_JOIN, {"node": FURRY_BOLT.text()}))
+
+    @bounded()
+    async def test_an_empty_name_never_reaches_the_node(self):
+        api = await self.serving({OP_JOIN: Accept()})
+        with self.assertRaises(BadArgument):
+            await api.join("")
+        self.assertEqual(self.mock.queries, [])
+
+    @bounded()
+    async def test_each_refusal_is_a_remote_error(self):
+        for message in (ERR_ALREADY_CLAIMED, ERR_JOIN_SELF, ERR_REQUEST_DECLINED, "not permitted"):
+            with self.subTest(message=message):
+                api = await self.serving({OP_JOIN: Accept(objects=[frame_error(message)])})
+                with self.assertRaises(RemoteError) as caught:
+                    await api.join("somebody")
+                self.assertEqual(caught.exception.message, message)
+
+
 class SwarmPolicyOpTest(UserCase):
     """`user.set_swarm_join_policy` and `user.set_swarm_invite_policy`: RR, one
     `ack`, three optional arguments."""
@@ -1770,6 +1934,7 @@ class SwarmPolicyOpTest(UserCase):
         for op, method in (
             (OP_SET_SWARM_JOIN_POLICY, "set_swarm_join_policy"),
             (OP_SET_SWARM_INVITE_POLICY, "set_swarm_invite_policy"),
+            (OP_SET_CONTRACT_ACCEPT_POLICY, "set_contract_accept_policy"),
         ):
             with self.subTest(op=op):
                 api = await self.serving({op: Accept(objects=[ACK_FRAME])})
@@ -1827,10 +1992,13 @@ class SwarmPolicyOpTest(UserCase):
             await api.set_swarm_invite_policy(FURRY_BOLT, "policy.decide")
 
     @bounded()
-    async def test_an_unauthorized_caller_is_a_rejection(self):
-        api = await self.serving({OP_SET_SWARM_JOIN_POLICY: Reject(2)})
-        with self.assertRaises(QueryRejected):
+    async def test_an_unauthorized_caller_is_answered_not_permitted(self):
+        api = await self.serving(
+            {OP_SET_SWARM_JOIN_POLICY: Accept(objects=[frame_error("not permitted")])}
+        )
+        with self.assertRaises(RemoteError) as caught:
             await api.set_swarm_join_policy()
+        self.assertEqual(caught.exception.message, "not permitted")
 
 
 class UserPlumbingTest(UserCase):
@@ -1888,27 +2056,28 @@ async def _send_error_msg(conn: MockConn) -> None:
 class LiveUserTest(live_support.LiveCase):
     """`user` against a real node. Read-only: nothing here changes node state.
 
-    Seven of the eighteen ops are safe to run: `assets`, `list_siblings`,
+    Seven of the twenty-one ops are safe to run: `assets`, `list_siblings`,
     `list_expelled`, `swarm_status`, `sync_assets`, `info` and
     `new_node_contract`, the last of which constructs and returns without
-    signing or storing. The other eleven change who a node belongs to, what it
-    holds or who decides, and are exercised against the mock alone.
+    signing or storing. The other fourteen change who a node belongs to, what
+    it holds or who decides, or derive from secret words, and are exercised
+    against the mock alone.
 
     Whether the node under test is claimed is not this SDK's to decide, so the
-    tier asks: `user.info` rejecting with code 2 is the setup-mode probe. On an
-    unclaimed node every swarm read is refused, because both of astrald's swarm
-    authorizers refuse without an active contract, and the assertions there
-    are the refusal codes rather than the answers.
+    tier asks: `user.info` answering `no active contract` is the setup-mode
+    probe. On an unclaimed node every swarm read is refused, because both of
+    astrald's swarm authorizers refuse without an active contract, and the
+    assertions there are the refusal texts rather than the answers.
     """
 
     async def unclaimed(self, client: astral.Client) -> bool:
         """Whether the node has no active contract, by the setup-mode probe."""
         try:
             await client.user.info()
-        except QueryRejected as exc:
-            if exc.code == 2:
+        except RemoteError as exc:
+            if exc.message == ERR_NO_ACTIVE_CONTRACT:
                 return True
-            if exc.code == 4:
+            if exc.message == "not permitted":
                 return False
             raise
         return False
@@ -1918,15 +2087,15 @@ class LiveUserTest(live_support.LiveCase):
         async with await self.client() as client:
             api = client.user
             if await self.unclaimed(client):
-                for read, code in (
-                    (api.assets, 4),
-                    (api.list_siblings, 4),
-                    (api.list_expelled, 2),
+                for read, message in (
+                    (api.assets, "not permitted"),
+                    (api.list_siblings, "not permitted"),
+                    (api.list_expelled, ERR_NO_ACTIVE_CONTRACT),
                 ):
                     with self.subTest(op=read.__name__):
-                        with self.assertRaises(QueryRejected) as caught:
+                        with self.assertRaises(RemoteError) as caught:
                             await read()
-                        self.assertEqual(caught.exception.code, code)
+                        self.assertEqual(caught.exception.message, message)
             else:
                 self.assertIsInstance(await api.assets(), list)
                 self.assertIsInstance(await api.list_siblings(), list)
@@ -1941,9 +2110,9 @@ class LiveUserTest(live_support.LiveCase):
         instead."""
         async with await self.client() as client:
             if await self.unclaimed(client):
-                with self.assertRaises(QueryRejected) as caught:
+                with self.assertRaises(RemoteError) as caught:
                     await client.user.sync_assets()
-                self.assertEqual(caught.exception.code, 4)
+                self.assertEqual(caught.exception.message, "not permitted")
             else:
                 answer = await client.user.sync_assets()
                 self.assertIsInstance(answer, AssetSync)
@@ -1960,8 +2129,8 @@ class LiveUserTest(live_support.LiveCase):
         async with await self.client() as client:
             try:
                 info = await client.user.info()
-            except QueryRejected as exc:
-                self.assertEqual(exc.code, 2, "code 2 is the setup-mode probe")
+            except RemoteError as exc:
+                self.assertEqual(exc.message, ERR_NO_ACTIVE_CONTRACT, "the setup-mode probe")
                 return
             self.assertIsInstance(info, Info)
             self.assertIsInstance(info.contract, SignedContract)
@@ -1978,8 +2147,8 @@ class LiveUserTest(live_support.LiveCase):
         async with await self.client() as client:
             try:
                 members = await client.user.swarm_status()
-            except QueryRejected as exc:
-                self.assertEqual(exc.code, 2)
+            except RemoteError as exc:
+                self.assertEqual(exc.message, ERR_NO_ACTIVE_CONTRACT)
                 return
             self.assertTrue(all(isinstance(m, SwarmMember) for m in members))
             self.assertIn(client.host_id, [m.identity for m in members])
@@ -2090,25 +2259,55 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/op_sync_assets.go", 52): "return ch.Send(&height)",
         ("mod/user/src/op_sync_assets.go", 38): "height = args.Start",
         ("mod/user/src/op_sync_assets.go", 49): "height++",
-        ("mod/user/src/op_list_siblings.go", 24): "IncludeZone(args.Zone)",
+        ("mod/user/src/op_list_siblings.go", 27): "IncludeZone(args.Zone)",
         ("mod/user/module.go", 23): "MinimalContractLength = time.Hour",
         ("mod/user/module.go", 27): "DefaultContractValidity = 365 * 24 * time.Hour",
         ("mod/user/module.go", 18): "UserKeyPath = coldcard.BIP44Path",
         ("mod/user/src/siblings.go", 25): "user.Notification{Event",
-        ("mod/user/src/op_adopt.go", 39): "return q.RejectWithCode(4)",
-        ("mod/user/src/op_sync_with.go", 39): "mod.syncAssets(ctx.IncludeZone",
+        ("mod/user/src/op_adopt.go", 34): "mod.Dir.ResolveIdentity(args.Identity)",
+        ("mod/user/src/op_adopt.go", 40): "}",
+        ("mod/user/src/op_adopt.go", 46): "return ch.Send(auth.ErrNotPermitted)",
+        ("mod/user/src/op_sync_assets.go", 43): "ch.Send(&user.OpUpdate{",
+        ("mod/user/src/authorizers.go", 24): "ac := mod.ActiveContract()",
+        ("mod/user/src/authorizers.go", 27): "}",
+        ("mod/user/src/authorizers.go", 57): "return ac != nil && a.Actor().IsEqual(ac.Issuer)",
+        ("mod/user/src/op_new_node_contract.go", 44): "SeeSwarmAction",
+        ("mod/user/src/op_new_node_contract.go", 46): "}",
+        ("mod/user/src/op_new_node_contract.go", 48): "if userID.IsZero() {",
+        ("mod/user/src/op_new_node_contract.go", 53): "}",
+        ("mod/user/src/op_accept_contract.go", 57): "why the policy after validation",
+        ("mod/user/src/op_accept_contract.go", 63): "ContractAcceptRequest{Caller: q.Caller(), Contract: signed}",
+        ("mod/user/src/op_accept_contract.go", 64): "switch {",
+        ("mod/user/src/op_accept_contract.go", 70): "}",
+        ("mod/user/src/op_set_swarm_policy.go", 38): "OpSetContractAcceptPolicy",
+        ("mod/user/src/op_set_swarm_policy.go", 42): "}",
+        ("mod/user/src/op_derive_identity.go", 20): "OpDeriveIdentity answers",
+        ("mod/user/src/op_derive_identity.go", 22): "and changes no state",
+        ("mod/user/src/op_derive_identity.go", 48): "user.DeriveIdentityResult{",
+        ("mod/user/src/op_derive_identity.go", 51): "}",
+        ("mod/user/src/op_join.go", 20): "OpJoin makes this unclaimed node request membership",
+        ("mod/user/src/op_join.go", 23): "The reply is the signed contract.",
+        ("mod/user/src/op_join.go", 29): "q.Accept(",
+        ("mod/user/src/op_join.go", 55): "}",
+        ("mod/user/src/op_sync_with.go", 43): "mod.syncAssets(ctx.IncludeZone",
         ("mod/user/src/sync.go", 31): "tree.Get[*astral.Uint64](ctx, heightNode)",
         ("mod/dir/src/module.go", 58): 'if s == "" || s == "anyone"',
         ("mod/dir/src/module.go", 107): "return identity.Fingerprint()",
-        ("mod/user/src/contracts.go", 206): "usermod.DefaultContractValidity",
-        ("mod/user/src/op_bootstrap.go", 40): "switch q.Origin()",
-        ("mod/user/src/op_bootstrap.go", 68): "if args.Generate {",
-        ("mod/user/src/op_bootstrap.go", 79): "bip137sig.MaxEntropyBits",
-        ("mod/user/src/op_bootstrap.go", 87): "channel.Expect(&phrase), channel.FailOnEOF()",
-        ("mod/user/src/op_bootstrap.go", 121): "mod.Objects.Store(ctx, mod.Objects.WriteDefault(), &key)",
-        ("mod/user/src/op_bootstrap.go", 147): "NewNodeContract(userID, mod.node.Identity(), true",
-        ("mod/user/src/op_bootstrap.go", 152): "mod.Auth.IsNodeClaim(ctx, caller, contract)",
-        ("mod/apphost/src/config.go", 87): '"user.bootstrap"',
+        ("mod/user/src/contracts.go", 204): "usermod.DefaultContractValidity",
+        ("mod/user/src/op_bootstrap.go", 43): "q.Accept(",
+        ("mod/user/src/op_bootstrap.go", 58): "}",
+        ("mod/user/src/op_bootstrap.go", 73): "mod.Apphost.CreateAccessToken(userID",
+        ("mod/user/src/op_bootstrap.go", 81): "}",
+        ("mod/user/src/op_bootstrap.go", 79): "if args.Generate {",
+        ("mod/user/src/op_bootstrap.go", 90): "bip137sig.MaxEntropyBits",
+        ("mod/user/src/op_bootstrap.go", 98): "channel.Expect(&phrase), channel.FailOnEOF()",
+        ("mod/user/src/op_bootstrap.go", 118): "mod.signClaim(ctx, caller, &key)",
+        ("mod/user/src/op_bootstrap.go", 133): "mod.claim(ctx, signed)",
+        ("mod/user/src/op_bootstrap.go", 166): "NewNodeContract(userID, mod.node.Identity(), true",
+        ("mod/user/src/op_bootstrap.go", 171): "mod.Auth.IsNodeClaim(ctx, caller, contract)",
+        ("mod/apphost/src/config.go", 58): '"user.derive_identity"',
+        ("mod/apphost/src/config.go", 59): '"user.bootstrap"',
+        ("mod/apphost/src/config.go", 60): '"user.join"',
         ("core/router.go", 45): "if q.Caller == nil {",
         ("core/router.go", 83): '"%v routed in %v", logged',
         ("core/query_log.go", 12): '"passphrase": true',
@@ -2117,7 +2316,12 @@ class CitationTest(unittest.TestCase):
     ASTRAL_GO_LINES = {
         ("api/user/contract.go", 12): "SwarmMembershipAction{}.ObjectType()",
         ("api/user/expulsion.go", 39): "expels %s from the swarm",
-        ("api/user/bootstrap_result.go", 14): "Identity *astral.Identity",
+        ("api/user/bootstrap_result.go", 15): "Identity *astral.Identity",
+        ("api/user/bootstrap_result.go", 17): "Token    astral.String8",
+        ("api/user/derive_identity_result.go", 14): "Identity *astral.Identity",
+        ("api/user/derive_identity_result.go", 15): "Mnemonic astral.String16",
+        ("api/user/contract_accept_policy.go", 13): "Caller   *astral.Identity",
+        ("api/user/contract_accept_policy.go", 14): "Contract *auth.SignedContract",
         ("api/user/client/bootstrap.go", 20): 'if words == "" {',
     }
 
@@ -2220,14 +2424,14 @@ class ShapeDeclarationTest(unittest.TestCase):
 
     def test_the_module_declares_a_shape_for_every_op_in_its_table(self):
         """The docstring table is the module's declaration of op shape, which
-        design section 4.7 makes a per-op contract. Eighteen rows,
-        eighteen ops."""
+        design section 4.7 makes a per-op contract. Twenty-one rows,
+        twenty-one ops."""
         table = [
             line
             for line in (user_module.__doc__ or "").splitlines()
             if line.startswith("| `user.")
         ]
-        self.assertEqual(len(table), 18)
+        self.assertEqual(len(table), 21)
         named = {line.split("`")[1] for line in table}
         declared = {
             value

@@ -26,8 +26,8 @@ Two of the four ops mutate. `tree.get` and `tree.list` are verified live against
 4.7 says it has one.** The op sends the current value, then one object per
 change, and one `eos` at the very end when the value channel closes: the `eos`
 follows the loop over the values rather than its first element
-(`astral-go/api/tree/client/server.go:57` and
-`astral-go/api/tree/client/server.go:61`). The single `eos` is therefore the
+(`astral-go/api/tree/client/server.go:53` and
+`astral-go/api/tree/client/server.go:57`). The single `eos` is therefore the
 **terminator**, not a boundary. Verified live: `tree.get?follow=true` on
 `/mod/tcp/settings/listen` answers `bool(true)` and then nothing at all -- a
 second read expired on its own deadline rather than returning `None` at a
@@ -70,14 +70,14 @@ failure passes `allow_unparsed=False`.
 
 **`tree.set` switches mode on `value` being empty, so an empty value cannot be
 stored through the text form.** astrald routes to the single-value branch only
-when the value is non-empty (`astral-go/api/tree/client/server.go:78`), so
+when the value is non-empty (`astral-go/api/tree/client/server.go:71`), so
 `tree.set?path=/x&type=string8&value=` enters batch mode and waits for an object
 on the channel body. `set_text()` refuses an empty `value` and names `set()`,
 which is the form that stores one. The rest of the trap is inherited from the
 same branch: with `type` given the node is created if missing
-(`astral-go/api/tree/client/server.go:87`), and with `type` inferred it is not,
+(`astral-go/api/tree/client/server.go:80`), and with `type` inferred it is not,
 because inference reads the node's current value and fails when there is none
-(`astral-go/api/tree/client/server.go:101`).
+(`astral-go/api/tree/client/server.go:94`).
 
 **D-17: the documented parameter names for two ops do not exist.** astral-docs
 writes `tree.delete -Recursive` and `tree.set -Type -Value`; parameter matching
@@ -93,7 +93,7 @@ none leaves **nothing** on the wire when it succeeds and an `error_message` when
 the path walk failed -- the one case a caller needs. astral-go's `Create` sends
 the `eos` (`astral-go/api/tree/client/node.go:165`) and reads to it with errors
 passed through (`astral-go/api/tree/client/node.go:168`), and batch mode mirrors
-the `eos` back on success (`astral-go/api/tree/client/server.go:132`,
+the `eos` back on success (`astral-go/api/tree/client/server.go:125`,
 `channel.Batch`). `create()` does the same, so a failed creation raises
 `RemoteError` instead of returning a handle for a node that does not exist.
 
@@ -106,7 +106,7 @@ Source citations name a single line each, and every one of them is read back by
 `tests/test_api_tree.py`. astrald and astral-go are moving targets, and a
 citation that has drifted by two lines costs a reader more than an absent one:
 it makes them distrust the exact ones. Line numbers are pinned to astral-go
-`8972f283` and astrald `48ae88b2`, the revisions `tests/reference.py` pins, and
+`a2b41561` and astrald `5f17900d`, the revisions `tests/reference.py` pins, and
 no citation names another revision.
 """
 
@@ -143,7 +143,7 @@ ROOT: Final = "/"
 """The root path, and `tree.list`'s default.
 
 The node reads an absent `path` as the root
-(`astral-go/api/tree/client/server.go:197`), and the path walk strips one
+(`astral-go/api/tree/client/server.go:184`), and the path walk strips one
 leading slash and skips empty segments
 (`astral-go/api/tree/node.go:34`, `astral-go/api/tree/node.go:42`). An empty
 path and `/` therefore address the root alike. Verified live: a missing leading
@@ -274,7 +274,7 @@ class Tree(ModuleClient):
         """The names of a path's immediate subnodes. ST, ends at `eos`.
 
         Sorted by the node, so a caller redrawing a list does not reshuffle it
-        (`astral-go/api/tree/client/server.go:217`). A node with no subnodes
+        (`astral-go/api/tree/client/server.go:204`). A node with no subnodes
         answers a bare `eos`; a missing path answers an `error_message`. Names
         are path segments, not paths: join one onto `path` to address a child.
         """
@@ -295,7 +295,7 @@ class Tree(ModuleClient):
 
         The object travels on the channel body, which is what `tree.set` with no
         `value` argument reads, and the node creates the path if it is missing
-        (`astral-go/api/tree/client/server.go:127`). This is the form that
+        (`astral-go/api/tree/client/server.go:120`). This is the form that
         stores an object of any type, including one with no text encoding and
         including an empty `string8`; `set_text` is the query-string form and
         can do neither.
@@ -352,9 +352,9 @@ class Tree(ModuleClient):
 
         **`type` given creates the path; `type` omitted does not.** Omitting it
         makes the node infer the type from the node's *current* value
-        (`astral-go/api/tree/client/server.go:87`), so a path that does not
+        (`astral-go/api/tree/client/server.go:80`), so a path that does not
         exist, or exists with no value, answers `cannot infer type`
-        (`astral-go/api/tree/client/server.go:101`).
+        (`astral-go/api/tree/client/server.go:94`).
 
         An empty `value` is refused rather than sent: the node reads it as the
         batch-mode switch and waits for an object on the channel body instead of
@@ -384,7 +384,7 @@ class Tree(ModuleClient):
 
         `tree.set` in batch mode with an empty body: the node walks the path
         creating every missing segment
-        (`astral-go/api/tree/client/server.go:127`), then reads objects until
+        (`astral-go/api/tree/client/server.go:120`), then reads objects until
         the `eos` and answers one per object -- none, here.
 
         The `eos` is sent and the stream is read to its end: success answers
@@ -406,7 +406,7 @@ class Tree(ModuleClient):
         A node with subnodes cannot be deleted on its own: astrald answers `node
         has subnodes` (`astrald/mod/tree/src/module.go:204`). `recursive=True`
         descends the subtree depth-first and deletes from the leaves up
-        (`astral-go/api/tree/client/server.go:173`), and it descends **through
+        (`astral-go/api/tree/client/server.go:163`), and it descends **through
         mounts**, where every step reaches the mounted implementation.
 
         The argument is `recursive` and is sent only when true. astral-docs

@@ -45,6 +45,7 @@ from astral.session import Session
 from astral.transport import MemTransport
 from astral.types import Identity
 
+import live_support
 from live_support import LiveCase
 from mock_apphost import bounded, frame
 
@@ -199,7 +200,7 @@ class EmitterReadsBackTest(unittest.IsolatedAsyncioTestCase):
     `eeb31e3` and `54f55b0` made its zero value 37 readable bytes and its text
     form `unknown`. `mod.tor.digest` left when `94f6923` gave the zero digest the
     same text form in place of the bare `.onion` its `UnmarshalText` refused.
-    All three are in `main` at `8972f283`. All four framings agree on both types
+    All three are in `main` at `a2b41561`. All four framings agree on both types
     now, so they are swept with everything else and an entry would fail on its
     own `assertNotEqual`."""
 
@@ -258,7 +259,7 @@ class EmitterReadsBackTest(unittest.IsolatedAsyncioTestCase):
         and leaves the consumer with a clean, complete, wrong answer.
 
         astral-go writes `" " + text + "\\n"` with no escaping
-        (`astral/channel/text_sender.go` at astral-go `8972f283`), so escaping
+        (`astral/channel/text_sender.go` at astral-go `a2b41561`), so escaping
         here would leave the node behind; base64 is a spelling its
         `TextReceiver` reads.
         """
@@ -295,7 +296,7 @@ class LiveFormatMatrixTest(LiveCase):
     """Design step 14's gate: `bin`, `json`, `text` and `canonical` decode one
     op's answer to the same objects.
 
-    Read-only and anonymous. Each format is a separate query, so the assertion
+    Read-only. Each format is a separate query, so the assertion
     is made on ops whose answer does not drift between two requests --
     `objects.repositories` reports free bytes, which do.
     """
@@ -406,7 +407,7 @@ class LiveFormatMatrixTest(LiveCase):
 
     async def unvalidated(self, qs: str) -> bytes:
         """One query, with no client-side format check between here and the node."""
-        session = await Session.connect(self.endpoint)
+        session = await Session.connect(self.endpoint, token=live_support.token())
         try:
             stream = await session.route_query(qs, timeout=15.0)
         except BaseException:

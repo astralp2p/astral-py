@@ -12,13 +12,15 @@ The two are the complete surface: the live `shell.spec` registry holds
 verified on an isolated astrald built from `1286a469`.
 
 **A provider binds a fixed set of services for as long as its channel is open.**
-`services.advertise?services=a,b` names the set. The op refuses a network-origin
-query (`astrald/mod/services/src/op_advertise.go:25`), asks
-`mod.auth.serve_apps_action` for the caller
-(`astrald/mod/services/src/op_advertise.go:31`), and refuses a zero caller and the
-node's own identity (`astrald/mod/services/src/op_advertise.go:39`), each with a
-query rejection. An anonymous IPC caller is the node, so it is rejected: verified
-on that node, `QueryRejected` with code 1. A malformed service list and a name
+`services.advertise?services=a,b` names the set. The op accepts the query, then
+answers a network origin with `origin not allowed: network`
+(`astrald/mod/services/src/op_advertise.go:28`), asks
+`mod.auth.serve_apps_action` for the caller and answers `not permitted` when it
+is refused (`astrald/mod/services/src/op_advertise.go:34`), and answers a zero
+caller and the node's own identity with `not permitted` too
+(`astrald/mod/services/src/op_advertise.go:42`). A session holding a token that
+names the node is the node, so it is refused: verified on an isolated astrald
+built from `5f17900d`, `RemoteError` reading `not permitted`. A malformed service list and a name
 this provider already advertises are answered after accept with an
 `error_message` (`astrald/mod/services/src/op_advertise.go:49`,
 `astrald/mod/services/src/op_advertise.go:55`); the second carries the text
@@ -28,7 +30,7 @@ per ask and a `services.change` whenever offerings may have changed; any other
 object, and closing the channel, ends the binding
 (`astrald/mod/services/src/op_advertise.go:65`). `advertise()` returns a
 `Binding`, the counterpart of astral-go's (`api/services/client/advertise.go` at
-astral-go `8972f283`), and `async with` is its contract, because the open channel
+astral-go `a2b41561`), and `async with` is its contract, because the open channel
 **is** the advertisement.
 
 **An answer is the complete offering of one service for one caller.** The
@@ -54,7 +56,8 @@ contributing node, else the op answers `not permitted to discover "<name>"`
 (`astrald/mod/services/src/op_discover.go:159`). `reach=swarm` carries the
 discovery to every member of the node's local swarm in the caller's name, and is
 accepted only from a local app (`astrald/mod/services/src/op_discover.go:29`).
-Verified on the isolated node: an anonymous caller, which is the node, is refused
+Verified on an isolated astrald built from `1286a469` and again on one built
+from `5f17900d`: a caller that is the node is refused
 `not permitted to discover "chat"`, because the node identity holds no discovery
 permit.
 
@@ -100,7 +103,7 @@ property design section 5.1 gives every module. Registration does not wait on
 it: `astral/__init__.py` imports the whole `api` package eagerly, so whether
 `services.update` decodes never depends on which property a caller touched.
 
-Line numbers cite astrald `48ae88b2` and astral-go `8972f283`, the revisions
+Line numbers cite astrald `5f17900d` and astral-go `a2b41561`, the revisions
 `tests/reference.py` pins, and `tests/test_api_services.py` reads each one back.
 """
 
@@ -508,7 +511,7 @@ class Watcher:
     Follows a discovery and keeps the available offerings, keyed by provider and
     name: an `Update` with `available` true sets one, with `available` false
     deletes it, and a `Removed` deletes the offerings it names. astral-go's
-    `Watcher` (`api/services/client/watch.go` at astral-go `8972f283`). It has no
+    `Watcher` (`api/services/client/watch.go` at astral-go `a2b41561`). It has no
     reconnect policy: once `done` is set, the app starts a new one.
 
     **The stream must be closed.** Leaving the `async with` closes it.
@@ -640,11 +643,13 @@ class Binding:
     The services are bound from `__aenter__` until the channel closes, and
     closing the channel is what releases them. Nothing is routed on
     construction. `__aenter__` routes the query on the persistent lane and reads
-    the node's `ack`. A refusal raises and leaves nothing open: `QueryRejected`
-    for a network origin, a caller without `mod.auth.serve_apps_action` and the
-    node itself, and `RemoteError` for the node's `error_message`, such as
-    `ERR_ADVERTISED`. `timeout` bounds the route and the `ack` together and
-    defaults to the client's query timeout; the held channel has no deadline.
+    the node's `ack`. A refusal raises and leaves nothing open: `RemoteError`
+    for the node's `error_message` -- `origin not allowed: network` for a
+    network origin, `not permitted` for a caller without
+    `mod.auth.serve_apps_action` and for the node itself, and
+    `ERR_ADVERTISED` -- and `QueryRejected` for a rejected query. `timeout`
+    bounds the route and the `ack` together and defaults to the client's query
+    timeout; the held channel has no deadline.
 
     Each `services.ask` is answered on its own task, so a slow evaluation never
     delays another caller's. The node already sends at most one ask per caller

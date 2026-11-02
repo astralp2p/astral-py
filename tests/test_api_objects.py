@@ -22,7 +22,7 @@ claim is made at each and the three must agree:
 **Nothing here mutates a live node.** `create`, `store`, `push`, `delete`,
 `purge`, `new_mem`, `remove_repository` and the three `register_*` ops are
 exercised against the mock only; Tier C is the read-only subset of design
-section 13's anonymous safe list. `objects.new` is never swept over type names.
+section 13's safe list, run under `ASTRAL_TEST_NODE_TOKEN`. `objects.new` is never swept over type names.
 `mod.nodes.node_info` is sent like any other name: the supported astral-go
 encodes its nil `*Identity` as an absent presence flag, and the one live test
 that names that type asserts the node answers its zero value.
@@ -811,7 +811,7 @@ class SearchGrammarTest(unittest.TestCase):
         """A query built rather than parsed can hold what the grammar cannot
         spell, and the text channel loses it silently -- `bin`, `json` and
         `canonical` all carry it exactly. The loss is astral-go's
-        `SearchQuery.UnmarshalText` (api/objects/search_query.go at 8972f283),
+        `SearchQuery.UnmarshalText` (api/objects/search_query.go at a2b41561),
         which a registered searcher parses the same query with, so the SDK
         matching it is what keeps the two agreeing about the question.
 
@@ -2031,8 +2031,8 @@ class RegisterProviderOpTest(ObjectsCase):
 
     @bounded()
     async def test_an_anonymous_caller_is_refused_by_the_node(self):
-        """The op needs a non-zero identity that is not the node's own, and the
-        router substitutes the node's identity for an anonymous guest."""
+        """The op needs a non-zero identity that is not the node's own, and a
+        session holding the node's token is the node."""
         mock = MockApphost(
             routes={OP_REGISTER_SEARCHER: Accept(objects=[error_frame("invalid source identity")])}
         )
@@ -2706,13 +2706,13 @@ class CitationTest(unittest.TestCase):
         (
             reference.ASTRALD,
             "mod/apphost/src/guest.go",
-            170,
+            171,
             "ctx = ctx.WithZone(msg.Zone)",
         ),
-        (reference.ASTRALD, "mod/objects/src/op_describe.go", 40, "ctx = ctx.LimitZone(*args.Zone)"),
-        (reference.ASTRALD, "mod/objects/src/op_find.go", 32, "ctx = ctx.LimitZone(*args.Zone)"),
-        (reference.ASTRALD, "mod/objects/src/op_search.go", 41, "ctx = ctx.LimitZone(*args.Zone)"),
-        (reference.ASTRALD, "mod/objects/src/op_read.go", 33, "ctx = ctx.LimitZone(*args.Zone)"),
+        (reference.ASTRALD, "mod/objects/src/op_describe.go", 43, "ctx = ctx.LimitZone(*args.Zone)"),
+        (reference.ASTRALD, "mod/objects/src/op_find.go", 35, "ctx = ctx.LimitZone(*args.Zone)"),
+        (reference.ASTRALD, "mod/objects/src/op_search.go", 44, "ctx = ctx.LimitZone(*args.Zone)"),
+        (reference.ASTRALD, "mod/objects/src/op_read.go", 37, "ctx = ctx.LimitZone(*args.Zone)"),
         # The repository_info group fields, readable at the pins since the
         # astral-go pin moved onto 02ba1c1. They were the one type this tree
         # read past the pins, on a byte corpus rather than a citation.

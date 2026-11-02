@@ -99,14 +99,14 @@ def switch(*replies: tuple[str, bytes], mirror_eos: bool = False):  # type: igno
     """astrald's batch: read one object, answer one, `BreakOnEOS`.
 
     `tree.set` without a `value` argument is `channel.Batch`
-    (`astral-go/api/tree/client/server.go:132`), and a canned `Accept` cannot
+    (`astral-go/api/tree/client/server.go:125`), and a canned `Accept` cannot
     model it: `MockApphost` writes an `Accept` body and closes at once, while
     the op writes its input **after** the query has been accepted, so the two
     race and the client's frames are dropped.
 
     `Batch` mirrors the terminator: "an explicit EOS input is answered with a
     final EOS, while a stream ended by EOF is not"
-    (`astral-go/astral/channel/batch.go` at `8972f283`). The client always sends
+    (`astral-go/astral/channel/batch.go` at `a2b41561`). The client always sends
     an explicit `eos`, so a node at the pin always answers one. `mirror_eos`
     selects that shape; it defaults off so the EOF-terminated shape, which
     design section 3.10 requires the client to accept, stays covered.
@@ -145,7 +145,7 @@ def refuse(message: str):  # type: ignore[no-untyped-def]
     """The batch shape that fails before it reads: the path walk did not resolve.
 
     astrald answers `astral.Err` and returns without reading anything
-    (`astral-go/api/tree/client/server.go:129`). The body is drained here anyway
+    (`astral-go/api/tree/client/server.go:122`). The body is drained here anyway
     so the client's `eos` does not meet a closed socket -- a reset would destroy
     the very message this route exists to deliver.
     """
@@ -609,7 +609,7 @@ class SetTest(TreeCase):
     async def test_a_mirrored_eos_after_the_acks_is_tolerated(self):
         """The shape a node at the pin actually answers with. `channel.Batch`
         ends an explicitly terminated input stream with an `EOS` of its own
-        (`astral-go/astral/channel/batch.go` at `8972f283`), and every mock here
+        (`astral-go/astral/channel/batch.go` at `a2b41561`), and every mock here
         omitted it, so nothing covered the client meeting one."""
         mock = MockApphost(
             routes={OP_SET: switch(ACK_FRAME, ACK_FRAME, mirror_eos=True)}
@@ -1060,17 +1060,17 @@ class CitationTest(unittest.TestCase):
 
     GO_CITATIONS = {
         "api/tree/module.go:7": "Paths begin with a slash",
-        "api/tree/client/server.go:57": "for object := range val {",
-        "api/tree/client/server.go:61": "return ch.Send(&astral.EOS{})",
-        "api/tree/client/server.go:78": 'if args.Value != "" {',
-        "api/tree/client/server.go:87": 'createIfMissing := args.Type != ""',
-        "api/tree/client/server.go:101": "cannot infer type: node has no current value",
-        "api/tree/client/server.go:127": "tree.Query(ctx, ops.Node, args.Path, true)",
-        "api/tree/client/server.go:129": "return ch.Send(astral.Err(err))",
-        "api/tree/client/server.go:132": "return channel.Batch(",
-        "api/tree/client/server.go:173": "func deleteRecursive(",
-        "api/tree/client/server.go:197": "if len(args.Path) > 0 {",
-        "api/tree/client/server.go:217": "sort.Strings(names)",
+        "api/tree/client/server.go:53": "for object := range val {",
+        "api/tree/client/server.go:57": "return ch.Send(&astral.EOS{})",
+        "api/tree/client/server.go:71": 'if args.Value != "" {',
+        "api/tree/client/server.go:80": 'createIfMissing := args.Type != ""',
+        "api/tree/client/server.go:94": "cannot infer type: node has no current value",
+        "api/tree/client/server.go:120": "tree.Query(ctx, ops.Node, args.Path, true)",
+        "api/tree/client/server.go:122": "return ch.Send(astral.Err(err))",
+        "api/tree/client/server.go:125": "return channel.Batch(",
+        "api/tree/client/server.go:163": "func deleteRecursive(",
+        "api/tree/client/server.go:184": "if len(args.Path) > 0 {",
+        "api/tree/client/server.go:204": "sort.Strings(names)",
         "api/tree/client/node.go:165": "go func() { _ = ch.Send(&astral.EOS{}) }()",
         "api/tree/client/node.go:168": "channel.BreakOnEOS, channel.PassErrors",
         "api/tree/node.go:34": 'strings.TrimPrefix(path, "/")',

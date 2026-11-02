@@ -701,7 +701,7 @@ _ID_SYMBOLS: Final = 64  # 40 bytes = 320 bits = exactly 64 symbols, never padde
 # The `data0` body is the last 52 of those 64 symbols. The first 12 span bits
 # 0-59, which are size bits alone, so a zero size makes all 12 `y` and they are
 # dropped whole -- unlike `data1`, which strips every leading `y` it happens to
-# have. sourced: astral-go `astral/object_id.go:24` at the pin, "without the 12
+# have. sourced: astral-go `astral/object_id.go:27` at the pin, "without the 12
 # characters that carry Size bits alone".
 _PARTIAL_ID_SYMBOLS: Final = 52
 _PARTIAL_ID_HEAD: Final = _ID_SYMBOLS - _PARTIAL_ID_SYMBOLS
@@ -769,7 +769,7 @@ class ObjectID:
         A `data0` ID carries no size, so it parses to size 0 -- a
         `Partial Object ID`. Encoding is not symmetric: `__str__` emits `data1`
         for every value, size 0 included. Sourced: astral-go
-        `astral/object_id.go:36` `ParseID` at the pin, which dispatches on the
+        `astral/object_id.go:39` `ParseID` at the pin, which dispatches on the
         prefix and decodes both forms into the same 40-byte buffer.
 
         A node resolves such an ID by hash inside the selected repository

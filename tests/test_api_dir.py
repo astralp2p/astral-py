@@ -587,8 +587,9 @@ class SetAliasOpTest(DirCase):
     async def test_removal_sends_an_explicitly_empty_alias(self):
         """Design bug D-18. astrald declares `Alias *string` as required and
         reads removal from an empty value, and the required check tests key
-        **presence** (`astral-go/lib/routing/op.go:166`). An omitted `alias` is
-        a rejected query, so `alias=` and no `alias` are different queries."""
+        **presence** (`astral-go/lib/routing/op.go:235`). An omitted `alias` is
+        an `argument required` error, so `alias=` and no `alias` are different
+        queries."""
         mock = MockApphost(routes={OP_SET_ALIAS: Accept(objects=[ACK_FRAME])})
         async with mock:
             d = await self.dir(mock)
@@ -894,7 +895,7 @@ class CitationTest(unittest.TestCase):
             (astrald, "mod/dir/src/op_resolve.go", 22, "mod.ResolveIdentity(args.Identity)"),
             (astrald, filters, 14, "Identity string"),
             (astrald, filters, 35, "mod.ResolveIdentity(args.Identity)"),
-            (go, "lib/routing/op.go", 166, "field required"),
+            (go, "lib/routing/op.go", 235, "spec.Required && !found"),
             (go, client, 20, "dir.MethodApplyFilters"),
             (go, client, 17, "matches any of them"),
         ):

@@ -992,15 +992,15 @@ class LiveNodesTest(live_support.LiveCase):
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
-    async def test_an_unresolvable_name_is_a_rejection_and_not_an_error_message(self):
-        """astrald rejects with code 2 before accepting the query
-        (`mod/nodes/src/op_resolve_endpoints.go`), which is a different failure
-        from an `error_message` inside an accepted stream."""
+    async def test_an_unresolvable_name_is_an_error_message_after_accepting(self):
+        """astrald accepts the query, then answers `unknown identity`
+        (`mod/nodes/src/op_resolve_endpoints.go`), an `error_message` inside the
+        accepted stream rather than a rejection."""
         async with await self.client() as client:
             n = astral.api.nodes.Nodes(client, experimental=True)
-            with self.assertRaises(astral.QueryRejected) as caught:
+            with self.assertRaises(astral.RemoteError) as caught:
                 await n.resolve_endpoints("astral-py-no-such-node")
-        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(caught.exception.message, "unknown identity")
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
@@ -1139,9 +1139,24 @@ class ReferenceClaimTest(unittest.TestCase):
         )
         self.assertEqual(total, 7)
 
-    def test_resolve_endpoints_rejects_with_code_two(self):
+    def test_resolve_endpoints_answers_an_unresolvable_name_after_accepting(self):
         src = self.source(reference.ASTRALD, "mod/nodes/src/op_resolve_endpoints.go")
-        self.assertIn("return q.RejectWithCode(2)", src)
+        self.assertNotIn("RejectWithCode", src)
+        self.assertLess(src.index("q.AcceptRaw()"), src.index("dir.ErrUnknownIdentity"))
+        self.assertIn("return ch.Send(astral.ErrZeroIdentity)", src)
+
+    def test_new_link_answers_every_failure_with_an_error_message(self):
+        src = self.source(reference.ASTRALD, "mod/nodes/src/op_new_link.go")
+        self.assertNotIn("RejectWithCode", src)
+        self.assertNotIn("q.Reject()", src)
+        for answer in (
+            "auth.ErrNotPermitted",
+            "dir.ErrUnknownIdentity",
+            "exonet.ErrInvalidEndpoint",
+            "exonet.ErrUnsupportedNetwork",
+        ):
+            with self.subTest(answer=answer):
+                self.assertIn(f"return ch.Send({answer})", src)
 
     def test_add_endpoint_writes_a_ninety_day_ttl(self):
         src = self.source(reference.ASTRALD, "mod/nodes/src/op_add_endpoint.go")

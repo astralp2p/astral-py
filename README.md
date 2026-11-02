@@ -36,8 +36,8 @@ experimental Tier 3 pair `nodes` and `nat`, whose ops refuse to run without
 `experimental=True` while their wire types decode always. `endpoints` and
 `exonet` ship types and no ops, because `mod.nodes.node_info` cannot decode
 without `mod.tcp.endpoint`. `shell` carries the one introspection op,
-`shell.spec`, which answers the node's whole op registry anonymously and is how
-this SDK checks itself against the node it is talking to.
+`shell.spec`, which answers the node's whole op registry and is how this SDK
+checks itself against the node it is talking to.
 
 The `astral-query` command has landed, in `cli.py`, and `[project.scripts]`
 declares it. It is also `python -m astral`, which needs only the package on
@@ -69,8 +69,9 @@ import astral
 
 async def main() -> None:
     # Default endpoint: the unix socket if it exists, else tcp:127.0.0.1:8625.
-    # Without a token the session is anonymous, which the node allows for
-    # outbound queries by default.
+    # The token comes from the argument or ASTRALD_APPHOST_TOKEN. Without one
+    # the session is anonymous, and astrald admits an anonymous session only
+    # to the ops on its anonymous_allowlist, which whoami and alias_map are not.
     async with await astral.connect() as client:
         print(client.host_id, client.host_alias, client.guest_id)
 

@@ -16,8 +16,8 @@ same eleven ops:
   what can be wrong: a capitalised key is silently dropped by the node, an
   omitted parameter and an empty one are different things, and an op's mode is a
   declaration that a test has to make as well.
-- **Tier C** asks the node, and only through the three read-only anonymous-safe
-  ops and the read-only `objects.get_blueprint`, `objects.new` and
+- **Tier C** asks the node, as the node through `ASTRAL_TEST_NODE_TOKEN`, and
+  only through the three read-only ops and the read-only `objects.get_blueprint`, `objects.new` and
   `objects.echo` for the two policy types. `apphost.register` and
   `apphost.set_app_register_policy` mutate the node and are exercised against
   the mock alone (design section 7.3). Skipped with a reason when
@@ -77,7 +77,6 @@ from astral.errors import (
     BadArgumentType,
     ParseError,
     ProtocolError,
-    QueryRejected,
     QueryTimeout,
     RemoteError,
 )
@@ -99,7 +98,6 @@ from mock_apphost import (
     Accept,
     FURRY_BOLT,
     MockApphost,
-    Reject,
     bounded,
     frame,
     socket_fds,
@@ -378,10 +376,12 @@ class AppRegisterPolicyTypesTest(unittest.TestCase):
              "AppRegisterDecision is the app registration policy's answer"),
             (reference.ASTRAL_GO, "api/apphost/app_register_policy.go", 57,
              "Authorizers []*auth.AuthorizerAssignment"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 50,
-             "carries ServeApps whatever the app asked for"),
             (reference.ASTRALD, "mod/apphost/src/op_register.go", 51,
-             "serveAppsGrantRequest"),
+             "requestedContractPermits := parsePermits(args.ContractPermits)"),
+            (reference.ASTRALD, "mod/apphost/src/register_grant_request.go", 17,
+             "func registerGrantRequest"),
+            (reference.ASTRALD, "mod/apphost/src/register_grant_request.go", 20,
+             "append([]*auth.Permit{serveApps, useBlueprints}, parsePermits(asked)...)"),
             (reference.ASTRALD, "mod/apphost/src/op_register.go", 83, "dec.Validate()"),
             (reference.ASTRALD, "mod/apphost/src/op_register.go", 85,
              "ErrRegistrationDeclined"),
@@ -706,11 +706,16 @@ class GrantTest(ApphostCase):
                 await api.grant(ID_HEX, self.DISCOVERY, constraints=[Ack()])  # type: ignore[arg-type]
 
     @bounded()
-    async def test_a_refused_grant_is_a_rejection(self):
-        async with MockApphost(routes={OP_GRANT: Reject(code=1)}) as mock:
+    async def test_a_refused_grant_is_a_remote_error(self):
+        """The op accepts, then answers a caller without the action with
+        `not permitted` (`op_grant.go:38-40`)."""
+        async with MockApphost(
+            routes={OP_GRANT: Accept(objects=(error_frame("not permitted"),))}
+        ) as mock:
             api = await self.apphost(mock)
-            with self.assertRaises(QueryRejected):
+            with self.assertRaises(RemoteError) as caught:
                 await api.grant(ID_HEX, self.DISCOVERY)
+        self.assertEqual(caught.exception.message, "not permitted")
 
     @bounded()
     async def test_a_grant_the_node_cannot_record_is_a_remote_error(self):
@@ -752,14 +757,44 @@ class TokenAndContractTest(ApphostCase):
         self.assertEqual(mock.queries[-1].query, f"{OP_CREATE_TOKEN}?identity={ID_HEX}")
 
     @bounded()
-    async def test_a_rejected_query_reaches_the_caller_as_a_rejection(self):
-        """An unparseable parameter is rejected before the op runs -- astrald's
-        arg binding fails and the deferred reject fires -- so this arrives as
-        `query_rejected_msg`, not as an `error_message` in a stream."""
-        async with MockApphost(routes={OP_CREATE_TOKEN: Reject(code=1)}) as mock:
+    async def test_an_argument_error_reaches_the_caller_as_a_remote_error(self):
+        """An unparseable parameter fails astral-go's argument binding before
+        the op runs, and an op that takes `out` accepts and answers the error
+        as an `error_message` (`lib/routing/op.go` `Op.invoke`), so this
+        arrives as `RemoteError`, not as `query_rejected_msg`."""
+        async with MockApphost(
+            routes={
+                OP_CREATE_TOKEN: Accept(
+                    objects=(error_frame("invalid argument: duration: bad"),)
+                )
+            }
+        ) as mock:
             api = await self.apphost(mock)
-            with self.assertRaises(QueryRejected):
+            with self.assertRaises(RemoteError):
                 await api.create_token(ID_HEX)
+
+    @bounded()
+    async def test_a_refused_token_op_is_a_remote_error(self):
+        """Both token ops accept, then answer a caller off a link and a caller
+        without the action inside the stream (`op_list_tokens.go:24-32`,
+        `op_create_token.go:21-27`)."""
+        for op, answer in (
+            (OP_LIST_TOKENS, "not permitted"),
+            (OP_CREATE_TOKEN, "not permitted"),
+            (OP_LIST_TOKENS, "origin not allowed: network"),
+            (OP_CREATE_TOKEN, "origin not allowed: network"),
+        ):
+            with self.subTest(op=op, answer=answer):
+                async with MockApphost(
+                    routes={op: Accept(objects=(error_frame(answer),))}
+                ) as mock:
+                    api = await self.apphost(mock)
+                    with self.assertRaises(RemoteError) as caught:
+                        if op == OP_LIST_TOKENS:
+                            await api.list_tokens()
+                        else:
+                            await api.create_token(ID_HEX)
+                self.assertEqual(caught.exception.message, answer)
 
 
 class RegisterTest(ApphostCase):
@@ -965,13 +1000,18 @@ class SetAppRegisterPolicyTest(ApphostCase):
         self.assertEqual(caught.exception.message, "the node cannot be its own delegate")
 
     @bounded()
-    async def test_an_unauthorized_caller_is_a_rejection(self):
+    async def test_an_unauthorized_caller_is_a_remote_error(self):
+        """The op accepts, then answers a caller without the action with
+        `not permitted` (`op_set_app_register_policy.go:53-58`)."""
         async with MockApphost(
-            routes={OP_SET_APP_REGISTER_POLICY: Reject(code=1)}
+            routes={
+                OP_SET_APP_REGISTER_POLICY: Accept(objects=(error_frame("not permitted"),))
+            }
         ) as mock:
             api = await self.apphost(mock)
-            with self.assertRaises(QueryRejected):
+            with self.assertRaises(RemoteError) as caught:
                 await api.set_app_register_policy()
+        self.assertEqual(caught.exception.message, "not permitted")
 
     @bounded()
     async def test_an_answer_other_than_ack_is_a_protocol_error(self):
@@ -1197,7 +1237,7 @@ class PassthroughTest(ApphostCase):
 # --- Tier C: the node ----------------------------------------------------
 
 class LiveApphostTest(live_support.LiveCase):
-    """The three read-only, anonymous-safe ops, against a real node.
+    """The three read-only ops, against a real node, as the node's own token.
 
     Nothing here mutates: no `create_token`, no `hold_object`, no
     `register_handler`, no `bind`, no `cancel`.
@@ -1212,11 +1252,12 @@ class LiveApphostTest(live_support.LiveCase):
 
     @bounded(30.0)
     async def test_whoami_answers_the_identity_the_router_substituted(self):
-        """An anonymous guest sends a nil `Caller`; astrald's core router
-        replaces it with the node's own identity before the op ever sees it. So
-        the answer is the greeting's identity for an anonymous client and the
-        guest identity for an authenticated one, and the assertion follows
-        whichever this client is."""
+        """An authenticated session's nil `Caller` is its guest identity
+        (`mod/apphost/src/guest.go:154-158`), and a token-less client's nil
+        caller is the node's identity (`core/router.go:45-46`), on the ops
+        `anonymous_allowlist` admits. So the answer is the guest identity for an
+        authenticated client and the greeting's identity otherwise, and the
+        assertion follows whichever this client is."""
         async with await self.client() as client:
             who = await Apphost(client).whoami()
             self.assertIsInstance(who, Identity)
@@ -1227,9 +1268,9 @@ class LiveApphostTest(live_support.LiveCase):
     @bounded(30.0)
     async def test_list_tokens_decodes_every_token_the_node_holds(self):
         """The record against the node's own bytes. Also the live confirmation
-        that this read needs no privilege: an anonymous guest gets the whole
-        table, token strings included, which is why an `AccessToken` that arrives
-        here is a secret."""
+        that the node's own token reads the whole table, token strings
+        included, which is why an `AccessToken` that arrives here is a
+        secret."""
         async with await self.client() as client:
             tokens = await Apphost(client).list_tokens()
         for token in tokens:
@@ -1437,14 +1478,14 @@ class SecurityNoteTest(unittest.TestCase):
     }
     ADMIN_MANAGE_APPS = TOKEN_AND_GRANT | {"set_app_register_policy"}
     SERVE_APPS = {"register_handler"}
-    CURRENT_UNGUARDED = {"whoami", "register", "set_app_register_policy"}
+    CURRENT_UNGUARDED = {"whoami", "set_app_register_policy"}
 
     def ops(self) -> dict[str, str]:
         """Every `op_*.go` at the pin, name to source.
 
         `_test.go` is excluded, and that is not cosmetic: `op_grants_test.go`
         and three other `op_*_test.go` files sit beside the ops at the pin, and
-        counting them makes the census nineteen.
+        counting them makes the census larger than the op set.
         """
         try:
             names = reference.listdir(reference.ASTRALD, self.SRC)
@@ -1470,29 +1511,30 @@ class SecurityNoteTest(unittest.TestCase):
         ops = self.ops()
         guarded = {name for name, src in ops.items() if "OriginNetwork" in src}
 
-        self.assertEqual(len(ops), 16)
+        self.assertEqual(len(ops), 17)
         self.assertEqual(set(ops) - guarded, self.CURRENT_UNGUARDED)
-        self.assertEqual(len(guarded), 13)
+        self.assertEqual(len(guarded), 15)
 
         # Unwrapped, because a line break inside a sentence is a formatting
         # choice and the claim is the sentence.
         doc = " ".join((apphost_module.__doc__ or "").split())
         self.assertNotIn("alone among its neighbours", doc)
         self.assertIn(f"re-derived at `{reference.PINS[reference.ASTRALD][1]}`", doc)
-        self.assertIn("Sixteen `op_*.go` files.", doc)
-        self.assertIn("Thirteen refuse a network origin", doc)
+        self.assertIn("Seventeen `op_*.go` files.", doc)
+        self.assertIn("Fifteen refuse a network origin", doc)
         self.assertIn(
-            "the three that do not are `whoami`, `register` and "
-            "`set_app_register_policy`",
-            doc,
+            "the two that do not are `whoami` and `set_app_register_policy`", doc
         )
+        self.assertIn("OpSetGrantRequestPolicy", ops["set_app_register_policy"])
 
     def test_the_token_ops_ask_admin_manage_apps_before_they_answer(self):
         """The action guard, per op.
 
-        The order matters as much as the presence: the refusal has to come out
-        before `AcceptRaw`, or a caller holding nothing has already been handed
-        a channel by the time it is told no.
+        Every op accepts first and answers a refusal inside the channel, so the
+        order that matters is the guards' among themselves and against the
+        work: the origin before the action, and the action before the op
+        resolves an identity or touches a store. `set_app_register_policy`
+        asks inside `setPolicyDelegate`, before it clears or writes a delegate.
         """
         ops = self.ops()
         asked = {
@@ -1508,11 +1550,23 @@ class SecurityNoteTest(unittest.TestCase):
         for name in sorted(self.ADMIN_MANAGE_APPS):
             with self.subTest(op=name):
                 src = ops[name]
-                self.assertLess(
-                    src.index("AdminManageAppsAction"), src.index("q.Accept")
-                )
+                self.assertLess(src.index("q.Accept"), src.index("AdminManageAppsAction"))
+                self.assertIn("return ch.Send(auth.ErrNotPermitted)", src)
                 if name in self.TOKEN_AND_GRANT:
-                    self.assertLess(src.index("OriginNetwork"), src.index("q.Accept"))
+                    action = src.index("AdminManageAppsAction")
+                    self.assertLess(src.index("OriginNetwork"), action)
+                    work = [
+                        src.index(marker)
+                        for marker in ("mod.Dir.ResolveIdentity", "AccessToken", "mod.Grant(")
+                        if marker in src[action:]
+                    ]
+                    self.assertTrue(work, "the op does no work the guard precedes")
+                    self.assertLess(action, min(i for i in work if i > action))
+                else:
+                    helper = src.split("func (mod *Module) setPolicyDelegate(")[1]
+                    self.assertLess(
+                        helper.index("AdminManageAppsAction"), helper.index("v.Clear(")
+                    )
 
         doc = apphost_module.__doc__ or ""
         self.assertIn("mod.auth.admin_manage_apps_action", doc)
@@ -1521,30 +1575,36 @@ class SecurityNoteTest(unittest.TestCase):
             with self.subTest(op=name):
                 self.assertIn(name, doc)
 
-    def test_the_action_is_held_by_the_node_a_tokenless_caller_wears(self):
-        """Why the guard does not close the plaintext read for a local process.
+    def test_a_tokenless_session_reaches_no_token_or_grant_op(self):
+        """Why the action guard is the whole story for the token ops.
 
-        Three files, and the docstring's inference is exactly their
-        composition: the user module allows the node's own identity, the core
-        router hands that identity to a caller who sent none, and the flag
-        astrald sets for such a session cannot reach an op.
+        The user module allows the node's own identity, the core router hands
+        that identity to a caller who sent none, and apphost denies a
+        token-less session every op outside `anonymous_allowlist` before it is
+        routed. None of the admin-action ops is on either list, so the
+        identity that passes is the one a token names.
         """
         try:
             user_auth = reference.read(
                 reference.ASTRALD, "mod/user/src/authorize_user_or_node.go"
             )
             router = reference.read(reference.ASTRALD, "core/router.go")
-            guard = reference.read(reference.ASTRALD, "mod/crypto/src/sign_guard.go")
+            guard = reference.read(reference.ASTRALD, f"{self.SRC}/setup_guard.go")
+            config = reference.read(reference.ASTRALD, f"{self.SRC}/config.go")
         except reference.Unavailable as exc:  # pragma: no cover -- may be absent
             self.skipTest(str(exc))
 
         self.assertIn("mod.node.Identity()", user_auth)
         self.assertIn("q.Caller = r.node.identity", router)
-        self.assertIn("the flag cannot reach an op", guard)
+        self.assertIn("return slices.Contains(allowlist, opPath)", guard)
+        allowlist = config.split("AnonymousAllowlist: AnonymousAllowlist{")[1]
+        for name in sorted(self.ADMIN_MANAGE_APPS | self.SERVE_APPS):
+            with self.subTest(op=name):
+                self.assertNotIn(f'"apphost.{name}"', allowlist)
 
         doc = " ".join((apphost_module.__doc__ or "").split())
-        self.assertIn("wearing the node's identity", doc)
-        self.assertIn("with no live run behind it", doc)
+        self.assertIn("A session without a token reaches six ops and no others.", doc)
+        self.assertIn("Whoever holds the node's token reads every access token", doc)
 
     def test_every_astrald_line_the_authorization_section_cites_lands(self):
         """`path:line` at the pin, each one read and matched against its claim.
@@ -1554,31 +1614,44 @@ class SecurityNoteTest(unittest.TestCase):
         """
         admin = "AdminManageAppsAction"
         cites = (
-            (f"{self.SRC}/op_list_tokens.go", 21, "OriginNetwork"),
-            (f"{self.SRC}/op_list_tokens.go", 27, admin),
+            (f"{self.SRC}/op_list_tokens.go", 24, "OriginNetwork"),
+            (f"{self.SRC}/op_list_tokens.go", 30, admin),
             (f"{self.SRC}/op_create_token.go", 21, "OriginNetwork"),
             (f"{self.SRC}/op_create_token.go", 25, admin),
-            (f"{self.SRC}/op_delete_token.go", 20, "OriginNetwork"),
-            (f"{self.SRC}/op_delete_token.go", 24, admin),
-            (f"{self.SRC}/op_cancel.go", 23, "OriginNetwork"),
+            (f"{self.SRC}/op_delete_token.go", 23, "OriginNetwork"),
+            (f"{self.SRC}/op_delete_token.go", 27, admin),
+            (f"{self.SRC}/op_cancel.go", 30, "OriginNetwork"),
+            (f"{self.SRC}/op_cancel.go", 32, "}"),
             (f"{self.SRC}/op_cancel.go", 36, "answers as a missing one"),
-            (f"{self.SRC}/op_cancel.go", 58, "func (mod *Module) mayCancel"),
-            (f"{self.SRC}/op_register_handler.go", 29, "ServeAppsAction"),
+            (f"{self.SRC}/op_cancel.go", 40, "}"),
+            (f"{self.SRC}/op_cancel.go", 57, "func (mod *Module) mayCancel"),
+            (f"{self.SRC}/op_register_handler.go", 33, "ServeAppsAction"),
             (f"{self.SRC}/authorize_admin_manage_apps.go", 19, "func (mod *Module) mayManageApps"),
             (f"{self.SRC}/authorize_admin_manage_apps.go", 24, "AdminManageAppsAction"),
-            (f"{self.SRC}/guest.go", 204, "ExtraAnonymous"),
-            (f"{self.SRC}/guest.go", 270, "isAuthenticated()"),
-            ("mod/user/src/authorize_user_or_node.go", 16, "authorizeUserOrNode"),
-            ("mod/user/src/authorize_user_or_node.go", 20, "mod.node.Identity()"),
+            (f"{self.SRC}/guest.go", 150, "admitsAnonymous"),
+            (f"{self.SRC}/guest.go", 156, "q.Caller.IsZero() && guest.isAuthenticated()"),
+            (f"{self.SRC}/guest.go", 157, "q.Caller = guest.guestID"),
+            (f"{self.SRC}/guest.go", 271, "isAuthenticated()"),
+            (f"{self.SRC}/config.go", 55, "AnonymousAllowlist: AnonymousAllowlist{"),
+            (f"{self.SRC}/config.go", 69, "},"),
+            ("mod/user/src/authorize_user_or_node.go", 12, "anonymous_allowlist"),
+            ("mod/user/src/authorize_user_or_node.go", 13, "node-local grant or a signed contract"),
+            ("mod/user/src/authorize_user_or_node.go", 17, "authorizeUserOrNode"),
+            ("mod/user/src/authorize_user_or_node.go", 21, "mod.node.Identity()"),
             ("mod/user/src/authorize_serve_apps.go", 15, "AuthorizeServeApps"),
             ("core/router.go", 45, "q.Caller == nil"),
             ("core/router.go", 46, "q.Caller = r.node.identity"),
-            ("mod/crypto/src/sign_guard.go", 36, "cannot reach an op"),
-            (f"{self.SRC}/op_hosts.go", 26, "OriginNetwork"),
-            (f"{self.SRC}/op_hosts.go", 32, "SeeSwarmAction"),
+            (f"{self.SRC}/op_hosts.go", 29, "OriginNetwork"),
+            (f"{self.SRC}/op_hosts.go", 35, "SeeSwarmAction"),
+            (f"{self.SRC}/op_hosts.go", 48, "RelayForAction"),
+            (f"{self.SRC}/op_hold_object.go", 36, "StoreObjectsAction"),
+            (f"{self.SRC}/op_hold_object.go", 37, "auth.ErrNotPermitted"),
+            (f"{self.SRC}/op_request_grant.go", 40, "requester.IsZero()"),
+            (f"{self.SRC}/op_request_grant.go", 62, "ErrGrantDeclined"),
             (f"{self.SRC}/op_grant.go", 21, "OpGrant records"),
-            (f"{self.SRC}/op_grant.go", 31, "OriginNetwork"),
-            (f"{self.SRC}/op_grant.go", 35, admin),
+            (f"{self.SRC}/op_grant.go", 29, "q.AcceptRaw()"),
+            (f"{self.SRC}/op_grant.go", 34, "OriginNetwork"),
+            (f"{self.SRC}/op_grant.go", 38, admin),
             (f"{self.SRC}/op_grant.go", 47, "identity.IsZero()"),
             (f"{self.SRC}/op_grant.go", 58, "args.Duration != 0"),
             (f"{self.SRC}/op_grant.go", 68, "args.Constrained"),
@@ -1604,35 +1677,41 @@ class RegisterCitationTest(unittest.TestCase):
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 17, "RegisterDuration = 10 * 365"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 23, "type opRegisterArgs struct"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 39, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 56,
-             "append(mod.GetWebOriginPermits(origin), parsePermits(args.ContractPermits)...)"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 58, "why accept before deciding"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 60, "query.AcceptRaw()"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 51,
+             "requestedContractPermits := parsePermits(args.ContractPermits)"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 53, "why accept before deciding"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 55, "query.AcceptRaw()"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 60, "OriginNetwork"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 62, "}"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 69, "GetRegisterAppPolicy()"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 75, "switch {"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 78, "ErrRegistrationDeclined"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 86, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 132, "Add(RegisterDuration)"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 137, "range grantPermits"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 182, "CreateAccessToken(guestID"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 13,
-             "type opSetAppRegisterPolicyArgs struct"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 23, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 31,
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 128, "Add(RegisterDuration)"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 133, "range grantPermits"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 137, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 178, "CreateAccessToken(guestID"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 14,
+             "type opSetPolicyArgs struct"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 24, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 53, "q.AcceptRaw()"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 56,
              "AdminManageAppsAction"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 35, "q.AcceptRaw()"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 38,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 57,
+             "auth.ErrNotPermitted"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 60,
              'args.Identity == "" && args.Operation == ""'),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 46, "mod.newDelegate("),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 61,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 66, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 68, "mod.newDelegate("),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 83,
              "func (mod *Module) newDelegate"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 71, "d.Validate()"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 93, "d.Validate()"),
             (reference.ASTRALD, f"{self.SRC}/parse_permits.go", 12, "func parsePermits"),
-            (reference.ASTRALD, f"{self.SRC}/register_serve_apps.go", 15,
-             "func serveAppsGrantRequest"),
-            (reference.ASTRALD, f"{self.SRC}/register_serve_apps.go", 17,
-             "append([]*auth.Permit{serveApps}, parsePermits(asked)...)"),
-            (reference.ASTRALD, "mod/apphost/register_policy.go", 33, "func AcceptAll"),
+            (reference.ASTRALD, f"{self.SRC}/register_grant_request.go", 17,
+             "func registerGrantRequest"),
+            (reference.ASTRALD, f"{self.SRC}/register_grant_request.go", 20,
+             "append([]*auth.Permit{serveApps, useBlueprints}, parsePermits(asked)...)"),
+            (reference.ASTRALD, "mod/apphost/register_policy.go", 29, "func AcceptAll"),
             (reference.ASTRAL_GO, "api/apphost/errors.go", 7,
              'NewError("registration declined")'),
             (reference.ASTRAL_GO, "api/apphost/client/register.go", 38,

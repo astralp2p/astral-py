@@ -18,9 +18,10 @@ a per-op contract and is not discoverable from the wire):
 | `auth.set_authorizer` | RR | `ack` \\| `error_message` | **mutates** |
 | `auth.sign_contract` | WA | `mod.auth.signed_contract` \\| `error_message`, one per input | privileged, no state written |
 
-The four are the module's client surface. `shell.spec` on an isolated astrald
-built from `48ae88b2` lists each of the four, verified, and astral-go's
-`api/auth/module.go` declares one op-name constant for each of the four.
+The four are the module's client surface. astrald `5f17900d`'s
+`mod/auth/src` declares an `Op` method for each of the four and no other, and
+astral-go's `api/auth/module.go` declares one op-name constant for each of the
+four.
 
 **An external authorizer is the last word on one action type.** The node asks
 its handlers, then the contract chain, and then the authorizer assigned to the
@@ -32,9 +33,12 @@ creates or replaces the assignment for an `action` and an optional `actor`,
 blanked (`astrald/mod/auth/src/op_list_authorizers.go`). The `endpoint` is an
 `http://` or `https://` URL or `astral://<identity-or-alias>:<op>`, and an
 astral endpoint naming the actor itself is refused
-(`astrald/mod/auth/src/authorizer_assignments.go`). All three authorize
-`mod.auth.admin_manage_apps_action` and reject before accepting when it is
-refused.
+(`astrald/mod/auth/src/authorizer_assignments.go`). All three accept the
+query, then authorize `mod.auth.admin_manage_apps_action` and answer
+`auth.ErrNotPermitted`, an `error_message` reading `not permitted`, when it is
+refused (`astrald/mod/auth/src/op_set_authorizer.go`,
+`op_remove_authorizer.go`, `op_list_authorizers.go`; the text is
+`astral-go/api/auth/errors.go`).
 
 **The op that signs a contract does not store it.** `auth.sign_contract`
 builds a fresh `SignedContract` around the contract it reads, signs it as issuer
@@ -54,8 +58,10 @@ A contract between two identities whose keys live on different nodes is signed
 one half at a time through `user.accept_membership`, not here.
 
 **`auth.sign_contract` signs only for a caller entitled to both parties.** The
-op rejects a query whose origin is neither local nor empty, a link's and MCP's
-included (`astrald/mod/auth/src/op_sign_contract.go:26-30`). It authorizes each
+op accepts the query and answers one whose origin is neither local nor empty, a
+link's and MCP's included, with an `error_message` reading `origin not allowed:
+<origin>` (`astrald/mod/auth/src/op_sign_contract.go:24-33`,
+`astral-go/astral/errors.go` `NewErrOriginNotAllowed`). It authorizes each
 contract before any key is touched (`op_sign_contract.go:38`): the caller passes
 crypto's signer rule for the issuer, then for the subject
 (`astrald/mod/auth/src/sign_contract_guard.go` `authorizeParties`). The rule is
@@ -73,7 +79,7 @@ EOF, answers one
 `mod.auth.signed_contract` or `error_message` per input in input order, and
 **mirrors the input stream's terminator** -- an explicit `eos` is answered with a
 final `eos`, a stream ended by EOF is not (`astral/channel/batch.go` at astral-go
-`8972f283`). A body-input op whose reader omits an `eos` branch answers the same
+`a2b41561`). A body-input op whose reader omits an `eos` branch answers the same
 terminator with an `error_message`
 (`astral-go/astral/channel/switch.go:110`), so the terminator is a per-op
 contract rather than a protocol rule.
@@ -107,12 +113,12 @@ promotes anonymous fields. The nesting is astral-go's rule; the flattening is
 Go's default showing through a gap.
 
 **`auth.Action` is a registered astral object at the pin.**
-`api/auth/action.go` at astral-go `8972f283` declares
+`api/auth/action.go` at astral-go `a2b41561` declares
 `func (Action) ObjectType() string { return "mod.auth.action" }` (line 22) and
 registers it with `astral.MustAdd(&Action{})` (line 55).
 
 That changes what astral-go can derive. `specFromType` probes `tryObjectType`
-ahead of its container dispatch (`astral/blueprint_reflect.go` at `8972f283`), so
+ahead of its container dispatch (`astral/blueprint_reflect.go` at `a2b41561`), so
 an embedded `auth.Action` field now yields a `RefSpec` naming
 `mod.auth.action` rather than failing -- inferred from those two sources, with
 no run behind it.
@@ -132,18 +138,18 @@ would nest the two fields in JSON under a key no node sends.
 **`mod.auth.sudo_action` exists, and astral-go's `api/auth` declares it.**
 astral-go `5923624` declares `SudoAction` in `api/auth/sudo_action.go` and
 registers it with `astral.Add`; astrald `09d9df87` stopped declaring it. The
-pins (astral-go `8972f283`, astrald `48ae88b2`) carry both commits, so
+pins (astral-go `a2b41561`, astrald `5f17900d`) carry both commits, so
 `api/auth/sudo_action.go` is the one declaration and `mod/auth/sudo_action.go`
 does not exist there. A node answers `objects.new?type=mod.auth.sudo_action`
 with a ten-byte zero instance, verified on an isolated astrald built from
-`48ae88b2`. astral-docs documents
+`5f17900d`. astral-docs documents
 `protocols/auth/types/mod.auth.sudo_action.md`, and the op survey records it as
 having no counterpart in astral-go (D-27), which held at astral-go `221ce52` and
 does not hold at the pin. The type is `{Action, AsID *identity}`, and
 astrald's authorizer for it is `Actor().IsEqual(AsID)`
 (`astrald/mod/auth/src/authorizers.go`), i.e. it grants nothing that is not
 already the caller. It is **not declared here**: no op sends one. astrald
-`48ae88b2` builds one only to ask its authorizer (`mod/apphost/src/guest.go`,
+`5f17900d` builds one only to ask its authorizer (`mod/apphost/src/guest.go`,
 `mod/crypto/src/sign_guard.go`, `mod/shell/src/op_shell.go`).
 
 **`mod.crypto.signature` is declared by `astral.api.crypto`, not here.** Both
@@ -507,8 +513,8 @@ class Auth(ModuleClient):
         """Every persisted external authorizer assignment. ST, ends at `eos`.
 
         Each assignment's `token_value` arrives empty; a token file or variable
-        arrives by name. Rejects before accepting when the caller lacks
-        `mod.auth.admin_manage_apps_action`.
+        arrives by name. Accepts, then answers `not permitted` when the caller
+        lacks `mod.auth.admin_manage_apps_action`.
         """
         return [
             self._expect(obj, AuthorizerAssignment, OP_LIST_AUTHORIZERS)
@@ -534,10 +540,10 @@ class Auth(ModuleClient):
         is action-wide. `timeout` is Go's duration syntax. `token` is the bearer
         token for an http endpoint and travels in the query string.
 
-        Rejects before accepting when the caller lacks
+        Accepts, then answers `not permitted` when the caller lacks
         `mod.auth.admin_manage_apps_action`. An assignment the node cannot
         build, an unknown actor, or an astral endpoint naming the actor is an
-        `error_message` and arrives as `RemoteError`.
+        `error_message` too; every one arrives as `RemoteError`.
         """
         params: dict[str, Any] = {
             "action": _required(action, "action", OP_SET_AUTHORIZER),
@@ -606,7 +612,7 @@ def _identity_text(value: Identity | None) -> str:
     """An identity as `SignableText` renders it: 66 zeros for an absent one.
 
     Go's `(*Identity).String()` maps a nil receiver and the zero key to the same
-    66 zeros (`astral-go/astral/identity.go:87`), so the signed text cannot
+    66 zeros (`astral-go/astral/identity.go:90`), so the signed text cannot
     distinguish them either.
     """
     return Identity.ANYONE.text() if value is None else value.text()

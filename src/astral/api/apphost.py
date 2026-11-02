@@ -9,13 +9,13 @@ than this SDK drives; *Authorization* counts it at a named revision.
 
 | Op | Mode | Answer | Notes |
 |---|---|---|---|
-| `apphost.whoami` | RR | `identity` | anonymous-safe, read-only |
+| `apphost.whoami` | RR | `identity` | read-only |
 | `apphost.list_tokens` | ST | `apphost.access_token`* + `eos` | local-only, admin action, see below |
 | `apphost.list_held_objects` | ST | `object_id.sha256`* + `eos` | local-only, per caller |
 | `apphost.create_token` | RR | `apphost.access_token` | local-only, admin action, see below |
-| `apphost.register` | RR | `apphost.access_token` \\| `error_message` | policy-gated, **mutates** |
+| `apphost.register` | RR | `apphost.access_token` \\| `error_message` | local-only, policy-gated, no token needed, **mutates** |
 | `apphost.set_app_register_policy` | RR | `ack` \\| `error_message` | admin action, **mutates** |
-| `apphost.hold_object` | RR | `ack` | local-only, needs a caller |
+| `apphost.hold_object` | RR | `ack` | local-only, needs a caller, `store_objects` |
 | `apphost.unhold_object` | RR | `ack` | local-only, needs a caller |
 | `apphost.register_handler` | RR | `ack` | local-only, `serve_apps` |
 | `apphost.bind` | BD | `ack`, then held open | local-only |
@@ -27,9 +27,9 @@ one. The two shapes sit side by side here and were both observed on the same
 node in the same run: `whoami` answers with one object and a bare EOF, while
 `list_tokens` and `list_held_objects` answer with zero or more and an `eos`.
 
-**"Local-only" is the node's word, not a hint.** Those ops answer
-`query_rejected_msg` when `q.Origin()` is the network, so they work from an IPC
-guest and never from a peer.
+**"Local-only" is the node's word, not a hint.** Those ops accept the query
+and answer `origin not allowed: network` when `q.Origin()` is the network, so
+they work from an IPC guest and never from a peer.
 
 **The `mod.apphost.*_msg` control types are declared in `astral.session`** and
 re-exported here. Design section 1 files them under this module, but they are
@@ -53,51 +53,73 @@ a property of astrald rather than an omission here:
 ## Authorization
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `48ae88b2` and astral-go `8972f283`.** An identity argument travels
+pins, astrald `5f17900d` and astral-go `a2b41561`.** An identity argument travels
 under the key `identity` and `apphost.cancel`'s nonce under `query_id`.
 
+**Every op accepts the query before it refuses one.** A refused caller reads an
+`error_message` inside the accepted stream, which surfaces as `RemoteError`, and
+never a `query_rejected_msg`: `origin not allowed: network` for a network
+origin, `not permitted` for a caller the action check refuses
+(`astral-go/api/auth/errors.go`, `astral-go/astral/errors.go`
+`NewErrOriginNotAllowed`).
+
+**A session without a token reaches six ops and no others.** apphost confines
+it, IPC and WebSocket alike, to `anonymous_allowlist`
+(`mod/apphost/src/setup_guard.go` `admitsAnonymous`, called at
+`mod/apphost/src/guest.go:150`), and denies every other query with
+`error_msg{denied}` before routing. The default lists are `user.info`,
+`user.derive_identity`, `user.bootstrap`, `user.join`, `apphost.register` and
+`.spec` while the node is unclaimed, and `user.info`, `apphost.register` and
+`.spec` once a user claims it (`mod/apphost/src/config.go:55-69`). Every op
+below except `register` therefore needs a token.
+
 **`apphost.list_tokens` and `apphost.create_token` are administration, not
-introspection.** Each refuses a query whose origin is the network and then asks
-`mod.auth.admin_manage_apps_action`, in that order, before it accepts the
-connection or reads a token -- `op_list_tokens.go:21,27` and
-`op_create_token.go:21,25`. Each op asks the action itself, through
-`mod.Auth.Authorize` on an `AdminManageAppsAction` built from `q.Caller()`;
-there is no shared helper between the op and the authority. The action's name is
-astral-go's `AdminManageAppsAction.ObjectType()`,
+introspection.** Each accepts, then answers a network origin and then asks
+`mod.auth.admin_manage_apps_action`, in that order, before it reads a token --
+`op_list_tokens.go:24,30` and `op_create_token.go:21,25`. Each op asks the
+action itself, through `mod.Auth.Authorize` on an `AdminManageAppsAction`
+built from `q.Caller()`; there is no shared helper between the op and the
+authority. The action's name is astral-go's
+`AdminManageAppsAction.ObjectType()`,
 `api/auth/admin_manage_apps_action.go:19`.
 
-`apphost.delete_token` carries the same pair (`op_delete_token.go:20,24`) and so
+`apphost.delete_token` carries the same pair (`op_delete_token.go:23,27`) and so
 does the grant surface beside it -- `apphost.grant`, `apphost.list_grants`,
 `apphost.revoke`. `grant()` below is the client of `apphost.grant`; the other
 three have none here. `apphost.cancel` refuses the network origin too
-(`op_cancel.go:23`) and authorizes on ownership instead:
+(`op_cancel.go:30`) and authorizes on ownership instead:
 a session cancels what it launched, and the action is the way past that
-(`op_cancel.go:58-68`).
+(`op_cancel.go:57-63`).
 
 **The two questions are not the same question.** `apphost.bind` and
 `apphost.cancel` reach the action through `mayManageApps`
 (`authorize_admin_manage_apps.go:19-27`), which refuses a zero principal before
 it asks the authority (`authorize_admin_manage_apps.go:20-22`) and takes the
 session's authenticated identity rather than `q.Caller()`. The token and grant
-ops do not use it. The distinction decides who the plaintext-token paragraph
-below applies to: the router's substitution of the node identity for a missing
-caller reaches the token ops and is refused by `mayManageApps`.
+ops do not use it.
 
-**The census, re-derived at `48ae88b2`.** Sixteen `op_*.go` files. Thirteen
-refuse a network origin; the three that do not are `whoami`, `register` and
-`set_app_register_policy`. Seven ask `mod.auth.admin_manage_apps_action` --
-`create_token`, `delete_token`, `list_tokens`, `grant`, `list_grants`, `revoke`
-and `set_app_register_policy`. One asks `mod.auth.serve_apps_action`:
-`register_handler` (`op_register_handler.go:29`). One asks
-`mod.user.see_swarm_action`: `hosts` (`op_hosts.go:32`), which names the nodes
-that host an app and has no client here. The other seven ask no action.
+**The census, re-derived at `5f17900d`.** Seventeen `op_*.go` files. Fifteen
+refuse a network origin; the two that do not are `whoami` and
+`set_app_register_policy`, whose file also serves
+`apphost.set_grant_request_policy`. Seven ask
+`mod.auth.admin_manage_apps_action` -- `create_token`, `delete_token`,
+`list_tokens`, `grant`, `list_grants`, `revoke` and `set_app_register_policy`.
+One asks `mod.auth.serve_apps_action`: `register_handler`
+(`op_register_handler.go:33`). One asks `mod.user.see_swarm_action`: `hosts`
+(`op_hosts.go:35`), which names the nodes that host an app, finds them through
+their `mod.nodes.relay_for_action` contracts and has no client here. One asks
+`mod.auth.store_objects_action`: `hold_object` (`op_hold_object.go:36`).
+`request_grant` asks no action: it refuses a session with no authenticated
+identity and asks the grant request policy (`op_request_grant.go:40-62`); it
+has no client here. The other five ask no action.
 
 **`apphost.set_app_register_policy` delegates the decision on every
 `apphost.register` to an op of another identity**, or with no delegate named
-restores the bundled accept-all policy (`op_set_app_register_policy.go:38-44`);
-`set_app_register_policy()` below is its client. It asks the action before it
-accepts and refuses no origin, so a network caller holding the permit reaches
-it (`op_set_app_register_policy.go:31-35`). The node stores the delegate as a
+restores the bundled accept-all policy (`op_set_app_register_policy.go:60-66`);
+`set_app_register_policy()` below is its client. It accepts, then asks the
+action and answers `not permitted` when it is refused, and it refuses no
+origin, so a network caller holding the permit reaches it
+(`op_set_app_register_policy.go:53-58`). The node stores the delegate as a
 `policy.delegate` (`astral.api.policy`), asks it with a
 `mod.apphost.app_register_request` and reads a
 `mod.apphost.app_register_decision` back; both are declared below.
@@ -107,24 +129,24 @@ it (`op_set_app_register_policy.go:31-35`). The node stores the delegate as a
 action names, and `name` is the app's own unverified claim
 (`op_register.go:23-39`). The node splits each list on every comma, trims
 each piece, and drops a blank one (`parse_permits.go:12-17`). The grant
-request always opens with `mod.auth.serve_apps_action`
-(`register_serve_apps.go:15-17`), and the trusted-web-origin permits precede
-the asked contract permits (`op_register.go:56`). The bundled policy answers
-with both lists as asked (`mod/apphost/register_policy.go:33-38`).
+request always opens with `mod.auth.serve_apps_action` and
+`mod.auth.use_blueprints_action` (`register_grant_request.go:17-20`), and the
+contract request is the asked list alone (`op_register.go:51`). The op accepts,
+then answers a network origin with `origin not allowed: network`
+(`op_register.go:55-62`). The bundled policy answers with both lists as asked
+(`mod/apphost/register_policy.go:29-34`).
 
-**A local caller holding no token passes the action check, because it arrives
-wearing the node's identity.** `mod/user/src/authorize_user_or_node.go:16-21`
-allows the user identity and the node's own identity and nobody else; any other
-identity reaches the action through a node-local grant or a signed contract
-permit (`authorize_user_or_node.go:11-12`). A token-less guest session sends a
-nil `Caller` and `core/router.go:45-47` rewrites it to the node's identity.
-astrald marks such a session anonymous (`mod/apphost/src/guest.go:199-205`) and
-the mark cannot reach an op: `routing.Op` builds its `IncomingQuery` from the
-query and its origin alone and drops `Extra`
-(`mod/crypto/src/sign_guard.go:32-36`). Inferred from those four, with no live
-run behind it: **an unauthenticated local process still reads every access token
-on the node in plaintext, still mints one for any identity it names, and still
-grants any identity any action.** The
+**A session holding a token that names the node passes every action check.**
+`mod/user/src/authorize_user_or_node.go:17-22` allows the user identity and the
+node's own identity and nobody else; any other identity reaches the action
+through a node-local grant or a signed contract permit
+(`authorize_user_or_node.go:12-13`). An authenticated session's empty caller
+is its own identity (`mod/apphost/src/guest.go:154-158`), and a token-less
+session's nil caller is rewritten to the node's identity by
+`core/router.go:45-47` -- but such a session reaches no op outside
+`anonymous_allowlist`, and none of the token or grant ops is on it. **Whoever
+holds the node's token reads every access token on the node in plaintext,
+mints one for any identity it names, and grants any identity any action.** The
 two guards stop the caller off a link, and the authenticated app that holds
 neither a grant nor a contract permit for the action.
 
@@ -227,7 +249,7 @@ ERR_REGISTRATION_DECLINED: Final = "registration declined"
 
 The node accepts the query before its policy decides and then sends this as
 an `error_message`, which surfaces as `RemoteError` with this `message`
-(`api/apphost/errors.go:5-7` at astral-go `8972f283`, sent at
+(`api/apphost/errors.go:5-7` at astral-go `a2b41561`, sent at
 `mod/apphost/src/op_register.go:75-86`).
 """
 
@@ -274,7 +296,7 @@ _CANCEL: Final[dict[str, Spec]] = {
     "cause": Primitive("string8"),
 }
 # `routing.op_spec` reports a Go `string` argument as `string8`
-# (`lib/query/field_editor.go:41-42` at astral-go `8972f283`); the node binds the
+# (`lib/query/field_editor.go:41-42` at astral-go `a2b41561`); the node binds the
 # whole value to the field, so the joined permit list carries no 255-byte bound.
 _REGISTER: Final[dict[str, Spec]] = {
     "grant_permits": Primitive("string8"),
@@ -301,8 +323,8 @@ class AccessToken:
 
     `Token` is a secret in the same sense a password is. astrald mints it as
     `randomString(32)` over `math/rand` rather than `crypto/rand`, and hands the
-    whole table to a caller holding `mod.auth.admin_manage_apps_action`, which an
-    unauthenticated local process does hold (see the module docstring), so treat
+    whole table to a caller holding `mod.auth.admin_manage_apps_action`, which a
+    session holding the node's token does hold (see the module docstring), so treat
     one that arrives here as compromised the moment it is logged.
 
     `ExpiresAt` is advisory as far as the node is concerned:
@@ -337,9 +359,12 @@ class AppRegisterRequest:
     is the app's own claim and the node does not verify it. `grant_permits`
     are the permits the app asked to hold as node-local grants, and
     `contract_permits` the permits it asked to hold in a signed node-to-app
-    contract, with the origin's trusted-source entitlement already joined
-    (`api/apphost/app_register_policy.go:12-26`). The grant request always
-    carries `mod.auth.serve_apps_action` (`mod/apphost/src/op_register.go:49-51`).
+    contract. astral-go's comment says the origin's trusted-source entitlement
+    is joined into `contract_permits` (`api/apphost/app_register_policy.go:12-26`);
+    astrald joins nothing and sends the asked list
+    (`mod/apphost/src/op_register.go:51`). The grant request always opens with
+    `mod.auth.serve_apps_action` and `mod.auth.use_blueprints_action`
+    (`mod/apphost/src/register_grant_request.go:17-20`).
     """
 
     origin: str = wire("Origin", Primitive("string8"))
@@ -414,7 +439,7 @@ def _permits(values: Iterable[str] | None, key: str) -> str | None:
     is blank, or has surrounding whitespace would be read as an action the
     caller did not name; each is refused. An action name is a `string8` in
     `mod.auth.permit`, and the node fails the registration after minting the
-    identity when it cannot encode one (`op_register.go:137-141`), so a name
+    identity when it cannot encode one (`op_register.go:133-137`), so a name
     over 255 UTF-8 bytes is refused too. A bare `str` is refused rather than
     iterated character by character.
     """
@@ -497,17 +522,17 @@ class Apphost(ModuleClient):
 
     __slots__ = ()
 
-    # --- read-only, anonymous-safe ---
+    # --- read-only ---
 
     async def whoami(self, **kw: Any) -> Identity:
         """The identity the node sees this connection as. RR.
 
         Answers one `identity` and then **closes with no `eos`** -- astral-docs
-        bug D-23, verified live. An anonymous guest sends a nil `Caller` and
-        astrald's core router substitutes the node's own identity for it, so an
-        anonymous caller is told the *node's* identity here and an authenticated
-        one is told its guest identity. That substitution is the router's, not
-        this op's, and it applies to every op that reads `q.Caller()`.
+        bug D-23, verified live. An authenticated session that sends a nil
+        `Caller` is told its guest identity, because apphost names an empty
+        caller after the session's token (`mod/apphost/src/guest.go:154-158`).
+        A session without a token is denied this op: it is not on astrald's
+        `anonymous_allowlist`.
         """
         return self._expect(await self._c.call_one(OP_WHOAMI, **kw), Identity, OP_WHOAMI)
 
@@ -517,12 +542,14 @@ class Apphost(ModuleClient):
         """Access tokens on the node, optionally for one identity. ST.
 
         **This is a privileged read and the result is secret.** Local-only, and
-        gated on `mod.auth.admin_manage_apps_action`; a caller off a link and a
-        caller without the action both get `QueryRejected`. With no `id` the node
-        returns every token it holds, with the token strings in plaintext, and an
-        unauthenticated local process passes the gate as the node (see the module
-        docstring). Passing `id` filters server-side, under the wire key
-        `identity`; it does not authorize anything.
+        gated on `mod.auth.admin_manage_apps_action`; the node accepts, then
+        answers a caller off a link with `origin not allowed: network` and a
+        caller without the action with `not permitted`, each a `RemoteError`.
+        With no `id` the node returns every token it holds, with the token
+        strings in plaintext, and a session holding the node's token passes the
+        gate as the node (see the module docstring). Passing `id` filters
+        server-side, under the wire key `identity`; it does not authorize
+        anything.
 
         `id` accepts an `Identity`, 66 hex characters, `anyone`, or a directory
         name, which costs one `dir.resolve` before this query is sent; the query
@@ -542,9 +569,9 @@ class Apphost(ModuleClient):
         """The objects this caller is holding. ST, local-only.
 
         Scoped to `q.Caller()` and to unexpired holds, so it is the read side of
-        `hold_object` and never a view of anyone else's holds. An anonymous guest
-        is given the node's own identity by the router, so it reads the node's
-        holds rather than being refused.
+        `hold_object` and never a view of anyone else's holds. A session holding
+        the node's token reads the node's holds; a session without a token is
+        denied the op.
         """
         return [
             self._expect(obj, ObjectID, OP_LIST_HELD_OBJECTS)
@@ -562,8 +589,10 @@ class Apphost(ModuleClient):
     ) -> AccessToken:
         """Mint an access token for an identity. RR.
 
-        Local-only, and gated on `mod.auth.admin_manage_apps_action`; a caller off
-        a link and a caller without the action both get `QueryRejected`. The token
+        Local-only, and gated on `mod.auth.admin_manage_apps_action`; the node
+        accepts, then answers a caller off a link with
+        `origin not allowed: network` and a caller without the action with
+        `not permitted`, each a `RemoteError`. The token
         authenticates as `id` whoever asked for it, so this is the node handing
         out a credential for an identity the caller need not control.
 
@@ -600,8 +629,10 @@ class Apphost(ModuleClient):
 
         The node records a node-local grant and replaces whatever `identity`
         held for the same action (`op_grant.go:21-23`). Local-only, and gated on
-        `mod.auth.admin_manage_apps_action`; a caller off a link and a caller
-        without the action both get `QueryRejected` (`op_grant.go:31-37`).
+        `mod.auth.admin_manage_apps_action`; the node accepts, then answers a
+        caller off a link with `origin not allowed: network` and a caller
+        without the action with `not permitted`, each a `RemoteError`
+        (`op_grant.go:29-40`).
 
         `identity` travels under the wire key `identity`, as the hex of the
         identity this client resolves. The node refuses the zero identity,
@@ -652,7 +683,7 @@ class Apphost(ModuleClient):
         The node generates a key pair, signs an app contract for it and answers
         with the token, so this is the bootstrap an app with no credentials
         starts from. The token and every permit written expire after ten years
-        (`op_register.go:17,132,182`).
+        (`op_register.go:17,128,178`).
 
         `grant_permits` names the actions to hold as node-local grants and
         `contract_permits` the actions to hold in a signed node-to-app contract;
@@ -666,7 +697,7 @@ class Apphost(ModuleClient):
 
         The node accepts the query before its register policy decides, so a
         refusal is an `error_message` reading `ERR_REGISTRATION_DECLINED` and
-        arrives as `RemoteError` (`op_register.go:58-60,75-86`).
+        arrives as `RemoteError` (`op_register.go:53-55,75-86`).
 
         astral-go's `Register(ctx, permits...)` sends `grant_permits` alone
         (`api/apphost/client/register.go:38-82`).
@@ -694,16 +725,16 @@ class Apphost(ModuleClient):
         `identity` through its directory. Both omitted restore the bundled
         accept-all policy, and one without the other is refused here, as the
         node refuses it. `timeout` bounds one question in Go's duration syntax;
-        omitted, the node waits ten minutes (`op_set_app_register_policy.go:13-23`).
+        omitted, the node waits ten minutes (`op_set_app_register_policy.go:14-24`).
 
-        Rejects before accepting when the caller lacks
+        Accepts, then answers `not permitted` when the caller lacks
         `mod.auth.admin_manage_apps_action`, and refuses no origin
-        (`op_set_app_register_policy.go:31-35`). A delegate the node cannot
+        (`op_set_app_register_policy.go:53-58`). A delegate the node cannot
         resolve, the node itself, or a `timeout` above ten minutes is an
-        `error_message` and arrives as `RemoteError`
-        (`op_set_app_register_policy.go:46-49,61-71`).
+        `error_message` too; every one arrives as `RemoteError`
+        (`op_set_app_register_policy.go:68-71,83-93`).
 
-        astral-go `8972f283` has no client for this op.
+        astral-go `a2b41561` has no client for this op.
         """
         qs = setter_query(OP_SET_APP_REGISTER_POLICY, identity, operation, timeout)
         self._expect(
@@ -722,9 +753,12 @@ class Apphost(ModuleClient):
         """Keep an object from being collected. RR, local-only.
 
         `duration` omitted is a **permanent** hold, not a defaulted one: astrald
-        stores a null expiry for it. The hold is recorded against `q.Caller()`,
-        so an anonymous guest holds objects as the node, and an object may be
-        held before this node has ever fetched it.
+        stores a null expiry for it. The node accepts, then asks
+        `mod.auth.store_objects_action` for `q.Caller()` and answers
+        `not permitted` when it is refused (`op_hold_object.go:36-38`). The hold
+        is recorded against `q.Caller()`, so a session holding the node's token
+        holds objects as the node, and an object may be held before this node
+        has ever fetched it.
 
         astral-go's client cannot pass `duration` at all.
         """
@@ -768,16 +802,15 @@ class Apphost(ModuleClient):
         the process (astral-docs bug D-13 is the claim that closing unregisters).
 
         Local-only, then `mod.auth.serve_apps_action` for the identity the
-        handler answers for (`op_register_handler.go:26`).
-        That second check does not make the op an authenticated one. It registers
-        under `q.Caller()`, which for an anonymous guest is the node's own
-        identity because the core router substitutes it for a nil caller, and
-        `mod/user/src/authorize_serve_apps.go:8,15` allows the node's identity.
-        Registering as the node is therefore still something an unauthenticated
-        local process can attempt; whether it then receives the node's queries is
-        astrald's business and is not asserted here. `register_service_msg` is
-        the authenticated counterpart -- astrald refuses it outright from a
-        token-less guest (`mod/apphost/src/guest.go:270-272`).
+        handler answers for (`op_register_handler.go:33`); the node accepts
+        first and answers either refusal with an `error_message`, which arrives
+        as `RemoteError`. It registers under `q.Caller()`, and
+        `mod/user/src/authorize_serve_apps.go:8,15` allows the node's identity,
+        so a session holding the node's token registers as the node. A session
+        without a token never reaches the op: it is not on astrald's
+        `anonymous_allowlist`. `register_service_msg` is the message-level
+        counterpart, and astrald refuses it outright from a token-less guest
+        (`mod/apphost/src/guest.go:271-273`).
         """
         qs = querystring.build(
             OP_REGISTER_HANDLER,
@@ -855,15 +888,16 @@ class Apphost(ModuleClient):
         cancelled. The nonce travels under the wire key `query_id`.
 
         Returns whether the node had that query en route. `False` is the ordinary
-        outcome for a query that has already been answered, and it is the only
-        `error_message` this op sends, so the message is not inspected. It is
+        outcome for a query that has already been answered, and for a local
+        caller it is the only `error_message` this op sends, so the message is
+        not inspected. It is
         also what a caller that may not cancel the query is told, deliberately:
         a session cancels what it launched, `mod.auth.admin_manage_apps_action`
         is the way past that, and a refusal reads as "not found" so a caller
         learns nothing about the nonces other apps hold (`op_cancel.go:36-40`).
 
-        Local-only. A query off a link is rejected before any of that
-        (`op_cancel.go:23`).
+        Local-only. A query off a link is answered `origin not allowed: network`
+        before any of that (`op_cancel.go:30-32`).
 
         `zone=device` by default, matching astral-go: cancelling is a local act
         and a cancel that left the machine would be routed as a query of its own.

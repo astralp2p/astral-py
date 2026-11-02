@@ -759,7 +759,7 @@ class LiveIpTest(live_support.LiveCase):
     """`ip` against a real node. Every op here is read-only.
 
     The three probes that are not `ip` ops -- `shell.spec` and two
-    `objects.new` -- are on the anonymous read-only list and are what settle the
+    `objects.new` -- are on design section 7.3's read-only list and are what settle the
     op surface and the zero value against the node rather than against a copy of
     it.
     """

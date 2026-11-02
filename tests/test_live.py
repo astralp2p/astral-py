@@ -31,7 +31,7 @@ being right rather than the SDK being self-consistent:
   one of the node's 32 apphost workers permanently and thirty-two of them wedge
   every app on the machine (astrald bug G-13).
 
-Read-only, anonymous-safe ops only. Nothing here mutates node state: no
+Read-only ops only, under `ASTRAL_TEST_NODE_TOKEN`. Nothing here mutates node state: no
 `dir.set_alias`, no `tree.set`, no `objects.*` writes, no registration, no
 `apphost.cancel`. `log.listen` in particular is never opened -- it registers a
 callback into the node's global logger, and a subscriber that stops reading is a
@@ -60,11 +60,11 @@ class SmokeTest(LiveCase):
 
         The identity assertion is node-agnostic and grounded in astrald rather
         than in this machine's node: `OpWhoami` sends `query.Caller()`, and
-        `core/router.go` substitutes the node's own identity for a nil caller. An
-        anonymous client sends the nil form, so `whoami` gives back the identity
-        from the greeting. An authenticated one gets its own guest identity, and
-        the assertion follows whichever this client is -- the environment may
-        carry a token.
+        apphost names an authenticated session's nil caller after its token
+        (`mod/apphost/src/guest.go:154-158`), so an authenticated client gets
+        its own guest identity. A token-less client is denied `whoami`, which is
+        not on `anonymous_allowlist`. The assertion follows whichever identity
+        this client authenticated as.
         """
         async with await self.client() as client:
             self.assertIsInstance(client.host_id, Identity)
