@@ -98,7 +98,7 @@ use. Importing `astral.api` registers `mod.ip.ip_address` and
 `mod.ip.ip_address` in a `Ref` slot, so a program that never asks this module
 anything still needs the type to decode a link.
 
-Source citations are pinned to astral-go `08ead7ce` and astrald `a499928a`.
+Source citations are pinned to astral-go `08ead7ce` and astrald `9c466cf3`.
 """
 
 from __future__ import annotations

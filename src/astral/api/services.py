@@ -103,7 +103,7 @@ property design section 5.1 gives every module. Registration does not wait on
 it: `astral/__init__.py` imports the whole `api` package eagerly, so whether
 `services.update` decodes never depends on which property a caller touched.
 
-Line numbers cite astrald `a499928a` and astral-go `08ead7ce`, the revisions
+Line numbers cite astrald `9c466cf3` and astral-go `08ead7ce`, the revisions
 `tests/reference.py` pins, and `tests/test_api_services.py` reads each one back.
 """
 

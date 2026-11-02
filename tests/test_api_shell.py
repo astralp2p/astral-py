@@ -19,7 +19,7 @@ on:
 
 Read-only throughout: `shell.spec` touches no node state, which is what makes
 it usable as a self-check. A session without a token reaches the same handler
-only as `.spec` (`mod/shell/src/loader.go`, astrald `a499928a`); `shell.spec`
+only as `.spec` (`mod/shell/src/loader.go`, astrald `9c466cf3`); `shell.spec`
 is not on `anonymous_allowlist`, so the live tier asks it under
 `ASTRAL_TEST_NODE_TOKEN`.
 """

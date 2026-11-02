@@ -18,7 +18,7 @@ a per-op contract and is not discoverable from the wire):
 | `auth.set_authorizer` | RR | `ack` \\| `error_message` | **mutates** |
 | `auth.sign_contract` | WA | `mod.auth.signed_contract` \\| `error_message`, one per input | privileged, no state written |
 
-The four are the module's client surface. astrald `a499928a`'s
+The four are the module's client surface. astrald `9c466cf3`'s
 `mod/auth/src` declares an `Op` method for each of the four and no other, and
 astral-go's `api/auth/module.go` declares one op-name constant for each of the
 four.
@@ -135,7 +135,7 @@ would nest the two fields in JSON under a key no node sends.
 **`mod.auth.sudo_action` exists, and astral-go's `api/auth` declares it.**
 astral-go `5923624` declares `SudoAction` in `api/auth/sudo_action.go` and
 registers it with `astral.Add`; astrald `09d9df87` stopped declaring it. The
-pins (astral-go `08ead7ce`, astrald `a499928a`) carry both commits, so
+pins (astral-go `08ead7ce`, astrald `9c466cf3`) carry both commits, so
 `api/auth/sudo_action.go` is the one declaration and `mod/auth/sudo_action.go`
 does not exist there. A node answers `objects.new?type=mod.auth.sudo_action`
 with a ten-byte zero instance, verified on an isolated astrald built from
@@ -146,7 +146,7 @@ does not hold at the pin. The type is `{Action, AsID *identity}`, and
 astrald's authorizer for it is `Actor().IsEqual(AsID)`
 (`astrald/mod/auth/src/authorizers.go`), i.e. it grants nothing that is not
 already the caller. It is **not declared here**: no op sends one. astrald
-`a499928a` builds one only to ask its authorizer (`mod/apphost/src/guest.go`,
+`9c466cf3` builds one only to ask its authorizer (`mod/apphost/src/guest.go`,
 `mod/crypto/src/sign_guard.go`, `mod/shell/src/op_shell.go`).
 
 **`mod.crypto.signature` is declared by `astral.api.crypto`, not here.** Both
