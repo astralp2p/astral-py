@@ -60,7 +60,7 @@ a property of astrald rather than an omission here:
 ## Authorization
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `a499928a` and astral-go `08ead7ce`.** An identity argument travels
+pins, astrald `9c466cf3` and astral-go `08ead7ce`.** An identity argument travels
 under the key `identity` and `apphost.cancel`'s nonce under `query_id`.
 
 **Every op accepts the query before it refuses one.** A refused caller reads an
@@ -105,7 +105,7 @@ it asks the authority (`authorize_admin_manage_apps.go:20-22`) and takes the
 session's authenticated identity rather than `q.Caller()`. The token and grant
 ops do not use it.
 
-**The census, re-derived at `a499928a`.** Seventeen `op_*.go` files. Fifteen
+**The census, re-derived at `9c466cf3`.** Seventeen `op_*.go` files. Fifteen
 refuse a network origin; the two that do not are `whoami` and
 `set_app_register_policy`, whose file also serves
 `apphost.set_grant_request_policy`. Seven ask
@@ -122,7 +122,8 @@ identity and asks the grant request policy (`op_request_grant.go:42-62`);
 
 **`apphost.set_app_register_policy` delegates the decision on every
 `apphost.register` to an op of another identity**, or with no delegate named
-restores the bundled accept-all policy (`op_set_app_register_policy.go:122-124`);
+restores the bundled accept-all policy
+(`op_set_app_register_policy.go:124-126,135-137`);
 `set_app_register_policy()` below is its client. It accepts, then asks the
 action and answers `not permitted` when it is refused, and it refuses no
 origin, so a network caller holding the permit reaches it
@@ -162,8 +163,8 @@ duration with `negative duration` (`op_grant.go:50-57`,
 `op_request_grant.go:87-92`). `list_grants` answers one `mod.apphost.grant` per
 unexpired grant, then `eos` (`op_list_grants.go:15-17,50-56`). `revoke` reads
 a zero `id` as absent, because grant IDs start at 1 (`op_revoke.go:49-57`).
-The grant request policy is the stored delegate, else `accept_all` when that
-mode is set, else refuse-all (`register_policy.go:64-78`);
+The grant request policy asks a stored delegate; else it accepts all when the
+mode is unset or `accept_all`; else it refuses all (`register_policy.go:69-90`);
 `apphost.set_grant_request_policy` sets it and has no client here. The register
 grant request opens with `mod.auth.serve_apps_action` and
 `mod.auth.use_blueprints_action` (`register_grant_request.go:17-20`), the op
@@ -460,7 +461,7 @@ class AppRegisterDecision:
 # channel. Each is astral-go's `api/apphost` type at `08ead7ce`, whose field
 # order is the wire order, and each field list is `astral.BlueprintOf`'s answer
 # there, which is what the node's `objects.get_blueprint` sends
-# (`mod/objects/src/module.go:237-255` at astrald `a499928a`).
+# (`mod/objects/src/module.go:237-255` at astrald `9c466cf3`).
 
 
 @record("mod.apphost.grant")
@@ -985,7 +986,7 @@ class Apphost(ModuleClient):
         (`op_set_app_register_policy.go:46-51`). A delegate the node cannot
         resolve, the node itself, or a `timeout` above ten minutes is an
         `error_message` too; every one arrives as `RemoteError`
-        (`op_set_app_register_policy.go:126-129,136-147`).
+        (`op_set_app_register_policy.go:59-65,134-149`).
 
         astral-go `08ead7ce` has no client for this op.
         """

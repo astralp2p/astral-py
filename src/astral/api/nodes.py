@@ -39,7 +39,7 @@ a per-op contract and is not discoverable from the wire):
 
 `nodes.resolve_endpoints`, `nodes.add_endpoint` and `nodes.new_link` name their
 identity argument `identity`, and `nodes.close_link` names its nonce `link_id`,
-as `nodes.migrate_session` does. astrald `a499928a` marks seven parameters
+as `nodes.migrate_session` does. astrald `9c466cf3` marks seven parameters
 required in source: `identity` on `nodes.resolve_endpoints`,
 `nodes.add_endpoint` and `nodes.new_link`, `endpoint` on `nodes.add_endpoint`,
 `link_id` on `nodes.close_link`, and `session_id` and `link_id` on

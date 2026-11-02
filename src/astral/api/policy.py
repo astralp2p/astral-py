@@ -7,8 +7,8 @@ admission decision to share (`api/policy/delegate.go` at astral-go
 `user.request_membership`, `user.accept_membership` and `user.accept_contract`,
 each persisted as a `policy.delegate` in the node's tree under
 `/mod/apphost/policy` and `/mod/user/policy`
-(`mod/apphost/src/register_policy.go:13,24-25` and
-`mod/user/src/swarm_policy.go:12,18-20` at astrald `a499928a`). The question and
+(`mod/apphost/src/register_policy.go:13,29-30` and
+`mod/user/src/swarm_policy.go:12,18-20` at astrald `9c466cf3`). The question and
 the answer are the owning module's types -- `mod.apphost.app_register_request`
 and `mod.apphost.app_register_decision` in `astral.api.apphost`, the four
 `mod.user.swarm_*` types and the two `mod.user.contract_accept_*` types in
@@ -21,7 +21,7 @@ this SDK.
 back** (`api/policy/ask.go`). An app serving as a delegate therefore answers
 one query carrying one request object, from the node's identity, with one
 decision object. An answer of another type, or no answer, declines
-(`mod/apphost/src/register_policy.go:50-58`).
+(`mod/apphost/src/register_policy.go:55-63`).
 
 The type name has **no `mod.` prefix**: `Delegate.ObjectType()` returns
 `policy.delegate` (`api/policy/delegate.go:27`), and design section 5.1 rule 6
@@ -38,12 +38,13 @@ that reason: a module client is a bound set of ops and this module has none.
 op declares `Identity string`, `Operation string` and `Timeout
 astral.Duration`, and reads both names empty as a restore of the bundled policy
 (`mod/apphost/src/op_set_app_register_policy.go:15-25` and
-`mod/user/src/op_set_swarm_policy.go:14-24` at astrald `a499928a`).
+`mod/user/src/op_set_swarm_policy.go:14-24` at astrald `9c466cf3`).
 `apphost.set_grant_request_policy` also takes a `mode`, `accept_all` or
 `reject_all`, which `setter_query` does not send
 (`mod/apphost/src/op_set_app_register_policy.go:27-38`). Every bundled policy
-accepts all but the grant request policy's, which refuses all
-(`mod/apphost/src/register_policy.go:15-18`).
+accepts all. The grant request policy asks a stored delegate; else it accepts
+all when its mode is unset or `accept_all`; else it refuses all
+(`mod/apphost/src/register_policy.go:15-19`).
 """
 
 from __future__ import annotations

@@ -12,7 +12,7 @@ else -- no method constants, no client package, no docs directory:
     }
 
 So this module is that interface plus the dispatch table astrald keeps beside
-it. `mod/exonet/module.go` at astrald `a499928a` declares a per-network registry
+it. `mod/exonet/module.go` at astrald `9c466cf3` declares a per-network registry
 of dialers, unpackers and parsers with three dispatch methods; `Unpack(network,
 data)` and `Parse(network, address)` are the two a client needs, and `Dial` is
 the one it does not -- dialing an endpoint is the node's business and no
@@ -28,7 +28,7 @@ depend on which endpoints a build ships.
 **Two names for one thing, kept apart.** `Endpoint.network()` is the network a
 concrete type belongs to and is fixed per class; a *registration* maps one or
 more names to that class, because astrald's TCP module answers to both `tcp` and
-`inet` (`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `a499928a`).
+`inet` (`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `9c466cf3`).
 `network()` is always the canonical name, never an alias.
 
 **`Endpoint.pack()` is the object payload and nothing else.** Every concrete
@@ -247,7 +247,7 @@ def _require(types: EndpointTypes, network: str) -> type[Endpoint]:
 
     astrald answers `ErrUnsupportedNetwork` here, the `unsupported network`
     error astral-go declares (`api/exonet/errors.go`, astral-go `08ead7ce`) and
-    `mod/exonet/errors.go` names (astrald `a499928a`). This SDK adds no exception
+    `mod/exonet/errors.go` names (astrald `9c466cf3`). This SDK adds no exception
     class for it: an unregistered network is an argument this SDK refuses before
     it sends anything, which is `BadArgument`.
     """

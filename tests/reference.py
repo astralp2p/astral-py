@@ -43,12 +43,24 @@ ASTRALD: Final = "astrald"
 ASTRAL_GO: Final = "astral-go"
 
 PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
-    # The revisions the modules were read against: astrald `a499928a`, the
-    # head of astrald pull request #349, which reads the apphost grant objects,
-    # and astral-go `08ead7ce`, the merge of astral-go pull request #167, which
-    # defines them and which astrald `a499928a` requires. Every `path:line`
-    # citation in `astral/api/*.py` resolves at one of these two and none names
-    # another revision. Bumping one means re-reading the citations that name it.
+    # The revisions the modules were read against: astrald `9c466cf3`, the
+    # merge of astrald pull request #351, after which an unset grant request
+    # policy accepts every request, and astral-go `08ead7ce`, the merge of
+    # astral-go pull request #167, which defines the apphost grant objects and
+    # which astrald `9c466cf3` requires. Every `path:line` citation in
+    # `astral/api/*.py` resolves at one of these two and none names another
+    # revision. Bumping one means re-reading the citations that name it.
+    #
+    # astrald bumped from `a499928a`, the head of #349; astral-go stays. Re-read
+    # at the bump, every cited astrald file that differs between the two:
+    # `mod/apphost/src/op_set_app_register_policy.go` and
+    # `mod/apphost/src/register_policy.go`. The other paths that differ --
+    # `.ai/system`, `mobile/services.go`, `mod/apphost/grant_request_policy.go`,
+    # `mod/apphost/src/module.go` and four `op_*_test.go` files, which lose the
+    # op tests #349 added -- carry no citation. Claims rewritten: the grant
+    # request policy asks a stored delegate, else accepts all when the mode is
+    # unset or `accept_all`, else refuses all; both setters build the delegate
+    # in `newDelegate` before `writePolicyDelegate` writes it.
     #
     # Bumped from astrald `5f17900d` / astral-go `dbc27574`, the head of #167.
     # `08ead7ce` has the tree of `dbc27574`. Re-read at the bump, every cited
@@ -105,7 +117,7 @@ PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
     # `mod.user.bootstrap_result`'s `Token`, `user.derive_identity`,
     # `user.join`, `user.set_contract_accept_policy` and their types and error
     # texts; the apphost census counts seventeen files.
-    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "a499928a"),
+    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "9c466cf3"),
     ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "08ead7ce"),
 }
 

@@ -58,7 +58,7 @@ def token() -> str | None:
     """The token every live client presents, or `None` for a token-less one.
 
     astrald confines a session without a token to `anonymous_allowlist`
-    (`mod/apphost/src/setup_guard.go` `admitsAnonymous` at `a499928a`), and
+    (`mod/apphost/src/setup_guard.go` `admitsAnonymous` at `9c466cf3`), and
     the read-only ops this tier runs are not on it, so a run against a node at
     the pin sets `ASTRAL_TEST_NODE_TOKEN` to a token the node maps to its own
     identity, which is the caller the tier's assertions call the node.

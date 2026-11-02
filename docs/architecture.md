@@ -16,8 +16,8 @@ document states the resolution, and the resolution is binding.
 |---|---|---|
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
 | 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `08ead7ce` (the merge of astral-go pull request #167, which defines the apphost grant objects) |
-| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `a499928a` (the head of astrald pull request #349, which reads the apphost grant objects) — authoritative for session semantics the client never exercises |
-| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `415c28c`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
+| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `9c466cf3` (the merge of astrald pull request #351, after which an unset grant request policy accepts every request) — authoritative for session semantics the client never exercises |
+| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `504378b`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
 When 1 and 3 disagree, 1 wins and the disagreement is filed in §9. When astral-go
@@ -1735,7 +1735,7 @@ Risk R-15 no longer applies.
 
 Section 3.4 says anonymous guests may route queries when the node allows it, section 5.2 calls
 `bip137sig.derive_key` anonymous-callable, and section 7.3 runs the live tier anonymously.
-astrald `a499928a` confines every session without a token, IPC and WebSocket alike, to the ops
+astrald `9c466cf3` confines every session without a token, IPC and WebSocket alike, to the ops
 named in `apphost.yaml`'s `anonymous_allowlist` for the node's claim state and denies every
 other query with `error_msg{denied}` before routing (`mod/apphost/src/setup_guard.go`
 `admitsAnonymous`, called at `mod/apphost/src/guest.go:150`). The default lists are `user.info`,

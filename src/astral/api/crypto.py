@@ -32,7 +32,7 @@ on the channel body (`mod/crypto/src/op_verify_hash_signature.go`,
 `op_verify_text_signature.go`), so an implementation that never streams one
 gets an accepted query, no answer, EOF -- and, if it reports that as success,
 **silently never verifies**. Every shape below was read out of astrald's
-`mod/crypto/src` at `a499928a`, never out of a sibling SDK.
+`mod/crypto/src` at `9c466cf3`, never out of a sibling SDK.
 
 **One rule decides where each value travels**, and it is stated once here so no
 method has to argue it again:
@@ -80,7 +80,7 @@ form.
 
 **A caller signs as itself, and the node's own identity cannot sign at all.**
 Every signature passes `AuthorizeSigner`
-(`mod/crypto/src/sign_guard.go` at `a499928a`): the key must be the caller's
+(`mod/crypto/src/sign_guard.go` at `9c466cf3`): the key must be the caller's
 own identity, or one the caller holds a `mod.auth.sudo_action` for, and the
 node's own key is refused on the self branch. A session holding a token that
 names the node speaks as the node (`mod/apphost/src/guest.go:154-158`), so it
@@ -130,7 +130,7 @@ Reached as `client.crypto`, the `functools.cached_property` design section 5.1
 asks for, or as `Crypto(client)`, which constructs the same object and is what
 the tests here use.
 
-Source citations are pinned to astrald `a499928a` and astral-go `08ead7ce`, the
+Source citations are pinned to astrald `9c466cf3` and astral-go `08ead7ce`, the
 revisions `tests/reference.py` names. The SDK supports the node at those
 revisions and no older one, so every citation here resolves at a pin.
 `tests/test_api_crypto.py` reads those directories rather than trusting this
