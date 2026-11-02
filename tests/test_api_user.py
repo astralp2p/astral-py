@@ -1159,7 +1159,7 @@ class ListSiblingsOpTest(UserCase):
     @bounded()
     async def test_a_zone_goes_to_the_op_argument_and_to_the_routing_zone(self):
         """One scope, two levers, as `Objects` does it. The op's own argument is
-        inert on astrald `5f17900d` -- the context it builds is never used --
+        inert on astrald `a499928a` -- the context it builds is never used --
         and the routing zone is not, so sending only one of them is wrong
         whichever one it is."""
         api = await self.serving(
@@ -1343,7 +1343,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_sends_the_identity_alone(self):
-        """`start` is undeclared on astrald `5f17900d`, and the node reads the
+        """`start` is undeclared on astrald `a499928a`, and the node reads the
         height out of its own tree."""
         query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
@@ -1353,7 +1353,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_accepts_no_start_keyword(self):
-        """`start` is undeclared on astrald `5f17900d`, so naming one is a
+        """`start` is undeclared on astrald `a499928a`, so naming one is a
         `TypeError` and nothing reaches the node."""
         api = await self.serving({OP_SYNC_WITH: Accept(objects=[ACK_FRAME])})
         with self.assertRaises(TypeError):

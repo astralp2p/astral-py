@@ -200,7 +200,7 @@ class EmitterReadsBackTest(unittest.IsolatedAsyncioTestCase):
     `eeb31e3` and `54f55b0` made its zero value 37 readable bytes and its text
     form `unknown`. `mod.tor.digest` left when `94f6923` gave the zero digest the
     same text form in place of the bare `.onion` its `UnmarshalText` refused.
-    All three are in `main` at `dbc27574`. All four framings agree on both types
+    All three are in `main` at `08ead7ce`. All four framings agree on both types
     now, so they are swept with everything else and an entry would fail on its
     own `assertNotEqual`."""
 
@@ -259,7 +259,7 @@ class EmitterReadsBackTest(unittest.IsolatedAsyncioTestCase):
         and leaves the consumer with a clean, complete, wrong answer.
 
         astral-go writes `" " + text + "\\n"` with no escaping
-        (`astral/channel/text_sender.go` at astral-go `dbc27574`), so escaping
+        (`astral/channel/text_sender.go` at astral-go `08ead7ce`), so escaping
         here would leave the node behind; base64 is a spelling its
         `TextReceiver` reads.
         """

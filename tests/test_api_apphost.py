@@ -11,7 +11,8 @@ same fifteen ops:
   against astral-go `221ce52`, printing `hex.EncodeToString` of what `WriteTo`
   wrote, `json.Marshal` of the value, the line `channel.TextSender` wrote, and
   `astral.ResolveObjectID`. The four grant types are pinned the same way in
-  `GRANT_GO_VECTORS`, from a program linked against astral-go `dbc27574`.
+  `GRANT_GO_VECTORS`, from a program linked against astral-go `dbc27574`, the
+  head of astral-go #167, whose tree its merge `08ead7ce` carries unchanged.
 - **Tier B** pins the query strings and the shapes against `MockApphost`. A
   module client is argument marshalling plus one call, so the marshalling is
   what can be wrong: a capitalised key is silently dropped by the node, an
@@ -254,7 +255,7 @@ DISCOVERY_PERMIT = Permit(
 )
 
 # Name -> (value, payload hex, JSON, text line, ObjectID), each string astral-go
-# `dbc27574`'s output for the Go struct literal the value mirrors.
+# `08ead7ce`'s output for the Go struct literal the value mirrors.
 GRANT_GO_VECTORS: dict[str, tuple[object, str, str, str, str]] = {
     "grant_full": (
         Grant(id=7, permit=DISCOVERY_PERMIT, expires_at=EXPIRES),
@@ -372,9 +373,9 @@ GRANT_GO_VECTORS: dict[str, tuple[object, str, str, str, str]] = {
     ),
 }
 
-# `astral.BlueprintOf` at astral-go `dbc27574`, the function the node's
+# `astral.BlueprintOf` at astral-go `08ead7ce`, the function the node's
 # `objects.get_blueprint` answers with (`mod/objects/src/module.go:237-255` at
-# astrald `5f17900d`), decoded.
+# astrald `a499928a`), decoded.
 GRANT_BLUEPRINTS = {
     "mod.apphost.grant": [
         ("ID", Primitive("uint64")),
@@ -397,7 +398,7 @@ GRANT_BLUEPRINTS = {
     ],
 }
 
-# The four blueprints as astral-go `dbc27574` writes them, `astral.blueprint`
+# The four blueprints as astral-go `08ead7ce` writes them, `astral.blueprint`
 # payloads in hex, for decoding rather than for trusting the table above.
 GRANT_BLUEPRINT_PAYLOADS = {
     "mod.apphost.grant": (
@@ -571,14 +572,14 @@ class AppRegisterPolicyTypesTest(unittest.TestCase):
              "AppRegisterDecision is the app registration policy's answer"),
             (reference.ASTRAL_GO, "api/apphost/app_register_policy.go", 57,
              "Authorizers []*auth.AuthorizerAssignment"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 51,
-             "requestedContractPermits := parsePermits(args.ContractPermits)"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 211,
+             "ContractPermits: req.ContractPermits"),
             (reference.ASTRALD, "mod/apphost/src/register_grant_request.go", 17,
              "func registerGrantRequest"),
             (reference.ASTRALD, "mod/apphost/src/register_grant_request.go", 20,
-             "append([]*auth.Permit{serveApps, useBlueprints}, parsePermits(asked)...)"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 83, "dec.Validate()"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 85,
+             "append([]*auth.Permit{serveApps, useBlueprints}, asked...)"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 71, "dec.Validate()"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 73,
              "ErrRegistrationDeclined"),
         )
         for repo, path, number, fragment in cites:
@@ -591,7 +592,7 @@ class AppRegisterPolicyTypesTest(unittest.TestCase):
 
 
 class GrantTypesTest(unittest.TestCase):
-    """The grant and the three request objects, against astral-go `dbc27574`."""
+    """The grant and the three request objects, against astral-go `08ead7ce`."""
 
     def test_every_value_encodes_to_the_go_bytes(self):
         for name, (value, payload, _, _, _) in GRANT_GO_VECTORS.items():
@@ -755,31 +756,80 @@ class GrantTypesTest(unittest.TestCase):
             (reference.ASTRALD, "mod/objects/src/module.go", 237,
              "func (mod *Module) GetBlueprint(typeName string)"),
             (reference.ASTRALD, "mod/objects/src/module.go", 254, "astral.BlueprintOf(proto)"),
-            (reference.ASTRALD, "mod/apphost/src/op_grant.go", 12, "type opGrantArgs struct"),
-            (reference.ASTRALD, "mod/apphost/src/op_grant.go", 19, "}"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 12,
-             "type opRequestGrantArgs struct"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 15, "Permits string"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 18, "}"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 33,
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 192,
+             'refuseRemovedArgs(queryString, "name", "grant_permits", "contract_permits")'),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 196,
+             "var req *apphostapi.RegisterRequest"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 199, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 47,
+             "identities minted over a link"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 49, "NewErrOriginNotAllowed"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 50, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_grant.go", 41,
+             '"identity", "action", "duration", "constrained"'),
+            (reference.ASTRALD, "mod/apphost/src/op_grant.go", 45,
+             "var req *apphostapi.GrantRequest"),
+            (reference.ASTRALD, "mod/apphost/src/op_grant.go", 48, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_grant.go", 50, "switch {"),
+            (reference.ASTRALD, "mod/apphost/src/op_grant.go", 54, 'NewError("missing permits")'),
+            (reference.ASTRALD, "mod/apphost/src/op_grant.go", 56, 'NewError("negative duration")'),
+            (reference.ASTRALD, "mod/apphost/src/op_grant.go", 57, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 79,
+             'refuseRemovedArgs(queryString, "permits")'),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 83,
+             "var req *apphostapi.RequestGrantRequest"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 86, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 87, "switch {"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 89, '"missing permits"'),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 91, '"negative duration"'),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 92, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 35,
              "why: a grant authorizes on this node alone"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 35, "OriginNetwork"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 41,
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 37, "OriginNetwork"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 43,
              "auth.ErrNotPermitted"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 44, "}"),
             (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 56, "switch {"),
             (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 63, "}"),
+            (reference.ASTRALD, "mod/apphost/src/validate_permits.go", 10,
+             "validatePermits runs auth.ValidatePermit on every permit"),
+            (reference.ASTRALD, "mod/apphost/src/validate_permits.go", 16,
+             "func validatePermits"),
+            (reference.ASTRALD, "mod/apphost/src/validate_permits.go", 25,
+             "refuseRemovedArgs returns an error"),
+            (reference.ASTRALD, "mod/apphost/src/validate_permits.go", 31,
+             "func refuseRemovedArgs"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 64,
+             "GetGrantRequestPolicy returns the policy apphost.request_grant applies"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 74,
+             "apphostmod.GrantRequestAcceptAll"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 77,
+             "return apphostmod.RefuseAllGrants"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 78, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 15,
+             "OpListGrants lists the node-local grants"),
+            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 16,
+             "mod.apphost.grant per grant"),
             (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 17,
-             "the listing drops an expired grant"),
+             "carries no expiry"),
             (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 19,
-             "could not mark them as lapsed"),
-            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 43, "mod.activeGrants(identity)"),
-            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 50, "ch.Send(permit)"),
-            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 55, "astral.EOS{}"),
+             "the listing drops an expired grant"),
+            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 20,
+             "answers what authorizes now"),
+            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 50,
+             "for _, grant := range grants"),
+            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 51, "ch.Send(grant)"),
+            (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 56, "astral.EOS{}"),
             (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 13, "type opRevokeArgs struct"),
-            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 15, "Action   astral.String8"),
-            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 17, "}"),
-            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 50, "gorm.ErrRecordNotFound"),
-            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 51, 'NewError("grant not found")'),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 16, "ID astral.Uint64"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 18, "Action astral.String8"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 20, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 49, "switch {"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 56,
+             "grant IDs start at 1, so a zero ID is an absent argument"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 57, "if args.ID != 0"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 63, "gorm.ErrRecordNotFound"),
+            (reference.ASTRALD, "mod/apphost/src/op_revoke.go", 64, 'NewError("grant not found")'),
         )
         for repo, path, number, fragment in cites:
             with self.subTest(citation=f"{path}:{number}"):
@@ -1207,7 +1257,8 @@ class RequestGrantTest(ApphostCase):
     @bounded()
     async def test_the_default_timeout_waits_for_a_person(self):
         """A delegate may wait on a person for up to ten minutes; the client's
-        60 s default would give up first."""
+        60 s default would give up first, and 610 s outlasts the node's bound
+        so the node's decline arrives before the client gives up."""
         async with MockApphost(
             routes={OP_REQUEST_GRANT: read_one_then(ACK_FRAME)}
         ) as mock:
@@ -1222,7 +1273,7 @@ class RequestGrantTest(ApphostCase):
             api._c.call_with = spy  # type: ignore[method-assign]
             await api.request_grant([GRANT])
             await api.request_grant([GRANT], timeout=5.0)
-        self.assertEqual(seen, [600.0, 5.0])
+        self.assertEqual(seen, [610.0, 5.0])
 
     @bounded()
     async def test_an_explicit_timeout_bounds_a_silent_policy(self):
@@ -1272,8 +1323,9 @@ class ListGrantsTest(ApphostCase):
 
     @bounded()
     async def test_a_bare_permit_is_a_protocol_error(self):
-        """astrald `5f17900d` answers `mod.auth.permit` objects here
-        (`op_list_grants.go:43-55`); the client declares `mod.apphost.grant`."""
+        """A node that answers bare `mod.auth.permit` objects here, as astrald
+        did before the grant object, is the remote breaking the op's
+        contract; the client declares `mod.apphost.grant`."""
         permit = (
             "mod.auth.permit",
             bytes([len(GRANT.action)]) + GRANT.action.encode() + b"\x00\x00",
@@ -1323,6 +1375,7 @@ class RevokeTest(ApphostCase):
                 ({}, BadArgument),
                 ({"id": 1, "action": GRANT.action}, BadArgument),
                 ({"id": -1}, BadArgument),
+                ({"id": 0}, BadArgument),
                 ({"id": 1 << 64}, BadArgument),
                 ({"id": True}, BadArgumentType),
                 ({"id": "3"}, BadArgumentType),
@@ -2132,8 +2185,9 @@ class SecurityNoteTest(unittest.TestCase):
         Every op accepts first and answers a refusal inside the channel, so the
         order that matters is the guards' among themselves and against the
         work: the origin before the action, and the action before the op
-        resolves an identity or touches a store. `set_app_register_policy`
-        asks inside `setPolicyDelegate`, before it clears or writes a delegate.
+        resolves an identity, reads its request object or touches a store.
+        Both setters in `op_set_app_register_policy.go` ask before
+        `writePolicyDelegate` clears or writes a delegate.
         """
         ops = self.ops()
         asked = {
@@ -2155,17 +2209,27 @@ class SecurityNoteTest(unittest.TestCase):
                     action = src.index("AdminManageAppsAction")
                     self.assertLess(src.index("OriginNetwork"), action)
                     work = [
-                        src.index(marker)
-                        for marker in ("mod.Dir.ResolveIdentity", "AccessToken", "mod.Grant(")
+                        src.index(marker, action)
+                        for marker in (
+                            "mod.Dir.ResolveIdentity",
+                            "AccessToken",
+                            "ch.Switch(",
+                            "mod.grantAll(",
+                        )
                         if marker in src[action:]
                     ]
                     self.assertTrue(work, "the op does no work the guard precedes")
                     self.assertLess(action, min(i for i in work if i > action))
                 else:
-                    helper = src.split("func (mod *Module) setPolicyDelegate(")[1]
-                    self.assertLess(
-                        helper.index("AdminManageAppsAction"), helper.index("v.Clear(")
+                    register, grant = src.split(
+                        "func (mod *Module) OpSetGrantRequestPolicy("
                     )
+                    grant = grant.split("func (mod *Module) writePolicyDelegate(")[0]
+                    for body in (register, grant):
+                        self.assertLess(
+                            body.index("AdminManageAppsAction"),
+                            body.index("mod.writePolicyDelegate("),
+                        )
 
         doc = apphost_module.__doc__ or ""
         self.assertIn("mod.auth.admin_manage_apps_action", doc)
@@ -2245,12 +2309,14 @@ class SecurityNoteTest(unittest.TestCase):
             (f"{self.SRC}/op_hosts.go", 48, "RelayForAction"),
             (f"{self.SRC}/op_hold_object.go", 36, "StoreObjectsAction"),
             (f"{self.SRC}/op_hold_object.go", 37, "auth.ErrNotPermitted"),
-            (f"{self.SRC}/op_request_grant.go", 40, "requester.IsZero()"),
+            (f"{self.SRC}/op_request_grant.go", 42, "requester.IsZero()"),
             (f"{self.SRC}/op_request_grant.go", 62, "ErrGrantDeclined"),
-            (f"{self.SRC}/op_grant.go", 29, "q.AcceptRaw()"),
-            (f"{self.SRC}/op_grant.go", 34, "OriginNetwork"),
-            (f"{self.SRC}/op_grant.go", 38, admin),
-            (f"{self.SRC}/op_grant.go", 47, "identity.IsZero()"),
+            (f"{self.SRC}/op_grant.go", 28, "q.AcceptRaw()"),
+            (f"{self.SRC}/op_grant.go", 33, "OriginNetwork"),
+            (f"{self.SRC}/op_grant.go", 37, admin),
+            (f"{self.SRC}/op_grant.go", 39, "}"),
+            (f"{self.SRC}/op_grant.go", 51, "req.Identity.IsZero()"),
+            (f"{self.SRC}/op_grant.go", 52, 'NewError("missing identity")'),
         )
         for path, number, fragment in cites:
             with self.subTest(citation=f"{path}:{number}"):
@@ -2270,37 +2336,35 @@ class RegisterCitationTest(unittest.TestCase):
     def test_every_anchor_lands_on_its_claim(self):
         cites = (
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 17, "RegisterDuration = 10 * 365"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 23, "type opRegisterArgs struct"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 39, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 51,
-             "requestedContractPermits := parsePermits(args.ContractPermits)"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 55, "query.AcceptRaw()"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 60, "OriginNetwork"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 62, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 75, "switch {"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 78, "ErrRegistrationDeclined"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 86, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 128, "Add(RegisterDuration)"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 178, "CreateAccessToken(guestID"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 14,
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 63, "switch {"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 66, "ErrRegistrationDeclined"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 74, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 116, "Add(RegisterDuration)"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 166, "CreateAccessToken(guestID"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 15,
              "type opSetPolicyArgs struct"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 24, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 53, "q.AcceptRaw()"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 56,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 25, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 46, "q.AcceptRaw()"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 49,
              "AdminManageAppsAction"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 57,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 50,
              "auth.ErrNotPermitted"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 60,
-             'args.Identity == "" && args.Operation == ""'),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 66, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 68, "mod.newDelegate("),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 83,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 51, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 122,
+             'identity == "" && op == ""'),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 124, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 126, "mod.newDelegate("),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 129, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 136,
              "func (mod *Module) newDelegate"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 93, "d.Validate()"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 146, "d.Validate()"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 147, "}"),
             (reference.ASTRALD, f"{self.SRC}/register_grant_request.go", 17,
              "func registerGrantRequest"),
             (reference.ASTRALD, f"{self.SRC}/register_grant_request.go", 20,
-             "append([]*auth.Permit{serveApps, useBlueprints}, parsePermits(asked)...)"),
+             "append([]*auth.Permit{serveApps, useBlueprints}, asked...)"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 211,
+             "ContractPermits: req.ContractPermits"),
             (reference.ASTRALD, "mod/apphost/register_policy.go", 29, "func AcceptAll"),
             (reference.ASTRAL_GO, "api/apphost/errors.go", 7,
              'NewError("registration declined")'),

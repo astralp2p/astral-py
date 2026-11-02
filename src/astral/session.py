@@ -314,7 +314,7 @@ OP_WHOAMI: Final = "apphost.whoami"
 # router timeout and 7 an unreachable target or next hop; 5 is not generic --
 # a messaging node that predates `ErrNotAdmitted` sends it -- and no meaning is
 # claimed here for 5 or for 8 and above (astral-go `astral/codes.go` at
-# `dbc27574`).
+# `08ead7ce`).
 
 REJECT_REJECTED: Final = 1
 REJECT_INVALID_QUERY: Final = 2
