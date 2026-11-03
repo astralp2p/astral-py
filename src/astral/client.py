@@ -211,10 +211,13 @@ def resolve_endpoint(endpoint: str | None = None) -> str:
 def resolve_token(token: str | None = None) -> str | None:
     """The auth token: the argument, then the first non-empty variable.
 
-    `None` means a token-less session. astrald confines one to the ops on its
-    `anonymous_allowlist` -- six on an unclaimed node, three on a claimed one
-    (`mod/apphost/src/config.go:55-69` at astrald `9c466cf3`) -- and refuses it
-    every registration, even on the zero identity.
+    `None` means a token-less session. astrald's apphost gate confines one to
+    the node and to the ops `gate.tokenless` lists -- by default
+    `apphost.register`, `apphost.register_manager` and `user.info`, each further
+    limited to the ops the node state's list names
+    (`mod/apphost/src/config.go:72-91`, `mod/apphost/src/gate.go:53-64` at
+    astrald `5b4dde12`) -- and refuses it every registration, even on the zero
+    identity.
     """
     if token:
         return token
@@ -499,10 +502,11 @@ class Client:
     def guest_id(self) -> Identity | None:
         """The authenticated identity, or `None` on an anonymous client.
 
-        An anonymous client may route only the ops on astrald's
-        `anonymous_allowlist` (default on, six ops on an unclaimed node and
-        three on a claimed one), has the network zone stripped server-side
-        whatever it sends, and cannot register a service or a handler.
+        An anonymous client may route only to the node and only the ops on
+        astrald's `gate.tokenless` list (by default `apphost.register`,
+        `apphost.register_manager` and `user.info`), has the network zone
+        stripped server-side whatever it sends, and cannot register a service
+        or a handler.
         """
         return self._guest_id
 
@@ -943,8 +947,8 @@ class Client:
         `register_service_msg` is refused outright for a token-less guest, the
         zero identity included, because `onRegisterServiceMsg` tests
         `isAuthenticated()` first. The `apphost.register_handler` **op** is not
-        on astrald's `anonymous_allowlist`, so apphost denies it to a token-less
-        session before it is routed; with a token, it tests the query's origin
+        on astrald's default `gate.tokenless` list, so apphost denies it to a
+        token-less session before it is routed; with a token, it tests the query's origin
         and then `mod.auth.serve_apps_action` for `q.Caller()`.
         `api/apphost.py` carries the citations.
 
@@ -976,8 +980,8 @@ class Client:
                     "an anonymous client cannot register a service: astrald "
                     "refuses every registration from a token-less guest, the "
                     "zero identity included. mode='handler' needs a token too: "
-                    "apphost.register_handler is not on astrald's "
-                    "anonymous_allowlist"
+                    "apphost.register_handler is not on astrald's default "
+                    "gate.tokenless list"
                 )
         if mode == "handler" and identity is not None and identity != self._guest_id:
             # An anonymous client fails this too, and correctly: its `guest_id`

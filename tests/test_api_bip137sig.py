@@ -864,15 +864,17 @@ class AstraldParityTest(unittest.TestCase):
         self.assertIn("Path string", declaration)
         self.assertNotIn('Path string `query:"required"`', declaration)
 
-    def test_no_action_gates_the_four_and_no_anonymous_allowlist_names_them(self):
-        """The module docstring's access claim: a token reaches the four, and
-        a session without one is denied by apphost before any op runs."""
+    def test_no_action_gates_the_four_and_no_default_gate_list_names_them(self):
+        """The module docstring's access claim: a token reaches the four on a
+        claimed node, and apphost's gate denies them to a session without one
+        and on a node that is not claimed, before any op runs."""
         source = self.source(reference.ASTRALD, "mod/apphost/src/config.go")
-        allowlist = source.split("AnonymousAllowlist: AnonymousAllowlist{")[1]
+        gate = source.split("Gate: Gate{")[1].split("Claimed: []string{gateAny}")[0]
+        self.assertIn("Claimed: []string{gateAny}", source)
         for op in (OP_NEW_ENTROPY, OP_MNEMONIC, OP_SEED, OP_DERIVE_KEY):
             name = op[len("bip137sig.") :]
             with self.subTest(op=op):
-                self.assertNotIn(f'"{op}"', allowlist)
+                self.assertNotIn(f'"{op}"', gate)
                 body = self.source(reference.ASTRALD, f"{self.ASTRALD}/op_{name}.go")
                 self.assertIn("no action gates this op", body)
                 self.assertNotIn("Authorize", body)

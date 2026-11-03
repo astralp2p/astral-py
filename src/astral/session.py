@@ -314,7 +314,7 @@ OP_WHOAMI: Final = "apphost.whoami"
 # router timeout and 7 an unreachable target or next hop; 5 is not generic --
 # a messaging node that predates `ErrNotAdmitted` sends it -- and no meaning is
 # claimed here for 5 or for 8 and above (astral-go `astral/codes.go` at
-# `08ead7ce`).
+# `2481dd7a`).
 
 REJECT_REJECTED: Final = 1
 REJECT_INVALID_QUERY: Final = 2
@@ -706,9 +706,10 @@ class Session:
     def authenticated(self) -> bool:
         """Whether a token was accepted.
 
-        An anonymous session may route queries when the node allows it (default
-        on), has `ZoneNetwork` stripped server-side, and may not register
-        anything.
+        An anonymous session may route only the queries astrald's apphost gate
+        admits without a token (`gate.tokenless`: by default `apphost.register`,
+        `apphost.register_manager` and `user.info`, to the node alone), has
+        `ZoneNetwork` stripped server-side, and may not register anything.
         """
         return self._guest_id is not None and not self._guest_id.is_zero
 

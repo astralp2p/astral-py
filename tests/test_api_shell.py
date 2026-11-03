@@ -18,10 +18,12 @@ on:
   than a hundred specs, and every op this SDK sends is one of them.
 
 Read-only throughout: `shell.spec` touches no node state, which is what makes
-it usable as a self-check. A session without a token reaches the same handler
-only as `.spec` (`mod/shell/src/loader.go`, astrald `9c466cf3`); `shell.spec`
-is not on `anonymous_allowlist`, so the live tier asks it under
-`ASTRAL_TEST_NODE_TOKEN`.
+it usable as a self-check. The same handler answers at `.spec`
+(`mod/shell/src/loader.go`, astrald `5b4dde12`). Neither path is on the apphost
+gate's default tokenless list, and on a node that is not claimed no default
+state list names either (`mod/apphost/src/config.go:72-91`), so the live tier
+asks `shell.spec` under `ASTRAL_TEST_NODE_TOKEN` and needs a claimed node or a
+gate that admits it.
 """
 
 from __future__ import annotations

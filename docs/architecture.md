@@ -15,8 +15,8 @@ document states the resolution, and the resolution is binding.
 | Rank | Authority | Location |
 |---|---|---|
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
-| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `08ead7ce` (the merge of astral-go pull request #167, which defines the apphost grant objects) |
-| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `9c466cf3` (the merge of astrald pull request #351, after which an unset grant request policy accepts every request) — authoritative for session semantics the client never exercises |
+| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `2481dd7a` (the merge of astral-go pull request #171, which adds `mod.user.info`'s `State` and `Manager` and `apphost.register_manager`) |
+| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `5b4dde12` (the head of branch `intern0/dev/node-manager-bootstrap`, not merged to master at the bump: the apphost gate, node states and manager appointment; it requires astral-go `2481dd7a`) — authoritative for session semantics the client never exercises |
 | 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `f41ceac`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
@@ -1718,7 +1718,7 @@ and the node's key is not signable through the op surface.
 Section 2.5 lists `mod.nodes.node_info` among the four types with a hand-written codec, and
 section 0.1 describes its numeric endpoint tags. Both describe astral-go before `4b18f24`. From
 that commit on, `NodeInfo.WriteTo` and `ReadFrom` are `astral.Objectify`
-(`api/nodes/node_info.go:24-29` at `08ead7ce`), so the binary form is the reflective field walk:
+(`api/nodes/node_info.go:24-29` at `2481dd7a`), so the binary form is the reflective field walk:
 `string8` alias, `Ptr(identity)`, then a `uint32` count of type-tagged endpoints. astrald pins
 that encoding from `032271d4`.
 
@@ -1731,25 +1731,75 @@ base62 string of the binary payload, because `NodeInfo` keeps its `MarshalText` 
 astrald built from `1286a469` answers the six-byte zero value, which decodes to `NodeInfo()`.
 Risk R-15 no longer applies.
 
-## 11.8 Sections 3.4, 5.2 and 7.3 — a session without a token reaches `anonymous_allowlist` alone (AMENDED, implemented)
+## 11.8 Sections 3.4, 5.2 and 7.3 — the apphost gate decides what a session reaches (AMENDED, implemented)
 
 Section 3.4 says anonymous guests may route queries when the node allows it, section 5.2 calls
 `bip137sig.derive_key` anonymous-callable, and section 7.3 runs the live tier anonymously.
-astrald `9c466cf3` confines every session without a token, IPC and WebSocket alike, to the ops
-named in `apphost.yaml`'s `anonymous_allowlist` for the node's claim state and denies every
-other query with `error_msg{denied}` before routing (`mod/apphost/src/setup_guard.go`
-`admitsAnonymous`, called at `mod/apphost/src/guest.go:150`). The default lists are `user.info`,
-`user.derive_identity`, `user.bootstrap`, `user.join`, `apphost.register` and `.spec` while the
-node is unclaimed, and `user.info`, `apphost.register` and `.spec` once a user claims it
-(`mod/apphost/src/config.go:55-69`). The Network zone bit is still stripped for such a session
-(`mod/apphost/src/guest.go:182-185`), and it still cannot register a service or a handler.
+astrald `5b4dde12` puts every query through apphost's gate before routing, IPC and WebSocket
+alike (`mod/apphost/src/guest.go:148-151`). `gate.tokenless` in `apphost.yaml` lists the ops a
+session without a token may send, and only to the node; `gate.states.fresh`, `.unclaimed` and
+`.claimed` list the ops any query to the node may send in that node state; a query with a token
+to another identity passes; an entry `*` matches every op (`mod/apphost/src/config.go:33-48`,
+`mod/apphost/src/gate.go:53-64`). A refusal is `error_msg{denied}`, and over HTTP a 403
+(`mod/apphost/src/http_query_handler.go:78-85`). The defaults are `apphost.register`,
+`apphost.register_manager` and `user.info` without a token; `apphost.register_manager` and
+`user.info` on a fresh node; `user.info`, `user.derive_identity`, `user.bootstrap`, `user.join` and
+`apphost.register` on an unclaimed node; `*` on a claimed node (`mod/apphost/src/config.go:72-91`).
+`.spec` is on none of the default lists but the claimed one. The Network zone bit is still
+stripped for a session without a token (`mod/apphost/src/guest.go:181-184`), and it still cannot
+register a service or a handler.
+
+The keys the gate replaced, `allow_anonymous` and `anonymous_allowlist`, fail node startup
+(`mod/apphost/src/config.go:98-110`, `mod/apphost/src/loader.go:33-35`). Verified on an isolated
+astrald built from `5b4dde12`: an `apphost.yaml` naming either key exited the node with
+`apphost.yaml: anonymous_allowlist is removed; gate.tokenless and gate.states replace it` and
+`apphost.yaml: allow_anonymous is removed; gate.tokenless lists the ops a session without a token
+may call`. No fixture in this repository writes `apphost.yaml`; a node the live tier runs against
+is configured with `gate:` keys or the defaults.
 
 **Amendment: the live tier runs as the node, under `ASTRAL_TEST_NODE_TOKEN`.** `LiveCase`
 presents that variable's token on every client it builds, and the tier's assertions name the
 node as the caller, so the variable names a token the node maps to its own identity
 (`tokens: {"<token>": localnode}` in `apphost.yaml`). `ASTRAL_TEST_TOKEN` keeps its meaning: an
 app identity for the serving and signing tests. With `ASTRAL_TEST_ENDPOINT` set and
-`ASTRAL_TEST_NODE_TOKEN` unset, every live test outside the allowlist fails on `denied`.
-Verified on isolated astrald nodes built from `5f17900d`: the whole suite with the live tier
-opted in and no node token ended with 175 errors, each `apphost error: denied`; with the node
-token it ended `OK` against a claimed node and against an unclaimed one.
+`ASTRAL_TEST_NODE_TOKEN` unset, every live test outside `gate.tokenless` fails on `denied`.
+Under the default gate the state lists deny the node's own token too on a fresh or unclaimed
+node, so the live tier runs against a claimed node or one whose `gate.states` admit its reads.
+Verified on isolated astrald nodes built from `5f17900d`, before the gate: the whole suite with
+the live tier opted in and no node token ended with 175 errors, each `apphost error: denied`; with
+the node token it ended `OK` against a claimed node and against an unclaimed one. Verified on an
+isolated astrald built from `5b4dde12`, claimed, with the default gate and a node token: the whole
+suite with the live tier opted in ended `OK (skipped=22, expected failures=2)`; the skips are the
+HTTP and WebSocket tests (no `bind_http`), the tests that need `ASTRAL_TEST_TOKEN`, one
+store-dependent test and the corpus's seven.
+
+## 11.9 Sections 4 and 5 — node states, the manager, and `user.info` as the setup probe (AMENDED, implemented)
+
+astrald `5b4dde12` names three node states: claimed while a user contract is active; else
+unclaimed when a manager is appointed or a user owned the node before; else fresh
+(`mod/apphost/src/gate.go:14-40`). `user.info` answers `mod.user.info` in every state, carrying
+`State` and `Manager` always and the contract fields only on a claimed node, where it still
+authorizes `mod.user.see_swarm_action` (`mod/user/src/op_info.go:15-47`). `no active contract`
+from `user.info` is therefore no longer the claim probe; `Info.state` is. `mod.user.info` appends
+`State string8` and `Manager *identity` after the four older fields, in Go field order
+(`api/user/info.go:28-37` at astral-go `2481dd7a`).
+
+`apphost.register_manager` appoints the manager on a fresh node: it reads one
+`mod.apphost.register_manager_request`, provisions an App identity as `apphost.register` does
+without asking the app register policy, stores a delegate naming the manager for each
+`mod.apphost.policy_binding`, records the appointment, and answers `apphost.access_token`; a node
+that is not fresh answers `node is not fresh` (`mod/apphost/src/op_register_manager.go:26-94`).
+The manager may claim the node with `user.bootstrap` or `user.join`
+(`mod/user/src/op_bootstrap.go:194-202`) and may set every policy setter's delegate. The app
+register, swarm join and swarm invite policies without a stored delegate apply their
+`policies.*` config value, `reject_all` by default (`mod/apphost/src/config.go:93-95`,
+`mod/user/src/config.go:32-37`).
+
+**Amendment: `astral.api.user` declares `Info.state`, `Info.manager` and the three `STATE_*`
+constants; `astral.api.apphost` declares `PolicyBinding`, `RegisterManagerRequest`,
+`POLICY_*`, `ERR_NOT_FRESH` and `Apphost.register_manager`.** Verified on an isolated astrald
+built from `5b4dde12` with the default gate: `user.info` answered `fresh`, then `unclaimed` with
+the manager after `apphost.register_manager`, then the claimed answer after the manager's
+`user.bootstrap`; the claimed node answered `apphost.register_manager` with `node is not fresh`.
+The captures and astral-go's own vectors are pinned in `tests/test_api_user.py` and
+`tests/test_api_apphost.py`.

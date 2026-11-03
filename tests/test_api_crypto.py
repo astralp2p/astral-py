@@ -1065,16 +1065,28 @@ class AstraldParityTest(unittest.TestCase):
         "verify_text_signature",
     }
 
+    # Served at the pin and not implemented here, each named in the module
+    # docstring. `register_signer` arrived with astrald's app-signers change,
+    # which the bump to `5b4dde12` carries; its client is a long-lived
+    # bidirectional binding and six types, and is a change of its own.
+    NOT_IMPLEMENTED = {"register_signer"}
+
     def test_every_crypto_op_astrald_serves_is_implemented_here(self):
         """Walked from `op_*.go` at the pinned revision, so an op astrald grows
         is a deliberate pin bump rather than a suite that goes red on somebody
         else's pull. A partially implemented module is worse than an absent one:
-        callers cannot tell which half works."""
+        callers cannot tell which half works, so the one op this module does
+        not implement is named in its docstring and here."""
         ops = self.op_names(self.ASTRALD)
-        self.assertEqual(ops, self.IMPLEMENTED)
-        for name in ops:
+        self.assertEqual(ops, self.IMPLEMENTED | self.NOT_IMPLEMENTED)
+        for name in self.IMPLEMENTED:
             with self.subTest(op=name):
                 self.assertTrue(hasattr(Crypto, name) or hasattr(Crypto, name + "s"))
+        doc = " ".join((crypto_module.__doc__ or "").split())
+        for name in self.NOT_IMPLEMENTED:
+            with self.subTest(op=name):
+                self.assertFalse(hasattr(Crypto, name))
+                self.assertIn(f"**`crypto.{name}` has no client here.**", doc)
 
     def test_the_folded_module_still_has_exactly_one_op(self):
         """Design section 0.1 folds `secp256k1` in on the ground that it is one
@@ -1107,18 +1119,31 @@ class AstraldParityTest(unittest.TestCase):
 
     def test_public_key_asks_no_action_and_needs_a_token(self):
         """Both halves of the module docstring's access claim. The op asks no
-        authorizer, and apphost confines a session without a token, IPC and
-        WebSocket alike, to `anonymous_allowlist`, which names no `crypto.*`
-        op in either claim state."""
+        authorizer, and apphost's gate confines a session without a token,
+        IPC and WebSocket alike, to `gate.tokenless`, and no default list but
+        the claimed node's `*` names a `crypto.*` op."""
         body = self.source(f"{self.ASTRALD}/op_public_key.go")
         self.assertIn("no action gates this op", body)
         self.assertNotIn("Authorize", body)
-        guard = self.source("mod/apphost/src/setup_guard.go")
-        self.assertIn("why every such session, IPC included", guard)
-        self.assertIn("return slices.Contains(allowlist, opPath)", guard)
+        lines = self.source("mod/apphost/src/gate.go").splitlines()
+        self.assertIn("gateLists(mod.config.Gate.Tokenless, op)", lines[56])
         source = self.source("mod/apphost/src/config.go")
-        allowlist = source.split("AnonymousAllowlist: AnonymousAllowlist{")[1]
-        self.assertNotIn('"crypto.', allowlist)
+        gate = source.split("Gate: Gate{")[1].split("Claimed: []string{gateAny}")[0]
+        self.assertNotIn('"crypto.', gate)
+        self.assertEqual(source.splitlines()[71].strip(), "Gate: Gate{")
+        self.assertEqual(source.splitlines()[90].strip(), "},")
+
+    def test_the_signer_fallback_and_register_signer_lines_land(self):
+        """The module docstring's `register_signer` paragraph, read at the pin."""
+        op = self.source(f"{self.ASTRALD}/op_register_signer.go").splitlines()
+        self.assertIn("OpRegisterSigner binds the caller as the signer", op[20])
+        self.assertIn("ends the binding.", op[23])
+        module = self.source(f"{self.ASTRALD}/module.go").splitlines()
+        self.assertIn("NewHashSigner returns a signer for the local private key", module[111])
+        self.assertIn("func (mod *Module) NewHashSigner(", module[117])
+        self.assertIn("NewTextSigner returns a signer for the local private key", module[182])
+        self.assertIn("through the binding that claims key for scheme", module[183])
+        self.assertIn("comes first.", module[184])
 
     def test_the_node_logs_the_query_string_of_every_routed_query(self):
         """Why `sign_text` keeps its text off the query string. The hook in

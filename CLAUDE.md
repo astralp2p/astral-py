@@ -11,12 +11,12 @@ amendments that supersede the sections they name. **Section 11.4 is deferred**:
 the wire core's `Any`/nil behaviour stays as it is.
 
 Authorities, in precedence order: the live node, astral-go
-(`../astral-go/main` @ `08ead7ce`, the merge of the astral-go grant-objects pull
-request #167), astrald (`9c466cf3`, the merge of the astrald
-grant-request-default pull request #351), astral-docs. The SDK supports the node
-at those revisions and no older one, so a claim about an earlier astrald or
-astral-go has no place in this tree. astrald `9c466cf3` requires astral-go
-`08ead7ce` (`go.mod:7`).
+(`../astral-go/main` @ `2481dd7a`, the merge of the astral-go node-manager
+bootstrap pull request #171), astrald (`5b4dde12`, the head of branch
+`intern0/dev/node-manager-bootstrap`: the apphost gate, node states and manager
+appointment), astral-docs. The SDK supports the node at those revisions and no
+older one, so a claim about an earlier astrald or astral-go has no place in
+this tree. astrald `5b4dde12` requires astral-go `2481dd7a` (`go.mod:7`).
 
 **Every type is read at the pins.** `mod.objects.repository_info`'s `Kind`,
 `Children` and `Concurrent` were the one exception: they arrived in astrald
@@ -233,10 +233,15 @@ ASTRAL_TEST_NODE_TOKEN=<a token the node maps to localnode> \
     PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
-`ASTRAL_TEST_NODE_TOKEN` is required against a node at the pin: astrald
-confines a session without a token to its `anonymous_allowlist`, which names
-none of the read-only ops the tier runs, and the tier's assertions name the
-node as the caller.
+`ASTRAL_TEST_NODE_TOKEN` is required against a node at the pin: astrald's
+apphost gate confines a session without a token to `gate.tokenless`, which
+names none of the read-only ops the tier runs, and the tier's assertions name
+the node as the caller. The gate's state lists bind a token too: under the
+defaults a fresh or unclaimed node admits `user.info` and the setup ops alone,
+so the tier runs against a claimed node or one whose `gate.states` admit its
+reads. An `apphost.yaml` naming the removed `allow_anonymous` or
+`anonymous_allowlist` keys stops the node at startup; configure `gate:`
+instead (design 11.8).
 
 A citation to a sibling repository is read through `tests/reference.py`, which
 runs `git show <rev>:<path>`, so an upstream pull cannot turn this suite red.
