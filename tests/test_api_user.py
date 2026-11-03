@@ -3,18 +3,20 @@
 Three tiers in one file, because the same claim is made at each and the three
 must agree:
 
-- **Tier A** pins the wire on bytes `furry-bolt` sent this session, captured
-  through `Client.call_raw`, which hands back the response body unframed and so
-  records exactly what the node wrote. Six captures: a `mod.user.info` carrying
-  a fully signed four-permit contract, a `mod.users.swarm_member` followed by an
-  `eos`, `user.assets`'s bare `eos`, and `user.sync_assets`'s single `uint64`
-  frame with **no** `eos` after it. The last is the whole reason design section
-  3.10 names a third streaming shape. The fifth is from an unclaimed node at
-  astrald `26bb51d5`: `user.new_node_contract` answering the three-permit
-  contract that replaced the four-permit one. The sixth and seventh are from an
-  unclaimed isolated astrald built from `5f17900d`: `user.derive_identity` and
-  `user.bootstrap` answering the user the BIP-39 test words derive, read raw
-  after hand-framed words.
+- **Tier A** pins the wire on bytes nodes sent, captured through
+  `Client.call_raw` or `Stream.read_bytes`, which hand back the response body
+  unframed and so record exactly what the node wrote. From `furry-bolt`: a
+  `mod.users.swarm_member` followed by an `eos`, `user.assets`'s bare `eos`,
+  and `user.sync_assets`'s single `uint64` frame with **no** `eos` after it.
+  The last is the whole reason design section 3.10 names a third streaming
+  shape. From an unclaimed node at astrald `26bb51d5`: `user.new_node_contract`
+  answering the three-permit contract that replaced the four-permit one. From
+  an unclaimed isolated astrald built from `5f17900d`: `user.derive_identity`
+  and `user.bootstrap` answering the user the BIP-39 test words derive, read
+  raw after hand-framed words. From an isolated astrald built from `5b4dde12`
+  with the default gate: `user.info` in each of the three node states, and
+  `user.bootstrap` called by the manager. `mod.user.info` is also pinned
+  against astral-go `2481dd7a`'s own output in `INFO_GO_VECTORS`.
 - **Tier B** pins the twenty-one ops against `MockApphost`: the query string each
   one builds, the answer each one accepts, the three body-input ops' frame order
   and their absent terminator, and the guards that keep an empty target from
@@ -26,14 +28,13 @@ must agree:
   `set_contract_accept_policy` are exercised against the mock alone, and so is
   `derive_identity`.
 
-`furry-bolt` is **claimed** -- it holds an active contract issued by
-`03a40290…941d` -- so `user.info` and `user.swarm_status` answer there rather than
-answering `no active contract`. Both states are legal and neither is this SDK's
-to choose, so the live tier probes which one it faces and asserts the refusal an
-unclaimed node gives, or the decoded object a claimed one does. The unclaimed
-refusals were verified on an isolated astrald built from `5f17900d`; the claimed
-path was last verified on `furry-bolt`, before astrald `f0f162d0` put an
-authorizer in front of every swarm read.
+A node under the live tier is fresh, unclaimed or claimed, and which one is not
+this SDK's to choose, so the live tier reads `Info.state` from `user.info`,
+which answers in every state, and asserts the refusal an unclaimed node gives
+or the decoded object a claimed one does. The unclaimed refusals were verified
+on an isolated astrald built from `5f17900d`; the claimed path was last
+verified on `furry-bolt`, before astrald `f0f162d0` put an authorizer in front
+of every swarm read.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ import json
 import pathlib
 import re
 import unittest
+from typing import Any
 
 import astral
 from astral.api.auth import Contract, Permit, SignedContract
@@ -90,6 +92,9 @@ from astral.api.user import (
     SwarmJoinDecision,
     SwarmJoinRequest,
     SwarmMember,
+    STATE_CLAIMED,
+    STATE_FRESH,
+    STATE_UNCLAIMED,
     SwarmMembershipAction,
     USER_TYPES,
     User,
@@ -97,8 +102,12 @@ from astral.api.user import (
     new_node_contract_local,
 )
 from astral.client import connect
-from astral.codec import jsoncodec
+from astral.blueprint import of as blueprint_of
+from astral.blueprint import spec_of
+from astral.codec import decode, jsoncodec
 from astral.codec.binary import object_reader, payload_bytes
+from astral.codec.text import decode as text_decode
+from astral.codec.text import encode as text_encode
 from astral.errors import (
     BadArgument,
     BadArgumentType,
@@ -142,40 +151,167 @@ from mock_apphost import (
 # query, so the body it returns is the frame stream exactly as `furry-bolt`
 # wrote it: `string8(type) ++ bytes32(payload)` per frame.
 
-LIVE_INFO_BODY = bytes.fromhex(
-    "0d6d6f642e757365722e696e666f000001a5"          # frame: mod.user.info, 421 B
-    "0a66757272792d626f6c74"                        # NodeAlias string8
-    "1130336134303239303a383339663934316401"        # UserAlias, ContractID flag
-    "000000000000017b"                              # ContractID size = 379
-    "35f07d56df0b9da0dab570df28a74d453f3f360"       # ContractID hash
-    "57072dba619797479f63dd0f7"
+LIVE_INFO_FRESH_BODY = bytes.fromhex(
+    "0d6d6f642e757365722e696e666f0000000b"          # frame: mod.user.info, 11 B
+    "00" "00" "00" "00"                             # NodeAlias, UserAlias, ContractID, Contract
+    "056672657368"                                  # State string8 "fresh"
+    "00"                                            # Manager absent
+)
+"""`user.info` from a token-less session on a fresh isolated astrald built from
+`5b4dde12`, default gate. One frame, then EOF."""
+
+LIVE_MANAGER = Identity.parse(
+    "03831c1b8085669f85e01bc90bc278d718c9b279ec75d0a5aa44c4b06953e19d2f"
+)
+"""The App identity `apphost.register_manager` appointed on that node."""
+
+LIVE_NODE = Identity.parse(
+    "032290da2f2f63da5f7a1d320cf0e9cb95185ec5fe8958d39999f55206bdf28192"
+)
+"""That node's identity, the subject of its claim contract (alias `posh-whack`)."""
+
+LIVE_INFO_UNCLAIMED_BODY = bytes.fromhex(
+    "0d6d6f642e757365722e696e666f00000030"          # frame: mod.user.info, 48 B
+    "00" "00" "00" "00"
+    "09756e636c61696d6564"                          # State "unclaimed"
+    "01" "03831c1b8085669f85e01bc90bc278d718c9b279ec75d0a5aa44c4b06953e19d2f"
+)
+"""`user.info` from a token-less session on the same node after
+`apphost.register_manager` appointed `LIVE_MANAGER`."""
+
+LIVE_INFO_CLAIMED_BODY = bytes.fromhex(
+    "0d6d6f642e757365722e696e666f000001c0"          # frame: mod.user.info, 448 B
+    "0a706f73682d776861636b"                        # NodeAlias "posh-whack"
+    "1130326561363238363a3838333266636432"          # UserAlias "02ea6286:8832fcd2"
+    "01" "000000000000016c"                         # ContractID present, size 364
+    "c790b521dc65108ba308204c24cdd79457b653706615ec2f316f05916c290f77"
     "01"                                            # Contract present
     "01"                                            # SignedContract.Contract present
-    "0103a40290fa01b9127b06f3dd990219939274e2e61afab7445f608ad652839f941d"
-    "0103b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae1"
-    "00000004"                                      # four permits
+    "0102ea6286d75732e42ec1204efbb772ecb9016b962e6c0195ba7dd19bd78832fcd2"
+    "01032290da2f2f63da5f7a1d320cf0e9cb95185ec5fe8958d39999f55206bdf28192"
+    "00000003"                                      # three permits
     "01206d6f642e757365722e737761726d5f6d656d626572736869705f616374696f6e0000"
-    "01156d6f642e757365722e657870656c5f616374696f6e0001"
-    "01156d6f642e757365722e61646f70745f616374696f6e0001"
-    "01146d6f642e757365722e696e666f5f616374696f6e0001"
-    "1935f826fb049d74"                              # ExpiresAt
-    "010461736e31004830460221008ff2ac7dab887549f53049289582dbc9eeb0f35030"
-    "bf3696e400588fc456e76d022100cacc8bfa2e5be25063543a69aebb12ad2e6b58eb"
-    "f5f6e2121b0c7d437df28c00"                      # IssuerSig, asn1, 72 B
-    "010461736e31004730450220057543b8ad4c959f8df427b4023ee63c207830c9de78"
-    "665ffb56d2db76cf0a240221008f061c31de5c022eac244054b76ccfbebf70ccc6eb"
-    "f28cb9fd940e622f7893a9"                        # SubjectSig, asn1, 71 B
+    "011b6d6f642e757365722e61646d696e5f737761726d5f616374696f6e0001"
+    "01196d6f642e757365722e7365655f737761726d5f616374696f6e0001"
+    "19549323c0d33653"                              # ExpiresAt
+    "010461736e31004830460221008a16824a78bd06a05ad9b316e8ebcb30a98b001caa92"
+    "71fdbe4905bebef9ff44022100933f1c53a39b75c361bca3dc31b8222e18b360fdb784"
+    "e363825ecd3198fc71b5"                          # IssuerSig, asn1, 72 B
+    "010461736e31004630440220274c9dd1164e87ca8fe45c7c8249096698d6b1f9ae00ef"
+    "983924ee827d721ef5022003f307862e14ca9817fc741d2d163d6ced7ea268b9fae378"
+    "7663d8280aede694"                              # SubjectSig, asn1, 70 B
+    "07636c61696d6564"                              # State "claimed"
+    "01" "03831c1b8085669f85e01bc90bc278d718c9b279ec75d0a5aa44c4b06953e19d2f"
 )
+"""`user.info` from a token-less session on the same node after the manager
+claimed it with `user.bootstrap` (`LIVE_MANAGER_BOOTSTRAP_BODY`). A token-less
+caller is the node, which passes `mod.user.see_swarm_action`; the manager's own
+token was answered `not permitted` there."""
 
-LIVE_INFO_OLD_PERMITS = [
-    "mod.user.swarm_membership_action",
-    "mod.user.expel_action",
-    "mod.user.adopt_action",
-    "mod.user.info_action",
-]
-"""The permits in the captured contract, by name. `furry-bolt` signed it before
-astral-go replaced the three management permits with two, so these names are
-history: no node at astrald `26bb51d5` registers the last three."""
+LIVE_MANAGER_BOOTSTRAP_BODY = bytes.fromhex(
+    "196d6f642e757365722e626f6f7473747261705f726573756c7400000045"  # frame, 69 B
+    "01"                                                            # Identity present
+    "02ea6286d75732e42ec1204efbb772ecb9016b962e6c0195ba7dd19bd78832fcd2"
+    "0000"                                                          # Mnemonic, empty
+    "20"                                                            # Token, 32 B
+    "43346e33617639516a6a615a5267476c5a37545f4831614b396c386153523755"
+)
+"""`user.bootstrap` with `BOOTSTRAP_WORDS` on the body, sent with
+`LIVE_MANAGER`'s App token on the unclaimed node at `5b4dde12` and read with
+`Stream.read_bytes` after a hand-framed `string16`. The node admits the manager
+as a claiming caller; the token in the answer is the user's, from a node that
+is gone."""
+
+LIVE_INFO_NODE_BLUEPRINT = (
+    "000d6d6f642e757365722e696e666f000000060100094e6f6465416c6961731f61737472"
+    "616c2e626c75657072696e742e7072696d69746976655f737065630007737472696e6738"
+    "01000955736572416c6961731f61737472616c2e626c75657072696e742e7072696d6974"
+    "6976655f737065630007737472696e673801000a436f6e747261637449441961737472616c"
+    "2e626c75657072696e742e7074725f7370656300106f626a6563745f69642e7368613235"
+    "36010008436f6e74726163741961737472616c2e626c75657072696e742e7074725f7370"
+    "656300186d6f642e617574682e7369676e65645f636f6e74726163740100055374617465"
+    "1f61737472616c2e626c75657072696e742e7072696d69746976655f7370656300077374"
+    "72696e67380100074d616e616765721961737472616c2e626c75657072696e742e707472"
+    "5f7370656300086964656e746974790000"
+)
+"""The `astral.blueprint` payload `objects.get_blueprint?type=mod.user.info`
+answered on that node, identical to `astral.BlueprintOf` at astral-go
+`2481dd7a`."""
+
+# Name -> (value, payload hex, JSON, text line, ObjectID), each string astral-go
+# `2481dd7a`'s output for the Go struct literal the value mirrors, from a program
+# linked against it printing `hex.EncodeToString` of what `WriteTo` wrote,
+# `json.Marshal` of the value, the line `channel.TextSender` wrote, and
+# `astral.ResolveObjectID`. `info_claimed`'s contract is the one `furry-bolt`
+# signed, which the program decoded from that node's capture of `user.info`
+# before `State` and `Manager` existed; its manager is the secp256k1 base point.
+INFO_GO_VECTORS: dict[str, tuple[str, str, str, str]] = {
+    "info_fresh": (
+        "0000000005667265736800",
+        '{"NodeAlias":"","UserAlias":"","ContractID":null,"Contract":null,'
+        '"State":"fresh","Manager":null}',
+        "#[mod.user.info]:AAAAAAVmcmVzaAA=",
+        "data1b5af5ka33nb65jte6b8tgxtgp5bg631g8djfyz4e6fic6hqaqhfms",
+    ),
+    "info_unclaimed": (
+        "0000000009756e636c61696d6564010279be667ef9dcbbac55a06295ce870b07029bfc"
+        "db2dce28d959f2815b16f81798",
+        '{"NodeAlias":"","UserAlias":"","ContractID":null,"Contract":null,'
+        '"State":"unclaimed","Manager":"0279be667ef9dcbbac55a06295ce870b07029bf'
+        'cdb2dce28d959f2815b16f81798"}',
+        "#[mod.user.info]:AAAAAAl1bmNsYWltZWQBAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2Vny"
+        "gVsW+BeY",
+        "data1rrjr6e7kk3yfsa8o9coht8btgqaa47suqse9ynmndagph7ppwc7qu",
+    ),
+    "info_claimed": (
+        "0a66757272792d626f6c741130336134303239303a3833396639343164010000000000"
+        "00017b35f07d56df0b9da0dab570df28a74d453f3f36057072dba619797479f63dd0f7"
+        "01010103a40290fa01b9127b06f3dd990219939274e2e61afab7445f608ad652839f94"
+        "1d0103b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df81185bd7ae1"
+        "0000000401206d6f642e757365722e737761726d5f6d656d626572736869705f616374"
+        "696f6e000001156d6f642e757365722e657870656c5f616374696f6e000101156d6f64"
+        "2e757365722e61646f70745f616374696f6e000101146d6f642e757365722e696e666f"
+        "5f616374696f6e00011935f826fb049d74010461736e31004830460221008ff2ac7dab"
+        "887549f53049289582dbc9eeb0f35030bf3696e400588fc456e76d022100cacc8bfa2e"
+        "5be25063543a69aebb12ad2e6b58ebf5f6e2121b0c7d437df28c00010461736e310047"
+        "30450220057543b8ad4c959f8df427b4023ee63c207830c9de78665ffb56d2db76cf0a"
+        "240221008f061c31de5c022eac244054b76ccfbebf70ccc6ebf28cb9fd940e622f7893"
+        "a907636c61696d6564010279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d9"
+        "59f2815b16f81798",
+        '{"NodeAlias":"furry-bolt","UserAlias":"03a40290:839f941d","ContractID"'
+        ':"data1zspxoximp6nh7wdpmkhg9fnuw4tj98h5ykhd15qub16mwx85d5w8z","Contract"'
+        ':{"Contract":{"ExpiresAt":"2027-07-26T19:41:11.017692532Z","Issuer":"03a'
+        '40290fa01b9127b06f3dd990219939274e2e61afab7445f608ad652839f941d","Permit'
+        's":[{"Action":"mod.user.swarm_membership_action","Constraints":null,"Del'
+        'egation":0},{"Action":"mod.user.expel_action","Constraints":null,"Delega'
+        'tion":1},{"Action":"mod.user.adopt_action","Constraints":null,"Delegatio'
+        'n":1},{"Action":"mod.user.info_action","Constraints":null,"Delegation":1'
+        '}],"Subject":"03b2704948bb2e4603ccb1bcd5f01f5df9aa52cbf94b6b54a3978df811'
+        '85bd7ae1"},"IssuerSig":{"Data":"MEYCIQCP8qx9q4h1SfUwSSiVgtvJ7rDzUDC/Npbk'
+        'AFiPxFbnbQIhAMrMi/ouW+JQY1Q6aa67Eq0ua1jr9fbiEhsMfUN98owA","Scheme":"asn1'
+        '"},"SubjectSig":{"Data":"MEUCIAV1Q7itTJWfjfQntAI+5jwgeDDJ3nhmX/tW0tt2zwo'
+        'kAiEAjwYcMd5cAi6sJEBUt2zPvr9wzMbr8oy5/ZQOYi94k6k=","Scheme":"asn1"}},"St'
+        'ate":"claimed","Manager":"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce'
+        '28d959f2815b16f81798"}',
+        "#[mod.user.info]:CmZ1cnJ5LWJvbHQRMDNhNDAyOTA6ODM5Zjk0MWQBAAAAAAAAAXs18H1W"
+        "3wudoNq1cN8op01FPz82BXBy26YZeXR59j3Q9wEBAQOkApD6AbkSewbz3ZkCGZOSdOLmGvq3"
+        "RF9gitZSg5+UHQEDsnBJSLsuRgPMsbzV8B9d+apSy/lLa1Sjl434EYW9euEAAAAEASBtb2Qu"
+        "dXNlci5zd2FybV9tZW1iZXJzaGlwX2FjdGlvbgAAARVtb2QudXNlci5leHBlbF9hY3Rpb24A"
+        "AQEVbW9kLnVzZXIuYWRvcHRfYWN0aW9uAAEBFG1vZC51c2VyLmluZm9fYWN0aW9uAAEZNfgm"
+        "+wSddAEEYXNuMQBIMEYCIQCP8qx9q4h1SfUwSSiVgtvJ7rDzUDC/NpbkAFiPxFbnbQIhAMrM"
+        "i/ouW+JQY1Q6aa67Eq0ua1jr9fbiEhsMfUN98owAAQRhc24xAEcwRQIgBXVDuK1MlZ+N9Ce0"
+        "Aj7mPCB4MMneeGZf+1bS23bPCiQCIQCPBhwx3lwCLqwkQFS3bM++v3DMxuvyjLn9lA5iL3iT"
+        "qQdjbGFpbWVkAQJ5vmZ++dy7rFWgYpXOhwsHApv82y3OKNlZ8oFbFvgXmA==",
+        "data16dmn1u7o6ipy7jhra8fqxtpouz1z37nni361c31i8h8uocjj7uxwn",
+    ),
+    "info_zero": (
+        "000000000000",
+        '{"NodeAlias":"","UserAlias":"","ContractID":null,"Contract":null,'
+        '"State":"","Manager":null}',
+        "#[mod.user.info]:AAAAAAAA",
+        "data1boheqd85ns3wmowdhx7crka45ugnqsienmyfxfk6ar9p1aix9xa65",
+    ),
+}
 
 LIVE_NEW_NODE_CONTRACT_BODY = bytes.fromhex(
     "116d6f642e617574682e636f6e7472616374000000b0"  # frame: mod.auth.contract, 176 B
@@ -337,45 +473,74 @@ class LiveCaptureTest(unittest.TestCase):
         self.assertEqual(result.mnemonic, "")
         self.assertEqual(payload_bytes(result), payload)
 
-    def test_the_info_frame_decodes_to_a_typed_info(self):
-        (type_name, payload), = frames_of(LIVE_INFO_BODY)
+    def info(self, body: bytes) -> tuple[Info, bytes]:
+        (type_name, payload), = frames_of(body)
         self.assertEqual(type_name, Info.ASTRAL_TYPE)
-        info = Info.read_payload(object_reader(payload))
-        self.assertEqual(info.node_alias, FURRY_BOLT_ALIAS)
+        return Info.read_payload(object_reader(payload)), payload
+
+    def test_a_fresh_node_answers_its_state_and_nothing_else(self):
+        info, payload = self.info(LIVE_INFO_FRESH_BODY)
+        self.assertEqual(info, Info(state=STATE_FRESH))
+        self.assertIsNone(info.manager)
+        self.assertIsNone(info.contract)
+        self.assertIsNone(info.user_id)
+        self.assertEqual(payload_bytes(info), payload)
+        self.assertEqual(payload.hex(), INFO_GO_VECTORS["info_fresh"][0])
+
+    def test_an_unclaimed_node_answers_its_state_and_its_manager(self):
+        info, payload = self.info(LIVE_INFO_UNCLAIMED_BODY)
+        self.assertEqual(info, Info(state=STATE_UNCLAIMED, manager=LIVE_MANAGER))
+        self.assertEqual(payload_bytes(info), payload)
+
+    def test_the_claimed_info_frame_decodes_to_a_typed_info(self):
+        info, _ = self.info(LIVE_INFO_CLAIMED_BODY)
+        self.assertEqual(info.state, STATE_CLAIMED)
+        self.assertEqual(info.manager, LIVE_MANAGER)
+        self.assertEqual(info.node_alias, "posh-whack")
         # astrald's DisplayName falls back to a short form for an identity the
         # directory has no alias for, so the user's "alias" is not a name.
-        self.assertEqual(info.user_alias, "03a40290:839f941d")
-        self.assertEqual(info.user_id, USER_ID)
-        self.assertEqual(info.node_id, FURRY_BOLT)
+        self.assertEqual(info.user_alias, "02ea6286:8832fcd2")
+        self.assertEqual(info.user_id, BOOTSTRAP_USER)
+        self.assertEqual(info.node_id, LIVE_NODE)
 
-    def test_the_info_payload_re_encodes_to_the_bytes_it_arrived_as(self):
+    def test_the_claimed_info_payload_re_encodes_to_the_bytes_it_arrived_as(self):
         """Decode then encode is the identity over the whole nested graph: an
-        `Info`, a `SignedContract`, a `Contract`, four `Permit` elements each
-        with its own presence byte, and two `Signature` pointers."""
-        (_, payload), = frames_of(LIVE_INFO_BODY)
-        info = Info.read_payload(object_reader(payload))
+        `Info`, a `SignedContract`, a `Contract`, three `Permit` elements each
+        with its own presence byte, two `Signature` pointers, then `State` and
+        the `Manager` pointer."""
+        info, payload = self.info(LIVE_INFO_CLAIMED_BODY)
         self.assertEqual(payload_bytes(info), payload)
 
     def test_the_node_s_contract_id_is_the_id_this_sdk_computes(self):
         """`ContractID` is `astral.ResolveObjectID(contract)` on the node. The
         SDK recomputing the same 40 bytes from the decoded object proves the
         re-encoding is byte-exact, because a content hash has no slack."""
-        (_, payload), = frames_of(LIVE_INFO_BODY)
-        info = Info.read_payload(object_reader(payload))
+        info, _ = self.info(LIVE_INFO_CLAIMED_BODY)
         self.assertEqual(object_id(info.contract), info.contract_id)
 
-    def test_the_captured_contract_is_a_fully_signed_node_contract(self):
-        (_, payload), = frames_of(LIVE_INFO_BODY)
-        info = Info.read_payload(object_reader(payload))
+    def test_the_captured_contract_is_a_fully_signed_management_contract(self):
+        info, _ = self.info(LIVE_INFO_CLAIMED_BODY)
         self.assertTrue(info.contract.fully_signed)
         self.assertTrue(is_node_contract(info.contract.contract))
         self.assertEqual(
-            [p.action for p in info.contract.contract.permits],
-            LIVE_INFO_OLD_PERMITS,
+            [(p.action, p.delegation) for p in info.contract.contract.permits],
+            [
+                (SwarmMembershipAction.ASTRAL_TYPE, 0),
+                (AdminSwarmAction.ASTRAL_TYPE, 1),
+                (SeeSwarmAction.ASTRAL_TYPE, 1),
+            ],
         )
-        self.assertEqual(
-            [p.delegation for p in info.contract.contract.permits], [0, 1, 1, 1]
-        )
+
+    def test_the_manager_s_bootstrap_frame_decodes_to_the_derived_user(self):
+        """The manager is a claiming caller at the pin: its App token claimed
+        the node for the user the test words derive."""
+        (type_name, payload), = frames_of(LIVE_MANAGER_BOOTSTRAP_BODY)
+        self.assertEqual(type_name, BootstrapResult.ASTRAL_TYPE)
+        result = BootstrapResult.read_payload(object_reader(payload))
+        self.assertEqual(result.identity, BOOTSTRAP_USER)
+        self.assertEqual(result.mnemonic, "")
+        self.assertEqual(len(result.token), 32)
+        self.assertEqual(payload_bytes(result), payload)
 
     def test_the_new_node_contract_frame_is_three_permits_and_re_encodes(self):
         (type_name, payload), = frames_of(LIVE_NEW_NODE_CONTRACT_BODY)
@@ -519,11 +684,104 @@ class RoundTripTest(unittest.TestCase):
                 self.assert_round_trips(kind())
 
 
+class InfoGoVectorTest(unittest.TestCase):
+    """`mod.user.info` against astral-go `2481dd7a`'s own output, every form."""
+
+    def value(self, name: str) -> Info:
+        payload = INFO_GO_VECTORS[name][0]
+        return Info.read_payload(object_reader(bytes.fromhex(payload)))
+
+    def test_the_go_bytes_decode_and_re_encode(self):
+        for name, (payload, _, _, _) in INFO_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                self.assertEqual(payload_bytes(self.value(name)).hex(), payload)
+
+    def test_the_decoded_values_are_the_go_struct_literals(self):
+        manager = Identity.parse(
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        )
+        self.assertEqual(self.value("info_fresh"), Info(state=STATE_FRESH))
+        self.assertEqual(
+            self.value("info_unclaimed"), Info(state=STATE_UNCLAIMED, manager=manager)
+        )
+        self.assertEqual(self.value("info_zero"), Info())
+        claimed = self.value("info_claimed")
+        self.assertEqual((claimed.state, claimed.manager), (STATE_CLAIMED, manager))
+        self.assertEqual(claimed.node_alias, FURRY_BOLT_ALIAS)
+        self.assertEqual(object_id(claimed.contract), claimed.contract_id)
+
+    def test_state_and_manager_follow_the_four_older_fields(self):
+        """Appended in Go field order: the claimed payload is the four older
+        fields' bytes, then `string8(state)`, then the manager's presence byte
+        and its 33 bytes."""
+        payload = bytes.fromhex(INFO_GO_VECTORS["info_claimed"][0])
+        claimed = self.value("info_claimed")
+        head = payload_bytes(
+            Info(
+                node_alias=claimed.node_alias,
+                user_alias=claimed.user_alias,
+                contract_id=claimed.contract_id,
+                contract=claimed.contract,
+            )
+        )
+        self.assertEqual(head[-2:], b"\x00\x00", "zero State, nil Manager")
+        tail = b"\x07claimed\x01" + claimed.manager.key
+        self.assertEqual(payload, head[:-2] + tail)
+
+    def test_the_go_json_decodes_and_the_sdk_marshals_it(self):
+        for name, (_, go_json, _, _) in INFO_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                value = self.value(name)
+                self.assertEqual(
+                    jsoncodec.unmarshal(Info.ASTRAL_TYPE, json.loads(go_json)), value
+                )
+                self.assertEqual(jsoncodec.marshal(value), json.loads(go_json))
+
+    def test_the_text_line_is_the_go_line_both_ways(self):
+        for name, (_, _, line, _) in INFO_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                self.assertEqual(text_encode(self.value(name)), line)
+                self.assertEqual(text_decode(line), self.value(name))
+
+    def test_every_object_id_is_the_go_object_id(self):
+        for name, (_, _, _, oid) in INFO_GO_VECTORS.items():
+            with self.subTest(vector=name):
+                self.assertEqual(str(object_id(self.value(name))), oid)
+
+    def test_the_declaration_is_the_node_s_blueprint(self):
+        """`objects.get_blueprint` on the isolated `5b4dde12` node, decoded."""
+        name = b"astral.blueprint"
+        node = decode(bytes([len(name)]) + name + bytes.fromhex(LIVE_INFO_NODE_BLUEPRINT))
+        self.assertEqual(str(node.type), Info.ASTRAL_TYPE)
+        self.assertEqual(
+            [(str(f.name), spec_of(f.spec)) for f in node.fields],
+            [(f.wire_name, f.spec) for f in Info.FIELDS],
+        )
+        self.assertEqual(
+            [(f.name, spec_of(f.spec)) for f in blueprint_of(Info).fields],
+            [(f.wire_name, f.spec) for f in Info.FIELDS],
+        )
+
+    def test_the_state_constants_are_astral_go_s(self):
+        try:
+            source = reference.read(reference.ASTRAL_GO, "api/user/info.go")
+        except reference.Unavailable as exc:  # pragma: no cover
+            self.skipTest(str(exc))
+        for name, value in (
+            ("StateFresh", STATE_FRESH),
+            ("StateUnclaimed", STATE_UNCLAIMED),
+            ("StateClaimed", STATE_CLAIMED),
+        ):
+            with self.subTest(constant=name):
+                self.assertIn(f'{name} = "{value}"', source)
+
+
 class BlueprintParityTest(unittest.TestCase):
     """Every declaration equals the node's own blueprint for that type.
 
     The field orders below were read from `objects.get_blueprint?type=…` on
-    `furry-bolt` this session, one query per type; `mod.user.bootstrap_result`'s,
+    `furry-bolt` this session, one query per type; `mod.user.info`'s on an
+    isolated astrald built from `5b4dde12`; `mod.user.bootstrap_result`'s,
     `mod.user.derive_identity_result`'s and the two contract accept types' on an
     isolated astrald built from `5f17900d`, and the swarm policy types' on one
     built from `1286a469`. The action types are
@@ -539,6 +797,8 @@ class BlueprintParityTest(unittest.TestCase):
             ("UserAlias", "primitive:string8"),
             ("ContractID", "ptr:object_id.sha256"),
             ("Contract", "ptr:mod.auth.signed_contract"),
+            ("State", "primitive:string8"),
+            ("Manager", "ptr:identity"),
         ],
         "mod.user.op_update": [
             ("Nonce", "primitive:nonce64"),
@@ -967,17 +1227,32 @@ class UserCase(unittest.IsolatedAsyncioTestCase):
 class InfoOpTest(UserCase):
     """`user.info`: RR, one object, no `eos`."""
 
-    def info_frame(self) -> tuple[str, bytes]:
-        return frames_of(LIVE_INFO_BODY)[0]
+    def info_frame(self, body: bytes = LIVE_INFO_CLAIMED_BODY) -> tuple[str, bytes]:
+        return frames_of(body)[0]
 
     @bounded()
     async def test_it_sends_no_parameters_and_returns_a_typed_info(self):
         api = await self.serving({OP_INFO: Accept(objects=[self.info_frame()])})
         info = await api.info()
         self.assertIsInstance(info, Info)
-        self.assertEqual(info.node_alias, FURRY_BOLT_ALIAS)
+        self.assertEqual(info.node_alias, "posh-whack")
+        self.assertEqual(info.state, STATE_CLAIMED)
         self.assertEqual(self.sent(), OP_INFO)
         self.assert_no_faults()
+
+    @bounded()
+    async def test_an_unclaimed_node_answers_an_info_and_not_a_refusal(self):
+        """At the pin `user.info` answers in every state, so the probe is
+        `state` and not `no active contract`."""
+        for body, state in (
+            (LIVE_INFO_FRESH_BODY, STATE_FRESH),
+            (LIVE_INFO_UNCLAIMED_BODY, STATE_UNCLAIMED),
+        ):
+            with self.subTest(state=state):
+                api = await self.serving({OP_INFO: Accept(objects=[self.info_frame(body)])})
+                info = await api.info()
+                self.assertEqual(info.state, state)
+                self.assertIsNone(info.contract)
 
     @bounded()
     async def test_it_does_not_wait_for_an_eos(self):
@@ -986,11 +1261,14 @@ class InfoOpTest(UserCase):
         self.assert_no_faults()
 
     @bounded()
-    async def test_a_node_with_no_active_contract_answers_the_text(self):
-        api = await self.serving({OP_INFO: Accept(objects=[frame_error(ERR_NO_ACTIVE_CONTRACT)])})
+    async def test_a_claimed_node_refusing_the_caller_is_a_remote_error(self):
+        """A claimed node answers a caller without `mod.user.see_swarm_action`
+        with `not permitted`, as the isolated `5b4dde12` node answered the
+        manager's token."""
+        api = await self.serving({OP_INFO: Accept(objects=[frame_error("not permitted")])})
         with self.assertRaises(RemoteError) as caught:
             await api.info()
-        self.assertEqual(caught.exception.message, ERR_NO_ACTIVE_CONTRACT)
+        self.assertEqual(caught.exception.message, "not permitted")
 
     @bounded()
     async def test_a_wrong_answer_type_is_a_protocol_error(self):
@@ -1159,7 +1437,7 @@ class ListSiblingsOpTest(UserCase):
     @bounded()
     async def test_a_zone_goes_to_the_op_argument_and_to_the_routing_zone(self):
         """One scope, two levers, as `Objects` does it. The op's own argument is
-        inert on astrald `9c466cf3` -- the context it builds is never used --
+        inert on astrald `5b4dde12` -- the context it builds is never used --
         and the routing zone is not, so sending only one of them is wrong
         whichever one it is."""
         api = await self.serving(
@@ -1343,7 +1621,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_sends_the_identity_alone(self):
-        """`start` is undeclared on astrald `9c466cf3`, and the node reads the
+        """`start` is undeclared on astrald `5b4dde12`, and the node reads the
         height out of its own tree."""
         query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
@@ -1353,7 +1631,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_accepts_no_start_keyword(self):
-        """`start` is undeclared on astrald `9c466cf3`, so naming one is a
+        """`start` is undeclared on astrald `5b4dde12`, so naming one is a
         `TypeError` and nothing reaches the node."""
         api = await self.serving({OP_SYNC_WITH: Accept(objects=[ACK_FRAME])})
         with self.assertRaises(TypeError):
@@ -2064,23 +2342,46 @@ class LiveUserTest(live_support.LiveCase):
     against the mock alone.
 
     Whether the node under test is claimed is not this SDK's to decide, so the
-    tier asks: `user.info` answering `no active contract` is the setup-mode
-    probe. On an unclaimed node every swarm read is refused, because both of
-    astrald's swarm authorizers refuse without an active contract, and the
-    assertions there are the refusal texts rather than the answers.
+    tier asks: `Info.state` from `user.info`, which answers in every state, is
+    the probe. On a node that is not claimed every swarm read is refused, and
+    the assertions there are the refusals rather than the answers: the
+    apphost gate denies a query to the node that the state's list does not
+    name (`mod/apphost/src/gate.go:63` at astrald `5b4dde12`), which arrives as
+    `Denied`, and a gate configured to admit the read leaves the refusal to
+    astrald's swarm authorizers, which refuse without an active contract.
     """
 
     async def unclaimed(self, client: astral.Client) -> bool:
-        """Whether the node has no active contract, by the setup-mode probe."""
+        """Whether the node holds no active contract, by `Info.state`.
+
+        A claimed node answers a caller without `mod.user.see_swarm_action`
+        `not permitted`, and only a claimed node does.
+        """
         try:
-            await client.user.info()
+            info = await client.user.info()
         except RemoteError as exc:
-            if exc.message == ERR_NO_ACTIVE_CONTRACT:
-                return True
             if exc.message == "not permitted":
                 return False
             raise
-        return False
+        return info.state != STATE_CLAIMED
+
+    async def assert_refused(self, read: Any, message: str) -> None:
+        """`read()` refused by the gate, or answered `message` past it."""
+        try:
+            await read()
+        except astral.errors.Denied:
+            return
+        except RemoteError as exc:
+            self.assertEqual(exc.message, message)
+            return
+        self.fail(f"{read.__name__}: answered on a node that is not claimed")
+
+    async def require_claimed(self, client: astral.Client) -> None:
+        """Skip unless the node is claimed: the default gate names none of the
+        reads below for a fresh or unclaimed node
+        (`mod/apphost/src/config.go:79-89` at astrald `5b4dde12`)."""
+        if await self.unclaimed(client):
+            self.skipTest("the node is not claimed, and the default gate denies this op")
 
     @bounded(30.0)
     async def test_the_empty_shapes_all_end_at_an_eos(self):
@@ -2093,9 +2394,7 @@ class LiveUserTest(live_support.LiveCase):
                     (api.list_expelled, ERR_NO_ACTIVE_CONTRACT),
                 ):
                     with self.subTest(op=read.__name__):
-                        with self.assertRaises(RemoteError) as caught:
-                            await read()
-                        self.assertEqual(caught.exception.message, message)
+                        await self.assert_refused(read, message)
             else:
                 self.assertIsInstance(await api.assets(), list)
                 self.assertIsInstance(await api.list_siblings(), list)
@@ -2110,9 +2409,7 @@ class LiveUserTest(live_support.LiveCase):
         instead."""
         async with await self.client() as client:
             if await self.unclaimed(client):
-                with self.assertRaises(RemoteError) as caught:
-                    await client.user.sync_assets()
-                self.assertEqual(caught.exception.message, "not permitted")
+                await self.assert_refused(client.user.sync_assets, "not permitted")
             else:
                 answer = await client.user.sync_assets()
                 self.assertIsInstance(answer, AssetSync)
@@ -2125,14 +2422,14 @@ class LiveUserTest(live_support.LiveCase):
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
-    async def test_info_decodes_or_reports_an_unclaimed_node(self):
+    async def test_info_decodes_in_every_node_state(self):
         async with await self.client() as client:
-            try:
-                info = await client.user.info()
-            except RemoteError as exc:
-                self.assertEqual(exc.message, ERR_NO_ACTIVE_CONTRACT, "the setup-mode probe")
-                return
+            info = await client.user.info()
             self.assertIsInstance(info, Info)
+            self.assertIn(info.state, (STATE_FRESH, STATE_UNCLAIMED, STATE_CLAIMED))
+            if info.state != STATE_CLAIMED:
+                self.assertIsNone(info.contract)
+                return
             self.assertIsInstance(info.contract, SignedContract)
             self.assertTrue(info.contract.fully_signed)
             self.assertEqual(info.node_id, client.host_id)
@@ -2145,11 +2442,10 @@ class LiveUserTest(live_support.LiveCase):
     @bounded(30.0)
     async def test_swarm_status_lists_the_node_itself_or_reports_no_contract(self):
         async with await self.client() as client:
-            try:
-                members = await client.user.swarm_status()
-            except RemoteError as exc:
-                self.assertEqual(exc.message, ERR_NO_ACTIVE_CONTRACT)
+            if await self.unclaimed(client):
+                await self.assert_refused(client.user.swarm_status, ERR_NO_ACTIVE_CONTRACT)
                 return
+            members = await client.user.swarm_status()
             self.assertTrue(all(isinstance(m, SwarmMember) for m in members))
             self.assertIn(client.host_id, [m.identity for m in members])
         await self.assert_no_open_sockets()
@@ -2163,6 +2459,7 @@ class LiveUserTest(live_support.LiveCase):
         `user` is named -- the node's own identity stands in -- because the
         op's default is the node's user, and an unclaimed node has none."""
         async with await self.client() as client:
+            await self.require_claimed(client)
             contract = await client.user.new_node_contract(user=client.host_id)
             self.assertIsInstance(contract, Contract)
             self.assertTrue(is_node_contract(contract))
@@ -2187,14 +2484,20 @@ class LiveUserTest(live_support.LiveCase):
             if not await self.unclaimed(client):
                 self.assertIsInstance(await client.user.new_node_contract(), Contract)
                 return
-            with self.assertRaises(RemoteError) as caught:
+            try:
                 await client.user.new_node_contract()
-            self.assertIn("user id missing", str(caught.exception))
+            except astral.errors.Denied:
+                pass
+            except RemoteError as exc:
+                self.assertIn("user id missing", str(exc))
+            else:
+                self.fail("new_node_contract answered on a node with no user")
         await self.assert_no_open_sockets()
 
     @bounded(30.0)
     async def test_a_duration_shortens_the_contract_the_node_builds(self):
         async with await self.client() as client:
+            await self.require_claimed(client)
             api = client.user
             default = await api.new_node_contract(user=client.host_id)
             short = await api.new_node_contract(user=client.host_id, duration="48h")
@@ -2209,6 +2512,7 @@ class LiveUserTest(live_support.LiveCase):
         `26bb51d5`. `user` is named so the op reaches the duration: it checks
         the user first."""
         async with await self.client() as client:
+            await self.require_claimed(client)
             with self.assertRaises(ParseError):
                 await client.user.new_node_contract(duration="1y")
             user = client.host_id.text()
@@ -2220,6 +2524,7 @@ class LiveUserTest(live_support.LiveCase):
     @bounded(30.0)
     async def test_an_unknown_name_answers_with_an_error_message(self):
         async with await self.client() as client:
+            await self.require_claimed(client)
             with self.assertRaises(RemoteError) as caught:
                 await client.user.new_node_contract(user="astral-py-no-such-user")
             self.assertIn("unknown identity", str(caught.exception))
@@ -2231,6 +2536,7 @@ class LiveUserTest(live_support.LiveCase):
         `mod.user*` name it reports must be one this module declares, or the
         SDK cannot decode an object the node can send."""
         async with await self.client() as client:
+            await self.require_claimed(client)
             names = {
                 name
                 for name in await client.objects.blueprints()
@@ -2262,7 +2568,8 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/op_list_siblings.go", 27): "IncludeZone(args.Zone)",
         ("mod/user/module.go", 23): "MinimalContractLength = time.Hour",
         ("mod/user/module.go", 27): "DefaultContractValidity = 365 * 24 * time.Hour",
-        ("mod/user/module.go", 18): "UserKeyPath = coldcard.BIP44Path",
+        ("mod/user/module.go", 16): "why the Coldcard path",
+        ("mod/user/module.go", 18): 'UserKeyPath = "m/1791\'/0\'/0\'/0/0"',
         ("mod/user/src/siblings.go", 25): "user.Notification{Event",
         ("mod/user/src/op_adopt.go", 34): "mod.Dir.ResolveIdentity(args.Identity)",
         ("mod/user/src/op_adopt.go", 40): "}",
@@ -2279,8 +2586,33 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/op_accept_contract.go", 63): "ContractAcceptRequest{Caller: q.Caller(), Contract: signed}",
         ("mod/user/src/op_accept_contract.go", 64): "switch {",
         ("mod/user/src/op_accept_contract.go", 70): "}",
-        ("mod/user/src/op_set_swarm_policy.go", 38): "OpSetContractAcceptPolicy",
-        ("mod/user/src/op_set_swarm_policy.go", 42): "}",
+        ("mod/user/src/op_set_swarm_policy.go", 39): "OpSetContractAcceptPolicy",
+        ("mod/user/src/op_set_swarm_policy.go", 43): "}",
+        ("mod/user/src/op_set_swarm_policy.go", 15): "Identity and Operation name the delegate",
+        ("mod/user/src/op_set_swarm_policy.go", 17): "accept-all for contract accept",
+        ("mod/user/src/op_set_swarm_policy.go", 61): "if !mod.maySetPolicies(ctx, q.Caller())",
+        ("mod/user/src/op_set_swarm_policy.go", 63): "}",
+        ("mod/user/src/op_set_swarm_policy.go", 65): 'args.Identity == "" && args.Operation == ""',
+        ("mod/user/src/op_set_swarm_policy.go", 71): "}",
+        ("mod/user/src/op_set_swarm_policy.go", 106): "func (mod *Module) maySetPolicies",
+        ("mod/user/src/op_set_swarm_policy.go", 110): "AdminManageAppsAction",
+        ("mod/user/src/swarm_policy.go", 17): "An unset SwarmJoin or",
+        ("mod/user/src/swarm_policy.go", 19): "ContractAccept selects the bundled policy",
+        ("mod/user/src/swarm_policy.go", 34): "func (mod *Module) GetSwarmJoinPolicy()",
+        ("mod/user/src/swarm_policy.go", 50): "return usermod.RejectAllJoins",
+        ("mod/user/src/swarm_policy.go", 56): "func (mod *Module) GetSwarmInvitePolicy()",
+        ("mod/user/src/swarm_policy.go", 72): "return usermod.RejectAllInvites",
+        ("mod/user/src/config.go", 32): "var defaultFileConfig = FileConfig{",
+        ("mod/user/src/config.go", 35): "SwarmInvite: policyconf.Setting{Mode: policyconf.RejectAll}",
+        ("mod/user/src/config.go", 37): "}",
+        ("mod/user/src/op_info.go", 29): "info := &user.Info{",
+        ("mod/user/src/op_info.go", 34): "ac := mod.ActiveContract()",
+        ("mod/user/src/op_info.go", 37): "}",
+        ("mod/user/src/op_info.go", 39): "SeeSwarmAction",
+        ("mod/user/src/op_info.go", 41): "}",
+        ("mod/user/src/op_info.go", 47): "return ch.Send(info)",
+        ("mod/user/src/op_join.go", 26): "why the origin and caller gates of user.bootstrap",
+        ("mod/user/src/op_join.go", 27): "see mayClaim",
         ("mod/user/src/op_derive_identity.go", 20): "OpDeriveIdentity answers",
         ("mod/user/src/op_derive_identity.go", 22): "and changes no state",
         ("mod/user/src/op_derive_identity.go", 48): "user.DeriveIdentityResult{",
@@ -2293,21 +2625,40 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/sync.go", 31): "tree.Get[*astral.Uint64](ctx, heightNode)",
         ("mod/dir/src/module.go", 58): 'if s == "" || s == "anyone"',
         ("mod/dir/src/module.go", 107): "return identity.Fingerprint()",
-        ("mod/user/src/contracts.go", 204): "usermod.DefaultContractValidity",
-        ("mod/user/src/op_bootstrap.go", 43): "q.Accept(",
-        ("mod/user/src/op_bootstrap.go", 58): "}",
-        ("mod/user/src/op_bootstrap.go", 73): "mod.Apphost.CreateAccessToken(userID",
-        ("mod/user/src/op_bootstrap.go", 81): "}",
-        ("mod/user/src/op_bootstrap.go", 79): "if args.Generate {",
-        ("mod/user/src/op_bootstrap.go", 90): "bip137sig.MaxEntropyBits",
-        ("mod/user/src/op_bootstrap.go", 98): "channel.Expect(&phrase), channel.FailOnEOF()",
-        ("mod/user/src/op_bootstrap.go", 118): "mod.signClaim(ctx, caller, &key)",
-        ("mod/user/src/op_bootstrap.go", 133): "mod.claim(ctx, signed)",
-        ("mod/user/src/op_bootstrap.go", 166): "NewNodeContract(userID, mod.node.Identity(), true",
-        ("mod/user/src/op_bootstrap.go", 171): "mod.Auth.IsNodeClaim(ctx, caller, contract)",
-        ("mod/apphost/src/config.go", 58): '"user.derive_identity"',
-        ("mod/apphost/src/config.go", 59): '"user.bootstrap"',
-        ("mod/apphost/src/config.go", 60): '"user.join"',
+        ("mod/user/src/contracts.go", 206): "usermod.DefaultContractValidity",
+        ("mod/user/src/op_bootstrap.go", 45): "q.Accept(",
+        ("mod/user/src/op_bootstrap.go", 58): "if !mod.mayClaim(q.Caller())",
+        ("mod/user/src/op_bootstrap.go", 60): "}",
+        ("mod/user/src/op_bootstrap.go", 67): "why the node as claim caller",
+        ("mod/user/src/op_bootstrap.go", 69): "mod.bootstrap(ctx, mod.node.Identity(), words",
+        ("mod/user/src/op_bootstrap.go", 77): "mod.Apphost.CreateAccessToken(userID",
+        ("mod/user/src/op_bootstrap.go", 83): "if args.Generate {",
+        ("mod/user/src/op_bootstrap.go", 85): "}",
+        ("mod/user/src/op_bootstrap.go", 94): "bip137sig.MaxEntropyBits",
+        ("mod/user/src/op_bootstrap.go", 102): "channel.Expect(&phrase), channel.FailOnEOF()",
+        ("mod/user/src/op_bootstrap.go", 122): "mod.signClaim(ctx, caller, &key)",
+        ("mod/user/src/op_bootstrap.go", 137): "mod.claim(ctx, signed)",
+        ("mod/user/src/op_bootstrap.go", 170): "NewNodeContract(userID, mod.node.Identity(), true",
+        ("mod/user/src/op_bootstrap.go", 175): "mod.Auth.IsNodeClaim(ctx, caller, contract)",
+        ("mod/user/src/op_bootstrap.go", 194): "mayClaim reports whether caller may claim",
+        ("mod/user/src/op_bootstrap.go", 202): "}",
+        ("mod/apphost/src/config.go", 73): "Tokenless: []string{",
+        ("mod/apphost/src/config.go", 77): "},",
+        ("mod/apphost/src/config.go", 79): "Fresh: []string{",
+        ("mod/apphost/src/config.go", 82): "},",
+        ("mod/apphost/src/config.go", 85): '"user.derive_identity"',
+        ("mod/apphost/src/config.go", 86): '"user.bootstrap"',
+        ("mod/apphost/src/config.go", 87): '"user.join"',
+        ("mod/apphost/src/config.go", 90): "Claimed: []string{gateAny}",
+        ("mod/apphost/src/gate.go", 19): "why ownership history closes fresh",
+        ("mod/apphost/src/gate.go", 20): "reopen the appointment of a manager",
+        ("mod/apphost/src/gate.go", 22): "func (mod *Module) NodeState(",
+        ("mod/apphost/src/gate.go", 32): "if mod.User.WasOwned() {",
+        ("mod/apphost/src/gate.go", 34): "}",
+        ("mod/apphost/src/gate.go", 40): "}",
+        ("mod/apphost/src/gate.go", 57): "if tokenless && (!toNode || !gateLists(mod.config.Gate.Tokenless, op))",
+        ("mod/apphost/src/gate.go", 59): "}",
+        ("mod/apphost/src/gate.go", 63): "gateLists(mod.config.Gate.States.forState(mod.NodeState(ctx)), op)",
         ("core/router.go", 45): "if q.Caller == nil {",
         ("core/router.go", 83): '"%v routed in %v", logged',
         ("core/query_log.go", 12): '"passphrase": true',
@@ -2323,6 +2674,17 @@ class CitationTest(unittest.TestCase):
         ("api/user/contract_accept_policy.go", 13): "Caller   *astral.Identity",
         ("api/user/contract_accept_policy.go", 14): "Contract *auth.SignedContract",
         ("api/user/client/bootstrap.go", 20): 'if words == "" {',
+        ("api/user/info.go", 12): "StateFresh is a node with no manager and no ownership history",
+        ("api/user/info.go", 14): 'StateFresh = "fresh"',
+        ("api/user/info.go", 15): "StateUnclaimed is a node without an active user contract",
+        ("api/user/info.go", 17): 'StateUnclaimed = "unclaimed"',
+        ("api/user/info.go", 18): "StateClaimed is a node with an active user contract",
+        ("api/user/info.go", 19): 'StateClaimed = "claimed"',
+        ("api/user/info.go", 22): "Info contains information",
+        ("api/user/info.go", 27): "StateClaimed.",
+        ("api/user/info.go", 35): "State   astral.String8",
+        ("api/user/info.go", 36): "Manager *astral.Identity",
+        ("api/user/info.go", 37): "}",
     }
 
     def assert_lands(self, repo: str, anchors: dict) -> None:

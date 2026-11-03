@@ -61,10 +61,10 @@ class SmokeTest(LiveCase):
         The identity assertion is node-agnostic and grounded in astrald rather
         than in this machine's node: `OpWhoami` sends `query.Caller()`, and
         apphost names an authenticated session's nil caller after its token
-        (`mod/apphost/src/guest.go:154-158`), so an authenticated client gets
-        its own guest identity. A token-less client is denied `whoami`, which is
-        not on `anonymous_allowlist`. The assertion follows whichever identity
-        this client authenticated as.
+        (`mod/apphost/src/guest.go:153-157` at astrald `5b4dde12`), so an
+        authenticated client gets its own guest identity. A token-less client
+        is denied `whoami`, which is not on the gate's default tokenless list.
+        The assertion follows whichever identity this client authenticated as.
         """
         async with await self.client() as client:
             self.assertIsInstance(client.host_id, Identity)

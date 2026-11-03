@@ -70,8 +70,10 @@ import astral
 async def main() -> None:
     # Default endpoint: the unix socket if it exists, else tcp:127.0.0.1:8625.
     # The token comes from the argument or ASTRALD_APPHOST_TOKEN. Without one
-    # the session is anonymous, and astrald admits an anonymous session only
-    # to the ops on its anonymous_allowlist, which whoami and alias_map are not.
+    # the session is anonymous, and astrald's apphost gate admits an anonymous
+    # session only to the ops on gate.tokenless, which whoami and alias_map are
+    # not. Under the default gate a node that no user has claimed denies them
+    # to a session with a token too; user.info answers in every state.
     async with await astral.connect() as client:
         print(client.host_id, client.host_alias, client.guest_id)
 

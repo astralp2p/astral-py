@@ -43,82 +43,46 @@ ASTRALD: Final = "astrald"
 ASTRAL_GO: Final = "astral-go"
 
 PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
-    # The revisions the modules were read against: astrald `9c466cf3`, the
-    # merge of astrald pull request #351, after which an unset grant request
-    # policy accepts every request, and astral-go `08ead7ce`, the merge of
-    # astral-go pull request #167, which defines the apphost grant objects and
-    # which astrald `9c466cf3` requires. Every `path:line` citation in
-    # `astral/api/*.py` resolves at one of these two and none names another
-    # revision. Bumping one means re-reading the citations that name it.
+    # The revisions the modules were read against: astrald `5b4dde12`, the
+    # head of astrald branch `intern0/dev/node-manager-bootstrap` (the apphost
+    # gate, node states and manager appointment), and astral-go `2481dd7a`, the
+    # merge of astral-go pull request #171, which astrald `5b4dde12` requires.
+    # Every `path:line` citation in `astral/api/*.py` resolves at one of these
+    # two and none names another revision. Bumping one means re-reading the
+    # citations that name it. The record of each earlier bump is this comment's
+    # history in `git log -p tests/reference.py`.
     #
-    # astrald bumped from `a499928a`, the head of #349; astral-go stays. Re-read
-    # at the bump, every cited astrald file that differs between the two:
-    # `mod/apphost/src/op_set_app_register_policy.go` and
-    # `mod/apphost/src/register_policy.go`. The other paths that differ --
-    # `.ai/system`, `mobile/services.go`, `mod/apphost/grant_request_policy.go`,
-    # `mod/apphost/src/module.go` and four `op_*_test.go` files, which lose the
-    # op tests #349 added -- carry no citation. Claims rewritten: the grant
-    # request policy asks a stored delegate, else accepts all when the mode is
-    # unset or `accept_all`, else refuses all; both setters build the delegate
-    # in `newDelegate` before `writePolicyDelegate` writes it.
-    #
-    # Bumped from astrald `5f17900d` / astral-go `dbc27574`, the head of #167.
-    # `08ead7ce` has the tree of `dbc27574`. Re-read at the bump, every cited
-    # astrald file that differs between the two: `mod/apphost/src`
-    # (`op_grant.go`, `op_list_grants.go`, `op_register.go`,
-    # `op_request_grant.go`, `op_revoke.go`, `op_set_app_register_policy.go`,
-    # `register_grant_request.go` and `register_policy.go`). Claims rewritten:
-    # register, grant and request_grant read their request object and refuse
-    # the removed query arguments; list_grants answers `mod.apphost.grant`;
-    # revoke takes `id` or `action`; the grant request policy has a mode; the
-    # register-policy setter refuses `mode`.
-    #
-    # astral-go bumped from `a2b41561`, the revision astrald `5f17900d`
-    # requires. Re-read at the bump, every cited file that differs between the
-    # two: `api/apphost/client/register.go` (rewritten), `api/auth/action.go`,
-    # `api/auth/errors.go`, `api/apphost/grant_request_policy.go`,
-    # `api/dir/client/apply_filters.go`, `api/services/client/services.go`,
-    # `watch.go`, `api/services/service_discovery_action.go`,
-    # `api/user/client/accept_contract.go`, `accept_membership.go`,
-    # `bootstrap.go` and `lib/apphost/host.go`. Claims rewritten: the
-    # `register` and `grant` clients, the `mod.auth.action` registration line,
-    # `ErrStreamEnded`'s line and the grant request policy's type name. Surface
-    # added: `mod.apphost.grant`, `register_request`, `grant_request`,
-    # `request_grant_request` and the `request_grant`, `list_grants` and
-    # `revoke` clients.
-    #
-    # Bumped from astrald `48ae88b2` / astral-go `8972f283`. Re-read at the bump,
-    # every cited file that differs between the old pin and the new one: in
-    # astrald, `mod/apphost/src` (`config.go`, `guest.go`, `setup_guard.go`,
-    # `register_policy.go`, `register_grant_request.go` (added),
-    # `register_serve_apps.go` (deleted) and every `op_*.go` it cites),
-    # `mod/apphost/register_policy.go`, `mod/auth/src` (`authorize.go`, `db.go`,
-    # `sign_contract_guard.go` and the four ops), `mod/crypto` (`errors.go`,
-    # `src/module.go` and the five ops), `mod/dir/src/op_apply_filters.go`,
-    # `op_set_alias.go`, `mod/exonet/errors.go`, the `mod/nat/src`,
-    # `mod/nodes/src` and `mod/objects/src` ops, `mod/secp256k1/src/op_new.go`,
-    # `mod/services/src/op_advertise.go`, `mod/shell/src/loader.go`,
-    # `mod/tor/src/module.go` and `mod/user/src` (`authorizers.go`,
-    # `authorize_user_or_node.go`, `contracts.go`, `swarm_policy.go` and every
-    # op, `op_derive_identity.go` and `op_join.go` added); in astral-go,
-    # `api/apphost/errors.go`, `api/auth/errors.go`, `api/auth/module.go`,
-    # `api/exonet/errors.go` (added), `api/tree/client/server.go`,
-    # `api/user/bootstrap_result.go`, `contract_accept_policy.go` (added),
-    # `derive_identity_result.go` (added), `errors.go`, `module.go`,
-    # `astral/codes.go`, `error.go`, `errors.go`, `identity.go`,
-    # `object_id.go`, `lib/query/editor.go` and `lib/routing/op.go`. Claims
-    # rewritten: every op accepts before it refuses and answers with an
-    # `error_message` (`not permitted`, `origin not allowed: <origin>`, the
-    # module's own texts) where it used to reject; an argument-binding failure
-    # on an op that takes `in` or `out` is an `error_message` too; a session
-    # without a token reaches `anonymous_allowlist` alone; `user.adopt`,
-    # `user.expel` and `user.sync_with` refuse the zero identity; the policy
-    # setters are five; codes 6 and 7 are generic. Surface added:
-    # `mod.user.bootstrap_result`'s `Token`, `user.derive_identity`,
-    # `user.join`, `user.set_contract_accept_policy` and their types and error
-    # texts; the apphost census counts seventeen files.
-    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "9c466cf3"),
-    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "08ead7ce"),
+    # Bumped from astrald `9c466cf3` / astral-go `08ead7ce`. The range carries
+    # astrald's app-signers and coldcard-removal merges besides the bootstrap
+    # commit. Re-read at the bump, every cited astrald file that differs
+    # between the two: `mod/apphost/src` (`config.go`, `guest.go`,
+    # `http_query_handler.go`, `loader.go`, `op_register.go`,
+    # `op_set_app_register_policy.go`, `register_policy.go`, `setup_guard.go`
+    # (deleted), `gate.go` and `op_register_manager.go` (added)),
+    # `mod/apphost/register_policy.go`, `mod/user/module.go`, `mod/user/src`
+    # (`authorize_user_or_node.go`, `authorizers.go`, `config.go`,
+    # `contracts.go`, `op_bootstrap.go`, `op_info.go`, `op_join.go`,
+    # `op_set_swarm_policy.go`, `swarm_policy.go`), `mod/crypto/src/module.go`
+    # and `op_register_signer.go` (added), `mod/crypto/errors.go`,
+    # `mod/auth/src/sign_contract_guard.go`, `mod/shell/src/op_spec.go` and
+    # `lib/policyconf/setting.go` (added); in astral-go,
+    # `api/apphost/client/register.go`, `api/apphost/errors.go`,
+    # `api/apphost/module.go`, `api/user/info.go` and
+    # `api/apphost/register_manager_request.go` (added). Claims rewritten: the
+    # gate replaces the tokenless allowlist and binds a session with a token to
+    # the node state's list as well, and its removed keys stop the node;
+    # `user.info` answers `mod.user.info` with `State` and `Manager` in every
+    # state, so `no active contract` is no longer its answer; the app register,
+    # swarm join and swarm invite policies fall back to a config value whose
+    # default is `reject_all`; the policy setters, `user.bootstrap` and
+    # `user.join` admit the manager; the apphost census counts eighteen files.
+    # Surface added: `mod.user.info`'s `State` and `Manager`, the `STATE_*`
+    # constants, `apphost.register_manager`, `mod.apphost.register_manager_request`,
+    # `mod.apphost.policy_binding`, `POLICY_*` and `ERR_NOT_FRESH`. Surface not
+    # added: `crypto.register_signer` and its types, which
+    # `test_api_crypto.AstraldParityTest` names.
+    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "5b4dde12"),
+    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "2481dd7a"),
 }
 
 
