@@ -17,7 +17,7 @@ document states the resolution, and the resolution is binding.
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
 | 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `2481dd7a` (the merge of astral-go pull request #171, which adds `mod.user.info`'s `State` and `Manager` and `apphost.register_manager`) |
 | 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `5b4dde12` (the head of branch `intern0/dev/node-manager-bootstrap`, not merged to master at the bump: the apphost gate, node states and manager appointment; it requires astral-go `2481dd7a`) — authoritative for session semantics the client never exercises |
-| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `f41ceac`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
+| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `645f3c0`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
 When 1 and 3 disagree, 1 wins and the disagreement is filed in §9. When astral-go
