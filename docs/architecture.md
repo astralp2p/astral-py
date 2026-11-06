@@ -1743,7 +1743,7 @@ to another identity passes; an entry `*` matches every op (`mod/apphost/src/conf
 `mod/apphost/src/gate.go:53-64`). A refusal is `error_msg{denied}`, and over HTTP a 403
 (`mod/apphost/src/http_query_handler.go:78-85`). The defaults are `apphost.register`,
 `apphost.register_manager` and `user.info` without a token; `apphost.register_manager` and
-`user.info` on a fresh node; `user.info`, `user.derive_identity`, `user.bootstrap`, `user.join` and
+`user.info` on a fresh node (11.10 renames `apphost.register_manager` to `sys.register_manager`); `user.info`, `user.derive_identity`, `user.bootstrap`, `user.join` and
 `apphost.register` on an unclaimed node; `*` on a claimed node (`mod/apphost/src/config.go:72-91`).
 `.spec` is on none of the default lists but the claimed one. The Network zone bit is still
 stripped for a session without a token (`mod/apphost/src/guest.go:181-184`), and it still cannot
@@ -1797,9 +1797,45 @@ register, swarm join and swarm invite policies without a stored delegate apply t
 
 **Amendment: `astral.api.user` declares `Info.state`, `Info.manager` and the three `STATE_*`
 constants; `astral.api.apphost` declares `PolicyBinding`, `RegisterManagerRequest`,
-`POLICY_*`, `ERR_NOT_FRESH` and `Apphost.register_manager`.** Verified on an isolated astrald
+`POLICY_*`, `ERR_NOT_FRESH` and `Apphost.register_manager`.** 11.10 supersedes this
+declaration: `astral.api.sys` holds them, as `Sys.register_manager`. Verified on an isolated astrald
 built from `5b4dde12` with the default gate: `user.info` answered `fresh`, then `unclaimed` with
 the manager after `apphost.register_manager`, then the claimed answer after the manager's
 `user.bootstrap`; the claimed node answered `apphost.register_manager` with `node is not fresh`.
 The captures and astral-go's own vectors are pinned in `tests/test_api_user.py` and
 `tests/test_api_apphost.py`.
+
+## 11.10 Sections 4, 5, 11.8 and 11.9 — the manager appointment is the sys protocol's (AMENDED, implemented)
+
+The appointment of 11.9 moves from `apphost` to a `sys` module, a hard rename with no alias:
+`sys.register_manager` replaces `apphost.register_manager` with the same arguments, input,
+answer and errors, `not fresh` included; `mod.sys.register_manager_request` and
+`mod.sys.policy_binding` replace `mod.apphost.register_manager_request` and
+`mod.apphost.policy_binding` with the same fields; the policy names, `PolicyNames` and
+`ErrNotFresh` move to astral-go `api/sys` (`api/sys/module.go`, `api/sys/errors.go`,
+`api/sys/register_manager_request.go` on astral-go branch `intern0/dev/sys-api`). In 11.8's
+defaults `sys.register_manager` takes `apphost.register_manager`'s place on `gate.tokenless` and
+`gate.states.fresh` (`defaultConfig`, `mod/apphost/src/config.go` on astrald branch
+`intern0/dev/mod-sys`). The node state and the manager move to `mod/sys`; the manager record is
+`/mod/sys/manager`, and a node with only `/mod/apphost/manager` still reads that record
+(`mod/sys/src/state.go`). Every policy setter requires `mod.auth.configure_node_state_action`
+in place of `mod.auth.admin_manage_apps_action` or the manager, and the manager holds that action
+in every node state, claimed included (`maySetPolicies` in
+`mod/apphost/src/op_set_app_register_policy.go` and `mod/user/src/op_set_swarm_policy.go`,
+`AuthorizeConfigureNodeState` in `mod/sys/src/authorizers.go`). The protocol text is astral-docs
+`protocols/sys/` on astral-docs branch `intern0/dev/sys-protocol`.
+
+**Neither source is at a pin.** astrald's change is an uncommitted working tree and astral-go's
+an unpushed branch, so these citations name a path, no line and no revision, and
+`tests/reference.py` reads none of them. Where 11.8 and 11.9 cite `path:line` for the appointment,
+the gate defaults or the setters' rule, those lines are at the pins and describe the node before
+the rename.
+
+**Amendment: `astral.api.sys` declares `OP_REGISTER_MANAGER`, `PolicyBinding`,
+`RegisterManagerRequest`, `POLICY_*`, `ERR_NOT_FRESH` and `Sys.register_manager`, reached as
+`client.sys`; `astral.api.apphost` declares none of them.** The `mod.sys.*` vectors in
+`tests/test_api_sys.py` are astral-go's output from a Go program linked against the head of
+astral-go branch `intern0/dev/sys-api`. The live answers pinned there were captured from
+`apphost.register_manager` on astrald `5b4dde12`; neither frame names the op, so they stand for
+`sys.register_manager` by inference from the astrald diff, and no node running the sys module was
+queried.

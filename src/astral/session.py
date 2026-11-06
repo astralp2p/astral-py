@@ -708,7 +708,7 @@ class Session:
 
         An anonymous session may route only the queries astrald's apphost gate
         admits without a token (`gate.tokenless`: by default `apphost.register`,
-        `apphost.register_manager` and `user.info`, to the node alone), has
+        `sys.register_manager` and `user.info`, to the node alone), has
         `ZoneNetwork` stripped server-side, and may not register anything.
         """
         return self._guest_id is not None and not self._guest_id.is_zero

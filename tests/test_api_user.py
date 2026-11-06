@@ -163,7 +163,8 @@ LIVE_INFO_FRESH_BODY = bytes.fromhex(
 LIVE_MANAGER = Identity.parse(
     "03831c1b8085669f85e01bc90bc278d718c9b279ec75d0a5aa44c4b06953e19d2f"
 )
-"""The App identity `apphost.register_manager` appointed on that node."""
+"""The App identity `apphost.register_manager`, the op `sys.register_manager`
+replaces, appointed on that node."""
 
 LIVE_NODE = Identity.parse(
     "032290da2f2f63da5f7a1d320cf0e9cb95185ec5fe8958d39999f55206bdf28192"
@@ -2594,8 +2595,6 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/op_set_swarm_policy.go", 63): "}",
         ("mod/user/src/op_set_swarm_policy.go", 65): 'args.Identity == "" && args.Operation == ""',
         ("mod/user/src/op_set_swarm_policy.go", 71): "}",
-        ("mod/user/src/op_set_swarm_policy.go", 106): "func (mod *Module) maySetPolicies",
-        ("mod/user/src/op_set_swarm_policy.go", 110): "AdminManageAppsAction",
         ("mod/user/src/swarm_policy.go", 17): "An unset SwarmJoin or",
         ("mod/user/src/swarm_policy.go", 19): "ContractAccept selects the bundled policy",
         ("mod/user/src/swarm_policy.go", 34): "func (mod *Module) GetSwarmJoinPolicy()",

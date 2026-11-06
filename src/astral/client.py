@@ -127,6 +127,7 @@ if TYPE_CHECKING:  # pragma: no cover -- typing only
     from .api.objects import Objects
     from .api.services import Services
     from .api.shell import Shell
+    from .api.sys import Sys
     from .api.tree import Tree
     from .api.user import User
     from .serve import Handler, Service
@@ -213,11 +214,12 @@ def resolve_token(token: str | None = None) -> str | None:
 
     `None` means a token-less session. astrald's apphost gate confines one to
     the node and to the ops `gate.tokenless` lists -- by default
-    `apphost.register`, `apphost.register_manager` and `user.info`, each further
+    `apphost.register`, `sys.register_manager` and `user.info`, each further
     limited to the ops the node state's list names
-    (`mod/apphost/src/config.go:72-91`, `mod/apphost/src/gate.go:53-64` at
-    astrald `5b4dde12`) -- and refuses it every registration, even on the zero
-    identity.
+    (`mod/apphost/src/gate.go:53-64` at astrald `5b4dde12`; the default lists
+    are `defaultConfig` in `mod/apphost/src/config.go` on astrald branch
+    `intern0/dev/mod-sys`, uncommitted) -- and refuses it every registration,
+    even on the zero identity.
     """
     if token:
         return token
@@ -425,6 +427,13 @@ class Client:
         return Shell(self)
 
     @functools.cached_property
+    def sys(self) -> "Sys":
+        """The `sys` ops: the manager appointment."""
+        from .api.sys import Sys
+
+        return Sys(self)
+
+    @functools.cached_property
     def tree(self) -> "Tree":
         """The `tree` ops: get, list, set, mounts."""
         from .api.tree import Tree
@@ -504,7 +513,7 @@ class Client:
 
         An anonymous client may route only to the node and only the ops on
         astrald's `gate.tokenless` list (by default `apphost.register`,
-        `apphost.register_manager` and `user.info`), has the network zone
+        `sys.register_manager` and `user.info`), has the network zone
         stripped server-side whatever it sends, and cannot register a service
         or a handler.
         """

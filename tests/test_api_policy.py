@@ -184,8 +184,6 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/swarm_policy.go", 19): "ContractAccept selects the bundled policy",
         ("mod/user/src/swarm_policy.go", 21): "SwarmJoin      tree.Value[*policy.Delegate]",
         ("mod/user/src/swarm_policy.go", 23): "ContractAccept tree.Value[*policy.Delegate]",
-        ("mod/apphost/src/op_register_manager.go", 127): "bindManagerPolicies stores",
-        ("mod/apphost/src/op_register_manager.go", 143): "}",
         ("lib/policyconf/setting.go", 20): "Setting is one policy value",
         ("lib/policyconf/setting.go", 21): "The zero Setting selects RejectAll.",
         ("lib/policyconf/setting.go", 25): "}",

@@ -81,6 +81,14 @@ PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
     # `mod.apphost.policy_binding`, `POLICY_*` and `ERR_NOT_FRESH`. Surface not
     # added: `crypto.register_signer` and its types, which
     # `test_api_crypto.AstraldParityTest` names.
+    #
+    # Ahead of the pins: the sys protocol (`astral/api/sys.py`, design 11.10).
+    # astrald's `mod/sys` is uncommitted on branch `intern0/dev/mod-sys` and
+    # astral-go's `api/sys` is on the unpushed branch `intern0/dev/sys-api`, so
+    # no revision here can name them. Their citations name a path alone, and
+    # this module reads none of them. Bumping onto the merged revisions turns
+    # them into `path:line` claims and re-counts the apphost census, which at
+    # the current pin still holds `op_register_manager.go`.
     ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "5b4dde12"),
     ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "2481dd7a"),
 }
