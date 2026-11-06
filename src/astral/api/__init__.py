@@ -73,6 +73,7 @@ from . import objects
 from . import policy
 from . import services
 from . import shell
+from . import sys  # noqa: A004 -- the node module is named `sys`; so is this one
 from . import tree
 from . import user
 from .apphost import Apphost
@@ -96,12 +97,14 @@ from .nodes import Nodes
 from .objects import Objects
 from .services import Services
 from .shell import Shell
+from .sys import Sys
 from .tree import Tree
 from .user import User
 
-# `dir` shadows the builtin for anyone who star-imports this package. It is named
-# here anyway: the submodule takes the node module's name, and omitting it from
-# `__all__` would only hide it from the reader, not from the import.
+# `dir` shadows the builtin and `sys` the standard-library module for anyone who
+# star-imports this package. Both are named here anyway: each submodule takes the
+# node module's name, and omitting it from `__all__` would only hide it from the
+# reader, not from the import.
 __all__ = [
     "Apphost",
     "Auth",
@@ -121,6 +124,7 @@ __all__ = [
     "Objects",
     "Services",
     "Shell",
+    "Sys",
     "TcpEndpoint",
     "TorDigest",
     "TorEndpoint",
@@ -143,6 +147,7 @@ __all__ = [
     "policy",
     "services",
     "shell",
+    "sys",
     "tree",
     "user",
 ]

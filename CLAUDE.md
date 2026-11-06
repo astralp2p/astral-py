@@ -18,12 +18,23 @@ appointment), astral-docs. The SDK supports the node at those revisions and no
 older one, so a claim about an earlier astrald or astral-go has no place in
 this tree. astrald `5b4dde12` requires astral-go `2481dd7a` (`go.mod:7`).
 
+**One surface is ahead of the pins: the sys protocol** (`api/sys.py`, design
+11.10). `sys.register_manager` replaces `apphost.register_manager`, and every
+policy setter requires `mod.auth.configure_node_state_action`, on astrald branch
+`intern0/dev/mod-sys` (uncommitted) and astral-go branch `intern0/dev/sys-api`
+(unpushed). Those claims cite a path with no line and no revision, and
+`tests/reference.py` reads none of them until the pins move onto the merged
+revisions.
+
 **Every type is read at the pins.** `mod.objects.repository_info`'s `Kind`,
 `Children` and `Concurrent` were the one exception: they arrived in astrald
 `c520482e`, hours after the previous astrald pin `d5bb0bbd` was cut, so no
 citation to them resolved and their evidence was a byte corpus instead. The pin
 bump onto `f6d3de71` ended that — the fields are cited in `api/objects.py` and
 read by `test_api_objects.CitationTest` like every other claim.
+`mod.sys.register_manager_request` and `mod.sys.policy_binding` are the current
+exception, for the same reason: their evidence is astral-go's own output,
+pinned in `tests/test_api_sys.py`, until the pins reach `api/sys`.
 Where the docs disagree with the node, the node wins and the disagreement is a
 bug report in design section 9.2. A wire fact sourced from astral-docs alone is
 not established.

@@ -13,10 +13,8 @@ same sixteen ops:
   `astral.ResolveObjectID`. The four grant types are pinned the same way in
   `GRANT_GO_VECTORS`, from a program linked against astral-go `dbc27574`, the
   head of astral-go #167, whose tree its merge `08ead7ce` carries unchanged,
-  and the two manager types in `MANAGER_GO_VECTORS`, from a program linked
-  against astral-go `2da74ec`, the head of astral-go #171, whose tree its merge
-  `2481dd7a` carries unchanged. `apphost.register_manager`'s answers are
-  captured from an isolated astrald built from `5b4dde12`.
+  The manager types left with the manager appointment:
+  `tests/test_api_sys.py` pins `mod.sys.*` and `sys.register_manager`.
 - **Tier B** pins the query strings and the shapes against `MockApphost`. A
   module client is argument marshalling plus one call, so the marshalling is
   what can be wrong: a capitalised key is silently dropped by the node, an
@@ -59,7 +57,6 @@ from astral.api.apphost import (
     OP_LIST_TOKENS,
     OP_REGISTER,
     OP_REGISTER_HANDLER,
-    OP_REGISTER_MANAGER,
     OP_REQUEST_GRANT,
     OP_REVOKE,
     OP_SET_APP_REGISTER_POLICY,
@@ -67,11 +64,7 @@ from astral.api.apphost import (
     OP_WHOAMI,
     ERR_GRANT_DECLINED,
     ERR_GRANT_NOT_FOUND,
-    ERR_NOT_FRESH,
     ERR_REGISTRATION_DECLINED,
-    POLICY_APP_REGISTER,
-    POLICY_NAMES,
-    POLICY_SWARM_JOIN,
     AccessToken,
     APPHOST_TYPES,
     Apphost,
@@ -79,8 +72,6 @@ from astral.api.apphost import (
     AppRegisterRequest,
     Grant,
     GrantRequest,
-    PolicyBinding,
-    RegisterManagerRequest,
     RegisterRequest,
     RequestGrantRequest,
     _duration,
@@ -443,131 +434,6 @@ GRANT_BLUEPRINT_PAYLOADS = {
         "696f6e0000"
     ),
 }
-
-
-APP_REGISTER_BINDING = PolicyBinding(
-    policy=POLICY_APP_REGISTER,
-    operation="manager.decide_app_register",
-    timeout=Duration(30 * 10**9),
-)
-SWARM_JOIN_BINDING = PolicyBinding(
-    policy=POLICY_SWARM_JOIN, operation="manager.decide_swarm_join"
-)
-MANAGER_REQUEST = RegisterManagerRequest(
-    name="manager",
-    grant_permits=[DISCOVERY_PERMIT],
-    contract_permits=[CONTRACT_PERMIT],
-    policies=[APP_REGISTER_BINDING, SWARM_JOIN_BINDING],
-)
-
-# Name -> (value, payload hex, JSON, text line, ObjectID), each string astral-go
-# `2481dd7a`'s output for the Go struct literal the value mirrors.
-MANAGER_GO_VECTORS: dict[str, tuple[object, str, str, str, str]] = {
-    "policy_binding_full": (
-        APP_REGISTER_BINDING,
-        "0c6170705f72656769737465721b6d616e616765722e6465636964655f6170705f726567"
-        "697374657200000006fc23ac00",
-        '{"Operation":"manager.decide_app_register","Policy":"app_register","Time'
-        'out":30000000000}',
-        "#[mod.apphost.policy_binding]:DGFwcF9yZWdpc3RlchttYW5hZ2VyLmRlY2lkZV9hcH"
-        "BfcmVnaXN0ZXIAAAAG/COsAA==",
-        "data1fycqonirhnbb1c5zczyot1dudoy3d7zas1esf7ctjqgawxi5b4g65",
-    ),
-    "policy_binding_zero": (
-        PolicyBinding(),
-        "00000000000000000000",
-        '{"Operation":"","Policy":"","Timeout":0}',
-        "#[mod.apphost.policy_binding]:AAAAAAAAAAAAAA==",
-        "data1nuown6s7bghmnfdftzqj5hejt89c3hpjp5qegudbmairi8znfim4o",
-    ),
-    "register_manager_request_full": (
-        MANAGER_REQUEST,
-        "076d616e616765720000000101256d6f642e73657276696365732e736572766963655f64"
-        "6973636f766572795f616374696f6e0100000001000000351c6d6f642e73657276696365"
-        "732e646973636f766572795f73636f70650000000101000000010109696e666572656e63"
-        "65000000000000000001011b6d6f642e617574682e7365655f6f626a656374735f616374"
-        "696f6e000100000002010c6170705f72656769737465721b6d616e616765722e64656369"
-        "64655f6170705f726567697374657200000006fc23ac00010a737761726d5f6a6f696e19"
-        "6d616e616765722e6465636964655f737761726d5f6a6f696e0000000000000000",
-        '{"ContractPermits":[{"Action":"mod.auth.see_objects_action","Constraints'
-        '":null,"Delegation":1}],"GrantPermits":[{"Action":"mod.services.service_'
-        'discovery_action","Constraints":[{"Type":"mod.services.discovery_scope",'
-        '"Object":{"Rules":[{"Nodes":[],"Services":["inference"]}]}}],"Delegation'
-        '":0}],"Name":"manager","Policies":[{"Operation":"manager.decide_app_regi'
-        'ster","Policy":"app_register","Timeout":30000000000},{"Operation":"manag'
-        'er.decide_swarm_join","Policy":"swarm_join","Timeout":0}]}',
-        "#[mod.apphost.register_manager_request]:B21hbmFnZXIAAAABASVtb2Quc2Vydmlj"
-        "ZXMuc2VydmljZV9kaXNjb3ZlcnlfYWN0aW9uAQAAAAEAAAA1HG1vZC5zZXJ2aWNlcy5kaXNj"
-        "b3Zlcnlfc2NvcGUAAAABAQAAAAEBCWluZmVyZW5jZQAAAAAAAAAAAQEbbW9kLmF1dGguc2Vl"
-        "X29iamVjdHNfYWN0aW9uAAEAAAACAQxhcHBfcmVnaXN0ZXIbbWFuYWdlci5kZWNpZGVfYXBw"
-        "X3JlZ2lzdGVyAAAABvwjrAABCnN3YXJtX2pvaW4ZbWFuYWdlci5kZWNpZGVfc3dhcm1fam9p"
-        "bgAAAAAAAAAA",
-        "data11rjh7kijq8r1spuxa6ps31icr49mjn8s9nm1c5s53tjp7xx9s8gq6",
-    ),
-    "register_manager_request_zero": (
-        RegisterManagerRequest(),
-        "00000000000000000000000000",
-        '{"ContractPermits":[],"GrantPermits":[],"Name":"","Policies":[]}',
-        "#[mod.apphost.register_manager_request]:AAAAAAAAAAAAAAAAAA==",
-        "data1dp7hxop71nogfoi6himz3cuf9xmbcmnghcspfzo94i1jxor7439ru",
-    ),
-}
-
-# `astral.BlueprintOf` at astral-go `2481dd7a`, `astral.blueprint` payloads in
-# hex. `objects.get_blueprint` on the isolated `5b4dde12` node answered the
-# same bytes for both types.
-MANAGER_BLUEPRINT_PAYLOADS = {
-    "mod.apphost.register_manager_request": (
-        "00246d6f642e617070686f73742e72656769737465725f6d616e616765725f7265717565"
-        "7374000000040100044e616d651f61737472616c2e626c75657072696e742e7072696d69"
-        "746976655f737065630007737472696e673801000c4772616e745065726d6974731b6173"
-        "7472616c2e626c75657072696e742e736c6963655f73706563000f6d6f642e617574682e"
-        "7065726d697401000f436f6e74726163745065726d6974731b61737472616c2e626c7565"
-        "7072696e742e736c6963655f73706563000f6d6f642e617574682e7065726d6974010008"
-        "506f6c69636965731b61737472616c2e626c75657072696e742e736c6963655f73706563"
-        "001a6d6f642e617070686f73742e706f6c6963795f62696e64696e670000"
-    ),
-    "mod.apphost.policy_binding": (
-        "001a6d6f642e617070686f73742e706f6c6963795f62696e64696e670000000301000650"
-        "6f6c6963791f61737472616c2e626c75657072696e742e7072696d69746976655f737065"
-        "630007737472696e67380100094f7065726174696f6e1f61737472616c2e626c75657072"
-        "696e742e7072696d69746976655f737065630007737472696e673801000754696d656f75"
-        "741f61737472616c2e626c75657072696e742e7072696d69746976655f73706563000864"
-        "75726174696f6e0000"
-    ),
-}
-
-MANAGER_BLUEPRINTS = {
-    "mod.apphost.register_manager_request": [
-        ("Name", Primitive("string8")),
-        ("GrantPermits", Slice("mod.auth.permit")),
-        ("ContractPermits", Slice("mod.auth.permit")),
-        ("Policies", Slice("mod.apphost.policy_binding")),
-    ],
-    "mod.apphost.policy_binding": [
-        ("Policy", Primitive("string8")),
-        ("Operation", Primitive("string8")),
-        ("Timeout", Primitive("duration")),
-    ],
-}
-
-LIVE_MANAGER_TOKEN_BODY = bytes.fromhex(
-    "14617070686f73742e6163636573735f746f6b656e0000004b"  # frame, 75 B
-    "01" "03831c1b8085669f85e01bc90bc278d718c9b279ec75d0a5aa44c4b06953e19d2f"
-    "20" "3153385332784a596548466243677972574d32515f705f4645774872794748"
-    "61"
-    "1d44eb824dd84b2c"                                    # ExpiresAt
-)
-"""`apphost.register_manager` from a token-less session on a fresh isolated
-astrald built from `5b4dde12`, default gate, sent `register_manager_request_full`
-as astral-go wrote it. One frame, then EOF. The node, and the token with it, is
-gone."""
-
-LIVE_NOT_FRESH_BODY = bytes.fromhex(
-    "0d6572726f725f6d6573736167650000001300116e6f6465206973206e6f74206672657368"
-)
-"""`apphost.register_manager` from a token-less session on the same node once
-claimed: `error_message{"node is not fresh"}`, then EOF."""
 
 
 def error_frame(message: str) -> tuple[str, bytes]:
@@ -996,119 +862,6 @@ class GrantTypesTest(unittest.TestCase):
     def test_the_error_texts_are_the_node_s(self):
         self.assertEqual(ERR_GRANT_DECLINED, "grant declined")
         self.assertEqual(ERR_GRANT_NOT_FOUND, "grant not found")
-
-
-class ManagerTypesTest(unittest.TestCase):
-    """The manager request and its policy binding, against astral-go `2481dd7a`."""
-
-    def test_every_value_encodes_to_the_go_bytes(self):
-        for name, (value, payload, _, _, _) in MANAGER_GO_VECTORS.items():
-            with self.subTest(vector=name):
-                self.assertEqual(payload_bytes(value).hex(), payload)
-
-    def test_the_go_bytes_decode_to_every_value(self):
-        for name, (value, payload, _, _, _) in MANAGER_GO_VECTORS.items():
-            with self.subTest(vector=name):
-                got = type(value).read_payload(object_reader(bytes.fromhex(payload)))
-                self.assertEqual(got, value)
-
-    def test_the_go_json_decodes_to_every_value(self):
-        for name, (value, _, go_json, _, _) in MANAGER_GO_VECTORS.items():
-            with self.subTest(vector=name):
-                got = jsoncodec.unmarshal(value.ASTRAL_TYPE, json.loads(go_json))
-                self.assertEqual(got, value)
-
-    def test_a_populated_value_marshals_to_the_go_json(self):
-        for name in ("policy_binding_full", "policy_binding_zero"):
-            value, _, go_json, _, _ = MANAGER_GO_VECTORS[name]
-            with self.subTest(vector=name):
-                self.assertEqual(jsoncodec.marshal(value), json.loads(go_json))
-
-    def test_every_value_survives_its_own_json(self):
-        """The full request holds a discovery rule's empty `Nodes`, which the
-        SDK marshals as `null` and Go as `[]`, the divergence
-        `AppRegisterPolicyTypesTest` pins."""
-        for name, (value, _, _, _, _) in MANAGER_GO_VECTORS.items():
-            with self.subTest(vector=name):
-                mine = jsoncodec.marshal(value)
-                self.assertEqual(jsoncodec.unmarshal(value.ASTRAL_TYPE, mine), value)
-
-    def test_an_empty_list_marshals_to_null_where_go_sends_an_array(self):
-        value, _, go_json, _, _ = MANAGER_GO_VECTORS["register_manager_request_zero"]
-        theirs = json.loads(go_json)
-        mine = jsoncodec.marshal(value)
-        lists = {key for key, item in theirs.items() if item == []}
-        self.assertEqual(lists, {"GrantPermits", "ContractPermits", "Policies"})
-        self.assertEqual({key: mine[key] for key in lists}, dict.fromkeys(lists))
-        self.assertEqual(mine["Name"], theirs["Name"])
-        self.assertEqual(jsoncodec.unmarshal(value.ASTRAL_TYPE, mine), value)
-
-    def test_the_text_line_is_the_go_line_both_ways(self):
-        for name, (value, _, _, line, _) in MANAGER_GO_VECTORS.items():
-            with self.subTest(vector=name):
-                self.assertEqual(text_encode(value), line)
-                self.assertEqual(text_decode(line), value)
-
-    def test_every_object_id_is_the_go_object_id(self):
-        for name, (value, _, _, _, oid) in MANAGER_GO_VECTORS.items():
-            with self.subTest(vector=name):
-                self.assertEqual(str(object_id(value)), oid)
-
-    def test_every_field_declaration_matches_the_go_blueprint(self):
-        for cls in (RegisterManagerRequest, PolicyBinding):
-            with self.subTest(type=cls.ASTRAL_TYPE):
-                expected = MANAGER_BLUEPRINTS[cls.ASTRAL_TYPE]
-                self.assertEqual([(f.wire_name, f.spec) for f in cls.FIELDS], expected)
-                got = blueprint_of(cls)
-                self.assertEqual([(f.name, spec_of(f.spec)) for f in got.fields], expected)
-                name = b"astral.blueprint"
-                go = decode(
-                    bytes([len(name)]) + name
-                    + bytes.fromhex(MANAGER_BLUEPRINT_PAYLOADS[cls.ASTRAL_TYPE])
-                )
-                self.assertEqual(str(go.type), cls.ASTRAL_TYPE)
-                self.assertEqual(
-                    [(str(f.name), spec_of(f.spec)) for f in go.fields], expected
-                )
-
-    def test_the_captured_token_decodes_and_re_encodes(self):
-        (type_name, payload), = frames_of(LIVE_MANAGER_TOKEN_BODY)
-        self.assertEqual(type_name, AccessToken.ASTRAL_TYPE)
-        token = AccessToken.read_payload(object_reader(payload))
-        self.assertEqual(
-            token.identity,
-            Identity.parse(
-                "03831c1b8085669f85e01bc90bc278d718c9b279ec75d0a5aa44c4b06953e19d2f"
-            ),
-        )
-        self.assertEqual(len(token.token), 32)
-        self.assertEqual(payload_bytes(token), payload)
-
-    def test_the_captured_refusal_is_the_not_fresh_text(self):
-        (type_name, payload), = frames_of(LIVE_NOT_FRESH_BODY)
-        self.assertEqual(type_name, "error_message")
-        self.assertEqual(payload[2:].decode(), ERR_NOT_FRESH)
-        self.assertEqual(ERR_NOT_FRESH, "node is not fresh")
-
-    def test_the_policy_names_are_astral_go_s_in_its_order(self):
-        try:
-            source = reference.read(
-                reference.ASTRAL_GO, "api/apphost/register_manager_request.go"
-            )
-        except reference.Unavailable as exc:  # pragma: no cover
-            self.skipTest(str(exc))
-        listed = source.split("var PolicyNames = []string{")[1].split("}")[0]
-        constants = dict(
-            (left.strip(), right.strip().strip('"'))
-            for left, _, right in (
-                line.partition("=") for line in source.split("const (")[1].split(")")[0].splitlines()
-            )
-            if right
-        )
-        self.assertEqual(
-            tuple(constants[item.strip()] for item in listed.split(",") if item.strip()),
-            POLICY_NAMES,
-        )
 
 
 class RegistryTest(unittest.TestCase):
@@ -1842,171 +1595,22 @@ class RegisterTest(ApphostCase):
                         await api.register()
 
 
-class RegisterManagerTest(ApphostCase):
-    """`apphost.register_manager`: WA, one `mod.apphost.register_manager_request`
-    in, one `apphost.access_token` out, and `register`'s argument handling."""
-
-    async def register_manager(self, **kw: object) -> tuple[AccessToken, MockApphost]:
-        (reply,) = frames_of(LIVE_MANAGER_TOKEN_BODY)
-        async with MockApphost(
-            routes={OP_REGISTER_MANAGER: read_one_then(reply)}
-        ) as mock:
-            api = await self.apphost(mock)
-            token = await api.register_manager(**kw)
-        return token, mock
-
-    @bounded()
-    async def test_no_arguments_send_one_zero_request_and_answer_a_token(self):
-        token, mock = await self.register_manager()
-        self.assertEqual(mock.queries[-1].query, OP_REGISTER_MANAGER)
-        self.assertEqual(
-            body(mock),
-            [
-                (
-                    RegisterManagerRequest.ASTRAL_TYPE,
-                    bytes.fromhex(MANAGER_GO_VECTORS["register_manager_request_zero"][1]),
-                )
-            ],
-        )
-        self.assertEqual(token.token, "1S8S2xJYeHFbCgyrWM2Q_p_FEwHryGHa")
-
-    @bounded()
-    async def test_every_field_travels_in_the_object_byte_for_byte(self):
-        """astral-go's request, the bytes the isolated node answered."""
-        _, mock = await self.register_manager(
-            name="manager",
-            grant_permits=[DISCOVERY_PERMIT],
-            contract_permits=(p for p in [CONTRACT_PERMIT]),
-            policies=(b for b in [APP_REGISTER_BINDING, SWARM_JOIN_BINDING]),
-        )
-        self.assertEqual(
-            body(mock),
-            [
-                (
-                    RegisterManagerRequest.ASTRAL_TYPE,
-                    bytes.fromhex(MANAGER_GO_VECTORS["register_manager_request_full"][1]),
-                )
-            ],
-        )
-
-    @bounded()
-    async def test_a_malformed_argument_never_reaches_the_node(self):
-        async with MockApphost(routes={OP_REGISTER_MANAGER: read_one_then()}) as mock:
-            api = await self.apphost(mock)
-            for value, error in (
-                (APP_REGISTER_BINDING, BadArgumentType),
-                (POLICY_APP_REGISTER, BadArgumentType),
-                ([POLICY_APP_REGISTER], BadArgumentType),
-                ([None], BadArgumentType),
-                ([PolicyBinding(policy="p" * 256, operation="x")], BadArgument),
-                ([PolicyBinding(policy=POLICY_APP_REGISTER, operation="o" * 256)], BadArgument),
-                ([PolicyBinding(policy=POLICY_APP_REGISTER, operation=b"x")], BadArgumentType),
-            ):
-                with self.subTest(value=value):
-                    with self.assertRaises(error) as caught:
-                        await api.register_manager(policies=value)
-                    self.assertIn(OP_REGISTER_MANAGER, str(caught.exception))
-            with self.assertRaises(BadArgument):
-                await api.register_manager(name="n" * 256)
-            with self.assertRaises(BadArgumentType):
-                await api.register_manager(grant_permits="mod.user.see_swarm_action")
-            with self.assertRaises(TypeError):
-                await api.register_manager([APP_REGISTER_BINDING])  # type: ignore[misc]
-            self.assertEqual(mock.queries, [])
-
-    @bounded()
-    async def test_a_node_that_is_not_fresh_is_a_remote_error(self):
-        """The captured refusal: the op accepts, then answers the text."""
-        (reply,) = frames_of(LIVE_NOT_FRESH_BODY)
-        async with MockApphost(
-            routes={OP_REGISTER_MANAGER: read_one_then(reply)}
-        ) as mock:
-            api = await self.apphost(mock)
-            with self.assertRaises(RemoteError) as caught:
-                await api.register_manager()
-        self.assertEqual(caught.exception.message, ERR_NOT_FRESH)
-
-    @bounded()
-    async def test_an_answer_of_the_wrong_type_or_none_is_a_protocol_error(self):
-        for route in (read_one_then(ACK_FRAME), read_one_then()):
-            with self.subTest(route=route):
-                async with MockApphost(routes={OP_REGISTER_MANAGER: route}) as mock:
-                    api = await self.apphost(mock)
-                    with self.assertRaises(ProtocolError):
-                        await api.register_manager()
-
-
-class RegisterManagerCitationTest(unittest.TestCase):
-    """Every `path:line` the register_manager, gate and policy prose cites that
-    no other test here reads, at the pins."""
+class GateCitationTest(unittest.TestCase):
+    """Every `path:line` the gate, setter and node-state prose cites at the
+    pins that no other test here reads. The manager appointment's own anchors
+    left with it: `sys.register_manager` cites branches no pin reaches
+    (`tests/test_api_sys.py`)."""
 
     SRC = "mod/apphost/src"
 
     def test_every_anchor_lands_on_its_claim(self):
-        rm = f"{self.SRC}/op_register_manager.go"
         cites = (
-            (reference.ASTRALD, rm, 26, "OpRegisterManager provisions a brand-new App identity"),
-            (reference.ASTRALD, rm, 39, "replaces the delegates the failed attempt wrote"),
-            (reference.ASTRALD, rm, 44, "identities minted over a link"),
-            (reference.ASTRALD, rm, 46, "NewErrOriginNotAllowed"),
-            (reference.ASTRALD, rm, 50, "channel.Expect(&req), channel.FailOnEOF()"),
-            (reference.ASTRALD, rm, 53, "mod.validateManagerRequest(req)"),
-            (reference.ASTRALD, rm, 55, "}"),
-            (reference.ASTRALD, rm, 67, "appointManager provisions the manager"),
-            (reference.ASTRALD, rm, 73, "mod.NodeState(ctx) != user.StateFresh"),
-            (reference.ASTRALD, rm, 74, "return nil, apphostapi.ErrNotFresh"),
-            (reference.ASTRALD, rm, 75, "}"),
-            (reference.ASTRALD, rm, 77, "mod.provisionApp(ctx, &apphostapi.AppRegisterDecision{"),
-            (reference.ASTRALD, rm, 79, "registerGrantRequest(req.GrantPermits)"),
-            (reference.ASTRALD, rm, 81, "})"),
-            (reference.ASTRALD, rm, 90, "mod.appointment.Manager.Set(ctx, token.Identity)"),
-            (reference.ASTRALD, rm, 94, "}"),
-            (reference.ASTRALD, rm, 96, "validateManagerRequest refuses an invalid permit"),
-            (reference.ASTRALD, rm, 111, "!slices.Contains(apphostapi.PolicyNames, name)"),
-            (reference.ASTRALD, rm, 112, "unknown policy"),
-            (reference.ASTRALD, rm, 117, "policy.MaxTimeout"),
-            (reference.ASTRALD, rm, 118, "timeout outside 0..%v"),
-            (reference.ASTRALD, rm, 125, "}"),
-            (reference.ASTRALD, rm, 127, "bindManagerPolicies stores, for every policy name"),
-            (reference.ASTRALD, rm, 135, "Identity: manager"),
-            (reference.ASTRALD, rm, 143, "}"),
             (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 46, "q.AcceptRaw()"),
             (reference.ASTRALD, f"{self.SRC}/gate.go", 22, "func (mod *Module) NodeState("),
             (reference.ASTRALD, f"{self.SRC}/gate.go", 40, "}"),
-            (reference.ASTRALD, f"{self.SRC}/config.go", 79, "Fresh: []string{"),
-            (reference.ASTRALD, f"{self.SRC}/config.go", 90, "Claimed: []string{gateAny}"),
-            (reference.ASTRALD, "mod/user/src/op_set_swarm_policy.go", 106,
-             "func (mod *Module) maySetPolicies"),
-            (reference.ASTRALD, "mod/user/src/op_set_swarm_policy.go", 110,
-             "AdminManageAppsAction"),
             (reference.ASTRALD, "mod/user/src/op_bootstrap.go", 194,
              "mayClaim reports whether caller may claim this node"),
             (reference.ASTRALD, "mod/user/src/op_bootstrap.go", 202, "}"),
-            (reference.ASTRAL_GO, "api/apphost/errors.go", 13, "ErrNotFresh is the answer"),
-            (reference.ASTRAL_GO, "api/apphost/errors.go", 15, 'NewError("node is not fresh")'),
-            (reference.ASTRAL_GO, "api/apphost/register_manager_request.go", 10,
-             "The policy names a PolicyBinding takes"),
-            (reference.ASTRAL_GO, "api/apphost/register_manager_request.go", 29, "}"),
-            (reference.ASTRAL_GO, "api/apphost/register_manager_request.go", 31,
-             "RegisterManagerRequest is the registration an app sends"),
-            (reference.ASTRAL_GO, "api/apphost/register_manager_request.go", 41, "}"),
-            (reference.ASTRAL_GO, "api/apphost/register_manager_request.go", 61,
-             "PolicyBinding names the op of the manager that answers one policy"),
-            (reference.ASTRAL_GO, "api/apphost/register_manager_request.go", 68, "}"),
-            (reference.ASTRAL_GO, "api/apphost/client/register.go", 99,
-             "RegisterManager provisions a fresh App identity"),
-            (reference.ASTRAL_GO, "api/apphost/client/register.go", 103,
-             "apphost.ErrNotFresh"),
-            (reference.ASTRAL_GO, "api/apphost/client/register.go", 103,
-             "The query carries no"),
-            (reference.ASTRAL_GO, "api/apphost/client/register.go", 104,
-             "arguments; req travels on the channel as one object"),
-            (reference.ASTRAL_GO, "api/apphost/client/register.go", 105,
-             "before anything is sent"),
-            (reference.ASTRAL_GO, "api/apphost/module.go", 9,
-             'MethodRegisterManager       = "apphost.register_manager"'),
-            (reference.ASTRAL_GO, "api/policy/delegate.go", 18, "Delegate names the op"),
-            (reference.ASTRAL_GO, "api/policy/delegate.go", 20, "MaxTimeout; a Timeout above it fails"),
         )
         for repo, path, number, fragment in cites:
             with self.subTest(citation=f"{path}:{number}"):
@@ -2015,9 +1619,6 @@ class RegisterManagerCitationTest(unittest.TestCase):
                 except reference.Unavailable as exc:  # pragma: no cover
                     self.skipTest(str(exc))
                 self.assertIn(fragment, line)
-
-    def test_the_op_constant_is_astral_go_s_method_name(self):
-        self.assertEqual(OP_REGISTER_MANAGER, "apphost.register_manager")
 
 
 class SetAppRegisterPolicyTest(ApphostCase):
@@ -2099,8 +1700,8 @@ class SetAppRegisterPolicyTest(ApphostCase):
 
     @bounded()
     async def test_an_unauthorized_caller_is_a_remote_error(self):
-        """The op accepts, then answers a caller that is neither the manager nor
-        a holder of the action with `not permitted`
+        """The op accepts, then answers a caller that does not hold
+        `mod.auth.configure_node_state_action` with `not permitted`
         (`op_set_app_register_policy.go:46-51`)."""
         async with MockApphost(
             routes={
@@ -2735,7 +2336,14 @@ class SecurityNoteTest(unittest.TestCase):
         self.assertIn("Whoever holds the node's token reads every access token", doc)
 
     def test_the_gate_s_default_lists_are_the_ones_the_docstring_names(self):
-        """Read out of `defaultConfig` at the pin, list by list."""
+        """Read out of `defaultConfig` at the pin, list by list.
+
+        The pin predates the sys move, so its lists name
+        `apphost.register_manager` where the docstring, describing astrald
+        branch `intern0/dev/mod-sys`, names `sys.register_manager`; the rename
+        is the one difference the docstring states, and the test holds both
+        sides of it.
+        """
         try:
             config = reference.read(reference.ASTRALD, f"{self.SRC}/config.go")
         except reference.Unavailable as exc:  # pragma: no cover -- may be absent
@@ -2763,6 +2371,18 @@ class SecurityNoteTest(unittest.TestCase):
         )
         self.assertIn("Claimed: []string{gateAny}", defaults)
         self.assertIn("AppRegister: policyconf.Setting{Mode: policyconf.RejectAll}", defaults)
+        doc = " ".join((apphost_module.__doc__ or "").split())
+        self.assertIn(
+            "The defaults are `apphost.register`, `sys.register_manager` and "
+            "`user.info` without a token; `sys.register_manager` and `user.info` "
+            "on a fresh node;",
+            doc,
+        )
+        self.assertIn(
+            "the same lists name `apphost.register_manager` in place of "
+            "`sys.register_manager`",
+            doc,
+        )
         self.assertIn('case c.AnonymousAllowlist != nil:', config)
         self.assertIn('case c.AllowAnonymous != nil:', config)
 

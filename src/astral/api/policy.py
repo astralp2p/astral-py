@@ -42,10 +42,15 @@ astral.Duration`, and reads both names empty as a clear of the stored delegate
 `apphost.set_grant_request_policy` also takes a `mode`, `accept_all` or
 `reject_all`, which `setter_query` does not send
 (`mod/apphost/src/op_set_app_register_policy.go:27-38`). Every setter admits
-the manager `apphost.register_manager` appointed and a caller holding
-`mod.auth.admin_manage_apps_action`, and `apphost.register_manager` itself
-stores a delegate for each policy its request binds
-(`mod/apphost/src/op_register_manager.go:127-143`).
+a caller holding `mod.auth.configure_node_state_action` and answers any other
+caller `not permitted` (`maySetPolicies` in
+`mod/apphost/src/op_set_app_register_policy.go` and
+`mod/user/src/op_set_swarm_policy.go` on astrald branch `intern0/dev/mod-sys`,
+uncommitted). The manager `sys.register_manager` appointed holds that action in
+every node state (`mod/sys/src/authorizers.go` on the same branch), and
+`sys.register_manager` itself stores a delegate for each policy its request
+binds (`bindManagerPolicies`, `mod/sys/src/op_register_manager.go` on the same
+branch; `astral.api.sys`).
 
 **Without a stored delegate, each policy falls back to its own value.** The app
 register policy applies `policies.app_register` of `apphost.yaml`, and the

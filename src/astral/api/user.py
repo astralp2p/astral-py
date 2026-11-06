@@ -244,12 +244,15 @@ and both names empty clear the stored delegate
 (`mod/user/src/op_set_swarm_policy.go:15-17,65-71`). The node stores each
 delegate as a `policy.delegate` (`astral.api.policy`), puts the request to it
 as itself and reads one object back (`api/policy/ask.go`). The setters admit
-the manager and a caller holding `mod.auth.admin_manage_apps_action`, not
+a caller holding `mod.auth.configure_node_state_action`, not
 `mod.user.admin_swarm_action`, so a node with no active contract can set its
 invite policy; each accepts first and answers `not permitted` to any other
-caller (`mod/user/src/op_set_swarm_policy.go:61-63,106-110`).
-`apphost.register_manager` stores a delegate for each policy its request
-binds (`astral.api.apphost`). The delegate cannot be the
+caller (`mod/user/src/op_set_swarm_policy.go:61-63`; the action is
+`maySetPolicies`'s in `mod/user/src/op_set_swarm_policy.go` on astrald branch
+`intern0/dev/mod-sys`, uncommitted). The manager holds that action in every
+node state, claimed included (`astral.api.sys`).
+`sys.register_manager` stores a delegate for each policy its request
+binds (`astral.api.sys`). The delegate cannot be the
 node itself, and a `timeout` above ten minutes is refused
 (`api/policy/delegate.go`); both arrive as an `error_message`.
 
@@ -292,7 +295,7 @@ client reads an empty string as the request to generate
 admits.** It accepts, then answers a query of any origin other than local with
 `origin not allowed: <origin>`, an already-claimed node with
 `node already claimed`, and a caller that is neither the node identity nor the
-manager `apphost.register_manager` appointed with `not permitted`, in that
+manager `sys.register_manager` appointed with `not permitted`, in that
 order (`mod/user/src/op_bootstrap.go:45-60,194-202`). The apphost gate decides
 first which sessions reach the op at all: on an unclaimed node the default
 state list names `user.bootstrap` (`mod/apphost/src/config.go:86`), a fresh
@@ -305,7 +308,10 @@ own token and is not the manager is its own caller and is answered
 the default gate: a token-less session was denied `user.derive_identity` on
 the fresh node, the manager's token claimed the unclaimed node with the
 BIP-39 test words and received a token for the user, and after the claim
-`apphost.register_manager` answered `node is not fresh`. The browser path is
+`apphost.register_manager` answered `node is not fresh`; that node predates the
+rename to `sys.register_manager`, and `mayClaim` reads the manager from the
+sys module on astrald branch `intern0/dev/mod-sys`, uncommitted
+(`mod/user/src/op_bootstrap.go`). The browser path is
 inferred from the sources above.
 
 Reached as `client.user`, a `functools.cached_property` on `Client` built on
@@ -435,17 +441,20 @@ remaining validity, not on the contract's total span.
 STATE_FRESH: Final = "fresh"
 """`Info.state` of a node with no manager and no ownership history.
 
-The one state in which `apphost.register_manager` appoints a manager
+The one state in which `sys.register_manager` appoints a manager
 (`api/user/info.go:12-14` at astral-go `2481dd7a`). astrald reads fresh when no
 user contract is active, the node was never owned, and no manager is appointed
-(`mod/apphost/src/gate.go:22-40`).
+(`mod/apphost/src/gate.go:22-40` at the pin; `NodeState` in
+`mod/sys/src/state.go` on astrald branch `intern0/dev/mod-sys`, uncommitted).
 """
 
 STATE_UNCLAIMED: Final = "unclaimed"
 """`Info.state` of a node without an active user contract whose appointment is
 closed: a manager is appointed, or a user owned the node before
 (`api/user/info.go:15-17`). An expired or expelled claim leaves the node
-unclaimed, never fresh (`mod/apphost/src/gate.go:19-20,32-34`).
+unclaimed, never fresh (`mod/apphost/src/gate.go:19-20,32-34` at the pin;
+`NodeState` in `mod/sys/src/state.go` on astrald branch `intern0/dev/mod-sys`,
+uncommitted).
 """
 
 STATE_CLAIMED: Final = "claimed"
@@ -516,7 +525,7 @@ class Info:
 
     `user.info`'s whole answer, in every node state. `state` is `STATE_FRESH`,
     `STATE_UNCLAIMED` or `STATE_CLAIMED`. `manager` is the App identity
-    `apphost.register_manager` appointed, and `None` while none is. The first
+    `sys.register_manager` appointed, and `None` while none is. The first
     four fields are empty unless `state` is `STATE_CLAIMED`
     (`api/user/info.go:22-37` at astral-go `2481dd7a`). `State` and `Manager`
     follow the four older fields on the wire, so a claimed node's payload is the
@@ -943,7 +952,8 @@ class User(ModuleClient):
 
         Verified on an isolated astrald built from `5b4dde12`: a token-less
         session read `state` `fresh`, then `unclaimed` with the manager after
-        `apphost.register_manager`, then the claimed answer with the contract;
+        `apphost.register_manager`, the op `sys.register_manager` replaces,
+        then the claimed answer with the contract;
         on the claimed node the manager's own token was answered
         `not permitted`.
         """
@@ -1546,8 +1556,9 @@ class User(ModuleClient):
         here, as the node refuses it. `timeout` bounds one question in Go's
         duration syntax; omitted, the node waits ten minutes.
 
-        Accepts, then answers `not permitted` to a caller that is neither the
-        manager nor a holder of `mod.auth.admin_manage_apps_action`. A delegate
+        Accepts, then answers `not permitted` to a caller that does not hold
+        `mod.auth.configure_node_state_action`, which the manager holds in
+        every node state (`astral.api.sys`). A delegate
         the node cannot resolve, the node itself, or a `timeout` above ten
         minutes is an `error_message` too; every one arrives as `RemoteError`.
         """

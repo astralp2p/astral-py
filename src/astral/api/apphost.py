@@ -3,13 +3,13 @@
 apphost is the node module the IPC protocol is named after: it owns the guest
 sessions, the access tokens that authenticate them, the inbound-handler
 registrations, and the object holds a local app uses to keep an object from
-being collected. Sixteen ops have a client below. Eleven were confirmed present
+being collected. Fifteen ops have a client below. Eleven were confirmed present
 on the live node's `shell.spec` registry. The four grant ops -- `grant`,
 `request_grant`, `list_grants` and `revoke` -- and `register` were run through
-these clients on an isolated astrald built from `a499928a`, and
-`register_manager` on one built from `5b4dde12`. astrald's apphost registry
-holds more than this SDK drives; *Authorization* counts it at a named
-revision.
+these clients on an isolated astrald built from `a499928a`. astrald's apphost
+registry holds more than this SDK drives; *Authorization* counts it at a named
+revision. The manager appointment is `sys.register_manager`, in
+`astral.api.sys`; apphost has no `register_manager` op.
 
 | Op | Mode | Answer | Notes |
 |---|---|---|---|
@@ -18,7 +18,6 @@ revision.
 | `apphost.list_held_objects` | ST | `object_id.sha256`* + `eos` | local-only, per caller |
 | `apphost.create_token` | RR | `apphost.access_token` | local-only, admin action, see below |
 | `apphost.register` | WA | `apphost.access_token` \\| `error_message` | local-only, policy-gated, no token needed, **mutates** |
-| `apphost.register_manager` | WA | `apphost.access_token` \\| `error_message` | local-only, fresh node only, no token needed, **mutates** |
 | `apphost.grant` | WA | `ack` \\| `error_message` | local-only, admin action, **mutates** |
 | `apphost.request_grant` | WA | `ack` \\| `error_message` | local-only, session identity, policy-gated, **mutates** |
 | `apphost.list_grants` | ST | `mod.apphost.grant`* + `eos` | local-only, admin action |
@@ -83,21 +82,24 @@ state. A query with a token to another identity passes the gate
 WebSocket alike, and a refusal is `error_msg{denied}`, which surfaces as
 `Denied` (`mod/apphost/src/guest.go:148-151`); the HTTP handler applies the
 state lists and answers 403 (`mod/apphost/src/http_query_handler.go:78-85`).
-The defaults are `apphost.register`, `apphost.register_manager` and
-`user.info` without a token; `apphost.register_manager` and `user.info` on a
+The defaults are `apphost.register`, `sys.register_manager` and
+`user.info` without a token; `sys.register_manager` and `user.info` on a
 fresh node; `user.info`, `user.derive_identity`, `user.bootstrap`, `user.join`
 and `apphost.register` on an unclaimed node; and `*` on a claimed node
-(`mod/apphost/src/config.go:72-91`). `user.StateFresh`, `StateUnclaimed` and
+(`mod/apphost/src/config.go`, `defaultConfig`, on astrald branch
+`intern0/dev/mod-sys`, uncommitted; at the pin the same lists name
+`apphost.register_manager` in place of `sys.register_manager`,
+`mod/apphost/src/config.go:72-91`). `user.StateFresh`, `StateUnclaimed` and
 `StateClaimed` are the states (`astral.api.user.STATE_FRESH`). A node refuses
 to start on an `apphost.yaml` that still names `allow_anonymous` or
 `anonymous_allowlist`, the keys the gate replaced
 (`mod/apphost/src/config.go:98-110`, `mod/apphost/src/loader.go:33-35`);
 verified on an isolated astrald built from `5b4dde12`, which exited with
 `apphost.yaml: anonymous_allowlist is removed; gate.tokenless and gate.states
-replace it`. Under the defaults, of the ops below a fresh node admits
-`register_manager` alone and an unclaimed node `register` alone, to a session
-with a token or without; a claimed node admits every op to a session with a
-token and `register` and `register_manager` to one without.
+replace it`. Under the defaults, of the ops below a fresh node admits none
+and an unclaimed node `register` alone, to a session with a token or without;
+a claimed node admits every op to a session with a token and `register` to one
+without.
 
 **`apphost.list_tokens` and `apphost.create_token` are administration, not
 introspection.** Each accepts, then answers a network origin and then asks
@@ -130,8 +132,13 @@ refuse a network origin; the two that do not are `whoami` and
 `apphost.set_grant_request_policy`. Seven ask
 `mod.auth.admin_manage_apps_action` -- `create_token`, `delete_token`,
 `list_tokens`, `grant`, `list_grants`, `revoke` and `set_app_register_policy`,
-the last through `maySetPolicies`, which admits the manager before it asks
-(`op_set_app_register_policy.go:151-161`).
+the last through `maySetPolicies`, which at the pin admits the manager before
+it asks (`op_set_app_register_policy.go:151-161`). On astrald branch
+`intern0/dev/mod-sys`, uncommitted, `op_register_manager.go` is gone from
+apphost (the op is `sys.register_manager`) and `maySetPolicies` asks
+`mod.auth.configure_node_state_action` alone
+(`mod/apphost/src/op_set_app_register_policy.go`); the census is re-counted
+when the pin moves onto that change.
 One asks `mod.auth.serve_apps_action`: `register_handler`
 (`op_register_handler.go:33`). One asks `mod.user.see_swarm_action`: `hosts`
 (`op_hosts.go:35`), which names the nodes that host an app, finds them through
@@ -155,38 +162,21 @@ config admits it. `apphost.set_app_register_policy` stores a delegate, an op of
 another identity, or with no delegate named clears it, which restores the
 config value (`op_set_app_register_policy.go:124-126,135-137`);
 `set_app_register_policy()` below is its client. It accepts, then answers
-`not permitted` to a caller that is neither the manager nor a holder of the
-action, and it refuses no origin, so a network caller holding the permit
-reaches it (`op_set_app_register_policy.go:46-51`). The node stores the
+`not permitted` to a caller that does not hold
+`mod.auth.configure_node_state_action`, and it refuses no origin, so a network
+caller holding the permit reaches it (`op_set_app_register_policy.go:46-51`;
+the action is `maySetPolicies`'s in `mod/apphost/src/op_set_app_register_policy.go`
+on astrald branch `intern0/dev/mod-sys`, uncommitted). The manager holds that
+action in every node state (`astral.api.sys`). The node stores the
 delegate as a `policy.delegate` (`astral.api.policy`), asks it with a
 `mod.apphost.app_register_request` and reads a
 `mod.apphost.app_register_decision` back; both are declared below.
 
-**`apphost.register_manager` appoints the node's manager, once.** It
-provisions a new App identity as `register` does, holding the permits the
-request asks for and the register grant request's two
-(`op_register_manager.go:77-81`), without asking the app register policy; it
-stores a delegate whose identity is the new manager for
-each policy the request binds, clears the stored delegate of every policy the
-request does not bind, writes the appointment last and answers the access
-token (`op_register_manager.go:26-39,67-94,127-143`). The policies a binding
-names are `app_register`, `grant_request`, `swarm_join`, `swarm_invite` and
-`contract_accept` (`api/apphost/register_manager_request.go:10-29`). The op
-refuses a network origin, then answers an invalid permit, an unknown or repeated
-policy name, a binding with no operation and a timeout outside zero to ten
-minutes with an `error_message` (`op_register_manager.go:44-55,96-125`), and a
-node that is not fresh with `node is not fresh`
-(`op_register_manager.go:73-75`, `api/apphost/errors.go:13-15`). Under the
-default gate a node that is not fresh denies the query before the op runs
-unless the state list admits it: an unclaimed node's list does not, a claimed
-node's `*` does (`mod/apphost/src/config.go:79-90`). Verified on an isolated
-astrald built from `5b4dde12`: a token-less session appointed a manager on the
-fresh node and received its token, the unclaimed node then denied
-`apphost.register_manager`, and the claimed node answered it
-`node is not fresh`. The manager may set every policy setter's delegate
-(`op_set_app_register_policy.go:151-161`,
-`mod/user/src/op_set_swarm_policy.go:106-110`) and claim the node with
-`user.bootstrap` or `user.join` (`mod/user/src/op_bootstrap.go:194-202`).
+**The manager appointment is the sys protocol's.** `sys.register_manager`
+replaces `apphost.register_manager`, `mod.sys.register_manager_request` and
+`mod.sys.policy_binding` replace the `mod.apphost.*` types of the same fields,
+and the policy names and `node is not fresh` move with them; `astral.api.sys`
+declares them all and cites its sources.
 
 **`apphost.register`, `apphost.grant` and `apphost.request_grant` each read
 one object off the channel after they accept.** The query carries no argument,
@@ -298,7 +288,6 @@ __all__ = [
     "BindMsg",
     "ERR_GRANT_DECLINED",
     "ERR_GRANT_NOT_FOUND",
-    "ERR_NOT_FRESH",
     "ERR_REGISTRATION_DECLINED",
     "ErrorMsg",
     "Grant",
@@ -316,23 +305,14 @@ __all__ = [
     "OP_LIST_TOKENS",
     "OP_REGISTER",
     "OP_REGISTER_HANDLER",
-    "OP_REGISTER_MANAGER",
     "OP_REQUEST_GRANT",
     "OP_REVOKE",
     "OP_SET_APP_REGISTER_POLICY",
     "OP_UNHOLD_OBJECT",
     "OP_WHOAMI",
     "PingMsg",
-    "POLICY_APP_REGISTER",
-    "POLICY_CONTRACT_ACCEPT",
-    "POLICY_GRANT_REQUEST",
-    "POLICY_NAMES",
-    "POLICY_SWARM_INVITE",
-    "POLICY_SWARM_JOIN",
-    "PolicyBinding",
     "QueryAcceptedMsg",
     "QueryRejectedMsg",
-    "RegisterManagerRequest",
     "RegisterRequest",
     "RegisterServiceMsg",
     "RejectIncomingMsg",
@@ -353,7 +333,6 @@ OP_LIST_GRANTS: Final = "apphost.list_grants"
 OP_LIST_HELD_OBJECTS: Final = "apphost.list_held_objects"
 OP_LIST_TOKENS: Final = "apphost.list_tokens"
 OP_REGISTER: Final = "apphost.register"
-OP_REGISTER_MANAGER: Final = "apphost.register_manager"
 OP_REQUEST_GRANT: Final = "apphost.request_grant"
 OP_REVOKE: Final = "apphost.revoke"
 OP_SET_APP_REGISTER_POLICY: Final = "apphost.set_app_register_policy"
@@ -378,47 +357,6 @@ an `error_message`, which surfaces as `RemoteError` with this `message`
 (`api/apphost/errors.go:9-11` at astral-go `2481dd7a`, sent at
 `mod/apphost/src/op_request_grant.go:56-63`).
 """
-
-ERR_NOT_FRESH: Final = "node is not fresh"
-"""`register_manager`: a manager is appointed, or a user owns or owned the node.
-
-Sent as an `error_message` after the op accepts, which surfaces as
-`RemoteError` with this `message` (`api/apphost/errors.go:13-15` at astral-go
-`2481dd7a`, sent at `mod/apphost/src/op_register_manager.go:73-75`). Verified
-on an isolated astrald built from `5b4dde12`: a claimed node answered it. An
-unclaimed node under the default gate denies the query instead, which
-surfaces as `Denied`.
-"""
-
-# --- the policy names a binding takes --------------------------------------
-#
-# `api/apphost/register_manager_request.go:10-29` at astral-go `2481dd7a`. Each
-# names the admission policy of one op; the node refuses any other name
-# (`mod/apphost/src/op_register_manager.go:111-112`).
-
-POLICY_APP_REGISTER: Final = "app_register"
-"""Decides `apphost.register`."""
-
-POLICY_GRANT_REQUEST: Final = "grant_request"
-"""Decides `apphost.request_grant`."""
-
-POLICY_SWARM_JOIN: Final = "swarm_join"
-"""Decides `user.request_membership`."""
-
-POLICY_SWARM_INVITE: Final = "swarm_invite"
-"""Decides `user.accept_membership`."""
-
-POLICY_CONTRACT_ACCEPT: Final = "contract_accept"
-"""Decides `user.accept_contract`."""
-
-POLICY_NAMES: Final = (
-    POLICY_APP_REGISTER,
-    POLICY_GRANT_REQUEST,
-    POLICY_SWARM_JOIN,
-    POLICY_SWARM_INVITE,
-    POLICY_CONTRACT_ACCEPT,
-)
-"""Every policy name a `PolicyBinding` takes, in astral-go's `PolicyNames` order."""
 
 ERR_GRANT_NOT_FOUND: Final = "grant not found"
 """`revoke`: the identity holds no grant the arguments name.
@@ -634,44 +572,6 @@ class RequestGrantRequest:
     duration: Duration = wire("Duration", Primitive("duration"))
 
 
-@record("mod.apphost.policy_binding")
-class PolicyBinding:
-    """The manager's op that answers one policy
-    (`api/apphost/register_manager_request.go:61-68` at astral-go `2481dd7a`).
-
-    `policy` is one of `POLICY_NAMES`. `operation` is the op of the manager the
-    node asks. `timeout` bounds one question as `policy.delegate`'s does: zero
-    waits ten minutes (`api/policy/delegate.go:18-20`), and the node refuses a
-    negative one or one above ten minutes
-    (`mod/apphost/src/op_register_manager.go:117-118`). The node stores the
-    binding as a `policy.delegate` whose identity is the new manager
-    (`mod/apphost/src/op_register_manager.go:135`).
-    """
-
-    policy: str = wire("Policy", Primitive("string8"))
-    operation: str = wire("Operation", Primitive("string8"))
-    timeout: Duration = wire("Timeout", Primitive("duration"))
-
-
-@record("mod.apphost.register_manager_request")
-class RegisterManagerRequest:
-    """What an app sends `apphost.register_manager` to become the node's manager
-    (`api/apphost/register_manager_request.go:31-41`).
-
-    `name`, `grant_permits` and `contract_permits` mean what they mean in
-    `RegisterRequest`. `policies` names the policies the manager answers, at
-    most one binding per policy name; a policy the request does not bind loses
-    its stored delegate (`mod/apphost/src/op_register_manager.go:127-143`).
-    """
-
-    name: str = wire("Name", Primitive("string8"))
-    grant_permits: list[Permit | None] = wire("GrantPermits", Slice("mod.auth.permit"))
-    contract_permits: list[Permit | None] = wire("ContractPermits", Slice("mod.auth.permit"))
-    policies: list[PolicyBinding | None] = wire(
-        "Policies", Slice("mod.apphost.policy_binding")
-    )
-
-
 # --- argument coercion ---------------------------------------------------
 #
 # Every parameter goes onto the query string in the bare payload half of its
@@ -759,46 +659,6 @@ def _app_name(value: str | None, op: str = OP_REGISTER) -> str | None:
             f"string8 of at most {_STRING8_MAX}"
         )
     return value
-
-
-def _policy_bindings(values: Iterable[PolicyBinding] | None) -> list[PolicyBinding | None]:
-    """`RegisterManagerRequest.policies`: whole `PolicyBinding`s.
-
-    `None` is the empty list. A bare `PolicyBinding`, `str` or `bytes` is
-    refused rather than read as a list, and so is an entry of any other type.
-    `policy` and `operation` are `string8`, so one over 255 UTF-8 bytes raises
-    `BadArgument` before a query leaves. Which names and timeouts the node
-    accepts is the node's to answer.
-    """
-    if values is None:
-        return []
-    if isinstance(values, (str, bytes, PolicyBinding)):
-        raise BadArgumentType(
-            f"{OP_REGISTER_MANAGER}: policies expects a list of PolicyBinding, got "
-            f"{type(values).__name__}"
-        )
-    bindings: list[PolicyBinding | None] = []
-    for value in values:
-        if not isinstance(value, PolicyBinding):
-            raise BadArgumentType(
-                f"{OP_REGISTER_MANAGER}: policies expects PolicyBinding entries, got "
-                f"{type(value).__name__}"
-            )
-        for key in ("policy", "operation"):
-            text = getattr(value, key)
-            if not isinstance(text, str):
-                raise BadArgumentType(
-                    f"{OP_REGISTER_MANAGER}: a binding's {key} expects a str, got "
-                    f"{type(text).__name__}"
-                )
-            if len(text.encode("utf-8")) > _STRING8_MAX:
-                raise BadArgument(
-                    f"{OP_REGISTER_MANAGER}: a binding's {key} is "
-                    f"{len(text.encode('utf-8'))} bytes; it is a string8 of at most "
-                    f"{_STRING8_MAX}"
-                )
-        bindings.append(value)
-    return bindings
 
 
 # One implementation, on `ModuleClient`. These names stay because the call sites
@@ -1123,8 +983,8 @@ class Apphost(ModuleClient):
         every permit written expire after ten years
         (`op_register.go:18,166,105`). The default gate admits it on an
         unclaimed or claimed node, to a session with a token or without, and
-        denies it on a fresh one, where `register_manager` is the first app
-        (`mod/apphost/src/config.go:72-91`).
+        denies it on a fresh one, where `sys.register_manager` is the first
+        app (`mod/apphost/src/config.go:72-91`).
 
         `grant_permits` are the permits to hold as node-local grants and
         `contract_permits` those to hold in a signed node-to-app contract; each
@@ -1159,67 +1019,6 @@ class Apphost(ModuleClient):
             )
         return self._expect(answers[0], AccessToken, OP_REGISTER)
 
-    async def register_manager(
-        self,
-        *,
-        name: str | None = None,
-        grant_permits: Iterable[Permit | str] | None = None,
-        contract_permits: Iterable[Permit | str] | None = None,
-        policies: Iterable[PolicyBinding] | None = None,
-        **kw: Any,
-    ) -> AccessToken:
-        """Provision a fresh App identity and appoint it the node's manager. WA:
-        one `mod.apphost.register_manager_request` in, one
-        `apphost.access_token` out, then EOF. **Mutates**, once per node.
-
-        The node provisions the identity as `register` does, without asking the
-        app register policy, and for each binding in `policies` stores a
-        delegate whose identity is the new manager; every policy the request
-        does not bind loses its stored delegate. It records the appointment last
-        and answers the manager's token
-        (`api/apphost/client/register.go:99-105`,
-        `op_register_manager.go:26-39`). The node is then unclaimed, `user.info`
-        names the manager, and the manager may claim the node with
-        `user.bootstrap` or `user.join` and set every policy setter's delegate.
-
-        `name`, `grant_permits` and `contract_permits` are `register`'s, with
-        its coercions and refusals. Each entry of `policies` is a
-        `PolicyBinding`; a bare binding, a `str`, or an entry of another type
-        raises `BadArgumentType`, and a `policy` or `operation` over 255 UTF-8
-        bytes raises `BadArgument`, before a query leaves. All four are
-        keyword-only. The query carries no argument and the request travels on
-        the channel as one object, as astral-go's client sends it, here even
-        when every field is empty (`api/apphost/client/register.go:103-105`).
-
-        The default gate admits the op on a fresh node, to a session with a
-        token or without, and denies it on an unclaimed node, which surfaces
-        as `Denied` (`mod/apphost/src/config.go:72-91`). Past the gate the node
-        accepts, then answers a network origin, an invalid permit, an unknown or
-        repeated policy name, a binding with no operation, a timeout outside
-        zero to ten minutes, and a node that is not fresh (`ERR_NOT_FRESH`) with
-        an `error_message`, each a `RemoteError`
-        (`op_register_manager.go:44-55,73-75,96-125`). Verified on an isolated
-        astrald built from `5b4dde12`: a token-less session on the fresh node
-        received the manager's token, and the claimed node answered
-        `node is not fresh`.
-        """
-        req = RegisterManagerRequest(
-            name=_app_name(name, OP_REGISTER_MANAGER) or "",
-            grant_permits=_permit_list(
-                grant_permits, "grant_permits", OP_REGISTER_MANAGER
-            ),
-            contract_permits=_permit_list(
-                contract_permits, "contract_permits", OP_REGISTER_MANAGER
-            ),
-            policies=_policy_bindings(policies),
-        )
-        answers = await self._c.call_with(OP_REGISTER_MANAGER, req, expect=1, **kw)
-        if not answers:
-            raise ProtocolError(
-                f"{OP_REGISTER_MANAGER}: the stream ended without answering the request"
-            )
-        return self._expect(answers[0], AccessToken, OP_REGISTER_MANAGER)
-
     async def set_app_register_policy(
         self,
         identity: Identity | str | None = None,
@@ -1239,9 +1038,12 @@ class Apphost(ModuleClient):
         Go's duration syntax; omitted, the node waits ten minutes
         (`op_set_app_register_policy.go:15-25`).
 
-        Accepts, then answers `not permitted` to a caller that is neither the
-        manager nor a holder of `mod.auth.admin_manage_apps_action`, and
-        refuses no origin (`op_set_app_register_policy.go:46-51,151-161`). A
+        Accepts, then answers `not permitted` to a caller that does not hold
+        `mod.auth.configure_node_state_action`, and refuses no origin
+        (`op_set_app_register_policy.go:46-51`; `maySetPolicies` in
+        `mod/apphost/src/op_set_app_register_policy.go` on astrald branch
+        `intern0/dev/mod-sys`, uncommitted). The manager holds the action in
+        every node state (`astral.api.sys`). A
         delegate the node cannot resolve, the node itself, or a `timeout` above
         ten minutes is an `error_message` too; every one arrives as
         `RemoteError` (`op_set_app_register_policy.go:59-65,134-149`).
@@ -1449,10 +1251,8 @@ APPHOST_TYPES: Final[Sequence[type]] = (
     HostInfoMsg,
     IncomingQueryMsg,
     PingMsg,
-    PolicyBinding,
     QueryAcceptedMsg,
     QueryRejectedMsg,
-    RegisterManagerRequest,
     RegisterRequest,
     RegisterServiceMsg,
     RejectIncomingMsg,
