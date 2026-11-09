@@ -876,7 +876,7 @@ class AstraldParityTest(unittest.TestCase):
             with self.subTest(op=op):
                 self.assertNotIn(f'"{op}"', gate)
                 body = self.source(reference.ASTRALD, f"{self.ASTRALD}/op_{name}.go")
-                self.assertIn("no action gates this op", body)
+                self.assertIn("no named action guards this op", body)
                 self.assertNotIn("Authorize", body)
 
     def test_astral_go_derives_a_seed_without_normalising_it(self):

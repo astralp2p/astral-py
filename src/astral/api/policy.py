@@ -2,13 +2,13 @@
 
 astral-go's `api/policy` package holds what a node and the app it delegates an
 admission decision to share (`api/policy/delegate.go` at astral-go
-`2481dd7a`). Two node modules store a delegate:
+`4a3e111c`). Two node modules store a delegate:
 `apphost` for `apphost.register` and `apphost.request_grant`, and `user` for
 `user.request_membership`, `user.accept_membership` and `user.accept_contract`,
 each persisted as a `policy.delegate` in the node's tree under
 `/mod/apphost/policy` and `/mod/user/policy`
 (`mod/apphost/src/register_policy.go:13,29-30` and
-`mod/user/src/swarm_policy.go:15,21-23` at astrald `5b4dde12`). The question and
+`mod/user/src/swarm_policy.go:15,21-23` at astrald `a7c773d6`). The question and
 the answer are the owning module's types -- `mod.apphost.app_register_request`
 and `mod.apphost.app_register_decision` in `astral.api.apphost`, the four
 `mod.user.swarm_*` types and the two `mod.user.contract_accept_*` types in
@@ -38,19 +38,18 @@ that reason: a module client is a bound set of ops and this module has none.
 op declares `Identity string`, `Operation string` and `Timeout
 astral.Duration`, and reads both names empty as a clear of the stored delegate
 (`mod/apphost/src/op_set_app_register_policy.go:15-25` and
-`mod/user/src/op_set_swarm_policy.go:14-25` at astrald `5b4dde12`).
+`mod/user/src/op_set_swarm_policy.go:14-25` at astrald `a7c773d6`).
 `apphost.set_grant_request_policy` also takes a `mode`, `accept_all` or
 `reject_all`, which `setter_query` does not send
 (`mod/apphost/src/op_set_app_register_policy.go:27-38`). Every setter admits
 a caller holding `mod.auth.configure_node_state_action` and answers any other
-caller `not permitted` (`maySetPolicies` in
-`mod/apphost/src/op_set_app_register_policy.go` and
-`mod/user/src/op_set_swarm_policy.go` on astrald branch `intern0/dev/mod-sys`,
-uncommitted). The manager `sys.register_manager` appointed holds that action in
-every node state (`mod/sys/src/authorizers.go` on the same branch), and
-`sys.register_manager` itself stores a delegate for each policy its request
-binds (`bindManagerPolicies`, `mod/sys/src/op_register_manager.go` on the same
-branch; `astral.api.sys`).
+caller `not permitted` (`maySetPolicies`,
+`mod/apphost/src/op_set_app_register_policy.go:153-155` and
+`mod/user/src/op_set_swarm_policy.go:106-108`). The manager
+`sys.register_manager` appointed holds that action in every node state
+(`mod/sys/src/authorizers.go:15-18`), and `sys.register_manager` itself stores
+a delegate for each policy its request binds (`bindManagerPolicies`,
+`mod/sys/src/op_register_manager.go:123-136`; `astral.api.sys`).
 
 **Without a stored delegate, each policy falls back to its own value.** The app
 register policy applies `policies.app_register` of `apphost.yaml`, and the
@@ -58,7 +57,7 @@ swarm join and invite policies `policies.swarm_join` and
 `policies.swarm_invite` of `user.yaml`; each value is `accept_all`,
 `reject_all` or a delegate mapping (`mod/apphost/src/register_policy.go:15-16`,
 `mod/user/src/swarm_policy.go:17-19`, `lib/policyconf/setting.go:20-25`), and
-each defaults to `reject_all` (`mod/apphost/src/config.go:93-95`,
+each defaults to `reject_all` (`mod/apphost/src/config.go:100-102`,
 `mod/user/src/config.go:32-37`). The
 contract accept policy accepts every valid contract. The grant request policy
 accepts all when its mode is unset or `accept_all`, and refuses all otherwise

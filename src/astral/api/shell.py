@@ -9,10 +9,10 @@ survey's finding 10).
 
 It touches no state and needs no claimed node, which is what makes it usable
 as a self-check. The same handler answers at two paths: `shell.spec` and the
-root `.spec` (`astrald/mod/shell/src/loader.go:36-41` at `5b4dde12`). Neither
+root `.spec` (`astrald/mod/shell/src/loader.go:36-41` at `a7c773d6`). Neither
 path is on the apphost gate's default tokenless list, and no default state list
 but the claimed node's `*` names either
-(`astrald/mod/apphost/src/config.go:72-91`), so under the default gate a
+(`astrald/mod/apphost/src/config.go:73-98`), so under the default gate a
 session without a token is denied both, and this module's `spec()` needs a
 token and a claimed node.
 

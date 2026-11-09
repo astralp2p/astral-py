@@ -713,7 +713,7 @@ class LiveDirTest(live_support.LiveCase):
         to the identity it greeted with. Node-agnostic: the alias asserted is
         whatever the greeting reported, and astrald guarantees the node has one
         -- `setDefaultAlias` runs at load and generates one when the table is
-        empty (`mod/dir/src/module.go:155`).
+        empty (`mod/dir/src/module.go:153`).
         """
         async with await self.client() as client:
             m = await Dir(client).alias_map()
@@ -885,10 +885,10 @@ class CitationTest(unittest.TestCase):
         module, filters = "mod/dir/src/module.go", "mod/dir/src/op_apply_filters.go"
         client = "api/dir/client/apply_filters.go"
         for repo, relative, number, expected in (
-            (astrald, module, 133, "func (mod *Module) ApplyFilters"),
-            (astrald, module, 58, 'if s == "" || s == "anyone"'),
-            (astrald, module, 72, 'Where("alias = ?", s)'),
-            (astrald, module, 155, "func (mod *Module) setDefaultAlias"),
+            (astrald, module, 131, "func (mod *Module) ApplyFilters"),
+            (astrald, module, 56, 'if s == "" || s == "anyone"'),
+            (astrald, module, 70, 'Where("alias = ?", s)'),
+            (astrald, module, 153, "func (mod *Module) setDefaultAlias"),
             (astrald, "mod/dir/src/db.go", 9, '`gorm:"primaryKey"`'),
             (astrald, "mod/dir/src/db.go", 10, '`gorm:"index;unique;not null"`'),
             (astrald, "mod/dir/src/alias.go", 23, 'First(&row, "identity = ?", identity)'),

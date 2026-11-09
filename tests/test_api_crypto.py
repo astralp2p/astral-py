@@ -1123,15 +1123,15 @@ class AstraldParityTest(unittest.TestCase):
         IPC and WebSocket alike, to `gate.tokenless`, and no default list but
         the claimed node's `*` names a `crypto.*` op."""
         body = self.source(f"{self.ASTRALD}/op_public_key.go")
-        self.assertIn("no action gates this op", body)
+        self.assertIn("no named action guards this op", body)
         self.assertNotIn("Authorize", body)
         lines = self.source("mod/apphost/src/gate.go").splitlines()
-        self.assertIn("gateLists(mod.config.Gate.Tokenless, op)", lines[56])
+        self.assertIn("gateLists(mod.config.Gate.Tokenless, op)", lines[23])
         source = self.source("mod/apphost/src/config.go")
         gate = source.split("Gate: Gate{")[1].split("Claimed: []string{gateAny}")[0]
         self.assertNotIn('"crypto.', gate)
-        self.assertEqual(source.splitlines()[71].strip(), "Gate: Gate{")
-        self.assertEqual(source.splitlines()[90].strip(), "},")
+        self.assertEqual(source.splitlines()[72].strip(), "Gate: Gate{")
+        self.assertEqual(source.splitlines()[97].strip(), "},")
 
     def test_the_signer_fallback_and_register_signer_lines_land(self):
         """The module docstring's `register_signer` paragraph, read at the pin."""

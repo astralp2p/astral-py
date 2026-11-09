@@ -41,7 +41,7 @@ it to `dir.MethodApplyFilters` (`api/dir/client/apply_filters.go:20`), and
 test asserts on the op the node received.
 
 **`apply_filters` is OR, not AND.** astrald returns true when the identity
-passes **any** named filter (`mod/dir/src/module.go:133`), and skips a filter
+passes **any** named filter (`mod/dir/src/module.go:131`), and skips a filter
 name it does not know; astral-go's client documents "returns true if the
 identity matches any of them" (`api/dir/client/apply_filters.go:17`). An unknown
 filter name contributes nothing, so a misspelled name is a silent `False` --
@@ -51,7 +51,7 @@ and `dir.apply_filters?filters=` answers `bool(false)`.
 **`set_alias` needs both arguments, `alias` included when it is empty.**
 astrald declares `Alias *string` with `query:"required"` and the comment
 "required but can be empty" (`mod/dir/src/op_set_alias.go` `opSetAliasArgs.Alias`,
-line 12 at astrald `5b4dde12`); the required
+line 12 at astrald `a7c773d6`); the required
 check tests key **presence** in the parsed parameters
 (`astral-go/lib/routing/op.go:235`), and the op answers an absent `alias` with
 an `error_message` reading `argument required: alias`. Removal is therefore
@@ -70,14 +70,14 @@ take an identity and refuse a directory name client-side, and `apply_filters`
 takes a name **or** an identity and never spends a query resolving one. The
 refusal earns its place on the two that would otherwise answer the wrong
 question: `ResolveIdentity` looks a name up in the alias table
-(`mod/dir/src/module.go:72`) and `GetAlias` looks the same table back up by
+(`mod/dir/src/module.go:70`) and `GetAlias` looks the same table back up by
 identity (`mod/dir/src/alias.go:23`), so an alias on `get_alias` is answered
 with itself, and an alias on `set_alias` -- the one op here that writes --
 renames the identity that table already holds it against.
 
 **An empty name is refused client-side.** `dir.resolve` hands its `identity`
 argument straight to that resolver (`mod/dir/src/op_resolve.go:22`), which maps
-`""` and `"anyone"` to `astral.Identity{}` (`mod/dir/src/module.go:58`), so an
+`""` and `"anyone"` to `astral.Identity{}` (`mod/dir/src/module.go:56`), so an
 empty name answers with the **zero identity** rather than an error. A caller
 that meant a name and sent an empty one gets `anyone`, which routes somewhere
 else entirely, so `resolve("")` raises instead. `Identity.ANYONE` is the way to
@@ -97,8 +97,8 @@ package eagerly so registration never depends on the property being touched.
 **Source citations name the symbol as well as the line.** astrald is a moving
 target and three anchors in this file had already drifted by a line or two, which
 costs a reader more than an absent citation: it makes them distrust the exact
-ones. Line numbers below are pinned to astrald `5b4dde12` and astral-go
-`2481dd7a`, the revisions `tests/reference.py` pins, and no citation names
+ones. Line numbers below are pinned to astrald `a7c773d6` and astral-go
+`4a3e111c`, the revisions `tests/reference.py` pins, and no citation names
 another revision.
 """
 
@@ -148,7 +148,7 @@ OP_SET_ALIAS: Final = "dir.set_alias"
 
 # astrald joins and splits filter names on this byte, so a name containing one
 # is two names on the server (`mod/dir/src/op_apply_filters.go` `OpApplyFilters`,
-# line 30 at astrald `5b4dde12`).
+# line 30 at astrald `a7c773d6`).
 FILTER_SEPARATOR: Final = ","
 
 # The parameter specs, so every value travels as the bare payload half of its

@@ -214,11 +214,10 @@ def resolve_token(token: str | None = None) -> str | None:
 
     `None` means a token-less session. astrald's apphost gate confines one to
     the node and to the ops `gate.tokenless` lists -- by default
-    `apphost.register`, `sys.register_manager` and `user.info`, each further
-    limited to the ops the node state's list names
-    (`mod/apphost/src/gate.go:53-64` at astrald `5b4dde12`; the default lists
-    are `defaultConfig` in `mod/apphost/src/config.go` on astrald branch
-    `intern0/dev/mod-sys`, uncommitted) -- and refuses it every registration,
+    `.spec`, `apphost.register`, `sys.register_manager` and `user.info`, each
+    further limited to the ops the node state's list names
+    (`mod/apphost/src/gate.go:20-31` and `mod/apphost/src/config.go:74-79` at
+    astrald `a7c773d6`) -- and refuses it every registration,
     even on the zero identity.
     """
     if token:

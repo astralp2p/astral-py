@@ -1123,8 +1123,8 @@ class LiveAuthTest(live_support.LiveCase):
         `type auth.Action does not implement Object and is not a supported
         container`. `5b1d282` added both, and `specFromType` probes
         `tryObjectType` ahead of its container dispatch, so the embedded field
-        now yields a `RefSpec` naming `mod.auth.action`. astrald `5b4dde12`
-        requires `2481dd7a`, the SDK's own astral-go pin, which is past
+        now yields a `RefSpec` naming `mod.auth.action`. astrald `a7c773d6`
+        requires `4a3e111c`, the SDK's own astral-go pin, which is past
         `5b1d282`.
         """
         async with await self.client() as client:

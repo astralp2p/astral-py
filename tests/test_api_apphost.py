@@ -584,16 +584,16 @@ class AppRegisterPolicyTypesTest(unittest.TestCase):
              "AppRegisterDecision is the app registration policy's answer"),
             (reference.ASTRAL_GO, "api/apphost/app_register_policy.go", 57,
              "Authorizers []*auth.AuthorizerAssignment"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 235,
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 241,
              "ContractPermits: req.ContractPermits"),
             (reference.ASTRALD, "mod/apphost/src/register_grant_request.go", 17,
              "func registerGrantRequest"),
             (reference.ASTRALD, "mod/apphost/src/register_grant_request.go", 20,
              "append([]*auth.Permit{serveApps, useBlueprints}, asked...)"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 72, "dec.Validate()"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 74,
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 76, "dec.Validate()"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 78,
              "ErrRegistrationDeclined"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 75, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 79, "}"),
         )
         for repo, path, number, fragment in cites:
             with self.subTest(citation=f"{path}:{number}"):
@@ -769,15 +769,15 @@ class GrantTypesTest(unittest.TestCase):
             (reference.ASTRALD, "mod/objects/src/module.go", 237,
              "func (mod *Module) GetBlueprint(typeName string)"),
             (reference.ASTRALD, "mod/objects/src/module.go", 254, "astral.BlueprintOf(proto)"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 216,
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 222,
              'refuseRemovedArgs(queryString, "name", "grant_permits", "contract_permits")'),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 220,
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 226,
              "var req *apphostapi.RegisterRequest"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 223, "}"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 48,
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 229, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 52,
              "identities minted over a link"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 50, "NewErrOriginNotAllowed"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 51, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 54, "NewErrOriginNotAllowed"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 55, "}"),
             (reference.ASTRALD, "mod/apphost/src/op_grant.go", 41,
              '"identity", "action", "duration", "constrained"'),
             (reference.ASTRALD, "mod/apphost/src/op_grant.go", 45,
@@ -787,23 +787,23 @@ class GrantTypesTest(unittest.TestCase):
             (reference.ASTRALD, "mod/apphost/src/op_grant.go", 54, 'NewError("missing permits")'),
             (reference.ASTRALD, "mod/apphost/src/op_grant.go", 56, 'NewError("negative duration")'),
             (reference.ASTRALD, "mod/apphost/src/op_grant.go", 57, "}"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 79,
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 82,
              'refuseRemovedArgs(queryString, "permits")'),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 83,
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 86,
              "var req *apphostapi.RequestGrantRequest"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 86, "}"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 87, "switch {"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 89, '"missing permits"'),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 91, '"negative duration"'),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 92, "}"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 35,
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 89, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 90, "switch {"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 92, '"missing permits"'),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 94, '"negative duration"'),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 95, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 38,
              "why: a grant authorizes on this node alone"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 37, "OriginNetwork"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 43,
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 40, "OriginNetwork"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 46,
              "auth.ErrNotPermitted"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 44, "}"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 56, "switch {"),
-            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 63, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 47, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 59, "switch {"),
+            (reference.ASTRALD, "mod/apphost/src/op_request_grant.go", 66, "}"),
             (reference.ASTRALD, "mod/apphost/src/validate_permits.go", 10,
              "validatePermits runs auth.ValidatePermit on every permit"),
             (reference.ASTRALD, "mod/apphost/src/validate_permits.go", 16,
@@ -1598,19 +1598,16 @@ class RegisterTest(ApphostCase):
 class GateCitationTest(unittest.TestCase):
     """Every `path:line` the gate, setter and node-state prose cites at the
     pins that no other test here reads. The manager appointment's own anchors
-    left with it: `sys.register_manager` cites branches no pin reaches
-    (`tests/test_api_sys.py`)."""
+    and the node state left with mod/sys; `tests/test_api_sys.py` reads them."""
 
     SRC = "mod/apphost/src"
 
     def test_every_anchor_lands_on_its_claim(self):
         cites = (
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 46, "q.AcceptRaw()"),
-            (reference.ASTRALD, f"{self.SRC}/gate.go", 22, "func (mod *Module) NodeState("),
-            (reference.ASTRALD, f"{self.SRC}/gate.go", 40, "}"),
-            (reference.ASTRALD, "mod/user/src/op_bootstrap.go", 194,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 45, "q.AcceptRaw()"),
+            (reference.ASTRALD, "mod/user/src/op_bootstrap.go", 196,
              "mayClaim reports whether caller may claim this node"),
-            (reference.ASTRALD, "mod/user/src/op_bootstrap.go", 202, "}"),
+            (reference.ASTRALD, "mod/user/src/op_bootstrap.go", 204, "}"),
         )
         for repo, path, number, fragment in cites:
             with self.subTest(citation=f"{path}:{number}"):
@@ -1702,7 +1699,7 @@ class SetAppRegisterPolicyTest(ApphostCase):
     async def test_an_unauthorized_caller_is_a_remote_error(self):
         """The op accepts, then answers a caller that does not hold
         `mod.auth.configure_node_state_action` with `not permitted`
-        (`op_set_app_register_policy.go:46-51`)."""
+        (`op_set_app_register_policy.go:45-50`)."""
         async with MockApphost(
             routes={
                 OP_SET_APP_REGISTER_POLICY: Accept(objects=(error_frame("not permitted"),))
@@ -2176,7 +2173,8 @@ class SecurityNoteTest(unittest.TestCase):
         "list_grants",
         "revoke",
     }
-    ADMIN_MANAGE_APPS = TOKEN_AND_GRANT | {"set_app_register_policy"}
+    ADMIN_MANAGE_APPS = TOKEN_AND_GRANT
+    CONFIGURE_NODE_STATE = {"set_app_register_policy"}
     SERVE_APPS = {"register_handler"}
     CURRENT_UNGUARDED = {"whoami", "set_app_register_policy"}
 
@@ -2211,17 +2209,17 @@ class SecurityNoteTest(unittest.TestCase):
         ops = self.ops()
         guarded = {name for name, src in ops.items() if "OriginNetwork" in src}
 
-        self.assertEqual(len(ops), 18)
+        self.assertEqual(len(ops), 17)
         self.assertEqual(set(ops) - guarded, self.CURRENT_UNGUARDED)
-        self.assertEqual(len(guarded), 16)
+        self.assertEqual(len(guarded), 15)
 
         # Unwrapped, because a line break inside a sentence is a formatting
         # choice and the claim is the sentence.
         doc = " ".join((apphost_module.__doc__ or "").split())
         self.assertNotIn("alone among its neighbours", doc)
         self.assertIn(f"re-derived at `{reference.PINS[reference.ASTRALD][1]}`", doc)
-        self.assertIn("Eighteen `op_*.go` files.", doc)
-        self.assertIn("Sixteen refuse a network origin", doc)
+        self.assertIn("Seventeen `op_*.go` files.", doc)
+        self.assertIn("Fifteen refuse a network origin", doc)
         self.assertIn(
             "the two that do not are `whoami` and `set_app_register_policy`", doc
         )
@@ -2235,9 +2233,9 @@ class SecurityNoteTest(unittest.TestCase):
         work: the origin before the action, and the action before the op
         resolves an identity, reads its request object or touches a store.
         Both setters in `op_set_app_register_policy.go` ask `maySetPolicies`,
-        which admits the manager and otherwise asks the action, before
-        `newDelegate` resolves a delegate and `writePolicyDelegate` clears or
-        writes it.
+        which asks `ConfigureNodeStateAction` alone (the manager holds it
+        through mod/sys), before `newDelegate` resolves a delegate and
+        `writePolicyDelegate` clears or writes it.
         """
         ops = self.ops()
         admin_action = "AdminManageAppsAction"
@@ -2250,8 +2248,12 @@ class SecurityNoteTest(unittest.TestCase):
         self.assertEqual(
             {n for n, s in ops.items() if "ServeAppsAction" in s}, self.SERVE_APPS
         )
+        self.assertEqual(
+            {n for n, s in ops.items() if "ConfigureNodeStateAction" in s},
+            self.CONFIGURE_NODE_STATE,
+        )
 
-        for name in sorted(self.ADMIN_MANAGE_APPS):
+        for name in sorted(self.ADMIN_MANAGE_APPS | self.CONFIGURE_NODE_STATE):
             with self.subTest(op=name):
                 src = ops[name]
                 guard = (
@@ -2282,7 +2284,9 @@ class SecurityNoteTest(unittest.TestCase):
                     )
                     grant, rest = grant.split("func writePolicyDelegate(")
                     may = rest.split("func (mod *Module) maySetPolicies(")[1]
-                    self.assertLess(may.index("mod.Manager()"), may.index(admin_action))
+                    self.assertIn("ConfigureNodeStateAction", may)
+                    self.assertNotIn(admin_action, may)
+                    self.assertNotIn("mod.Manager()", may)
                     for body in (register, grant):
                         self.assertLess(
                             body.index("mod.maySetPolicies("),
@@ -2325,7 +2329,7 @@ class SecurityNoteTest(unittest.TestCase):
         tokenless = config.split("Tokenless: []string{")[1].split("},")[0]
         self.assertEqual(
             sorted(tokenless.replace('"', " ").replace(",", " ").split()),
-            ["apphost.register", "apphost.register_manager", "user.info"],
+            [".spec", "apphost.register", "sys.register_manager", "user.info"],
         )
         for name in sorted(self.ADMIN_MANAGE_APPS | self.SERVE_APPS):
             with self.subTest(op=name):
@@ -2338,11 +2342,6 @@ class SecurityNoteTest(unittest.TestCase):
     def test_the_gate_s_default_lists_are_the_ones_the_docstring_names(self):
         """Read out of `defaultConfig` at the pin, list by list.
 
-        The pin predates the sys move, so its lists name
-        `apphost.register_manager` where the docstring, describing astrald
-        branch `intern0/dev/mod-sys`, names `sys.register_manager`; the rename
-        is the one difference the docstring states, and the test holds both
-        sides of it.
         """
         try:
             config = reference.read(reference.ASTRALD, f"{self.SRC}/config.go")
@@ -2356,35 +2355,34 @@ class SecurityNoteTest(unittest.TestCase):
 
         self.assertEqual(
             listed("Tokenless"),
-            ["apphost.register", "apphost.register_manager", "user.info"],
+            [".spec", "apphost.register", "sys.register_manager", "user.info"],
         )
-        self.assertEqual(listed("Fresh"), ["apphost.register_manager", "user.info"])
+        self.assertEqual(listed("Fresh"), [".spec", "sys.register_manager", "user.info"])
         self.assertEqual(
             listed("Unclaimed"),
             [
+                ".spec",
                 "user.info",
                 "user.derive_identity",
                 "user.bootstrap",
                 "user.join",
                 "apphost.register",
+                "apphost.bind",
+                "apphost.register_handler",
+                "apphost.cancel",
             ],
         )
         self.assertIn("Claimed: []string{gateAny}", defaults)
         self.assertIn("AppRegister: policyconf.Setting{Mode: policyconf.RejectAll}", defaults)
         doc = " ".join((apphost_module.__doc__ or "").split())
         self.assertIn(
-            "The defaults are `apphost.register`, `sys.register_manager` and "
-            "`user.info` without a token; `sys.register_manager` and `user.info` "
-            "on a fresh node;",
+            "The defaults are `.spec`, `apphost.register`, `sys.register_manager` "
+            "and `user.info` without a token; `.spec`, `sys.register_manager` and "
+            "`user.info` on a fresh node;",
             doc,
         )
-        self.assertIn(
-            "the same lists name `apphost.register_manager` in place of "
-            "`sys.register_manager`",
-            doc,
-        )
-        self.assertIn('case c.AnonymousAllowlist != nil:', config)
-        self.assertIn('case c.AllowAnonymous != nil:', config)
+        self.assertNotIn("AnonymousAllowlist", config)
+        self.assertNotIn("AllowAnonymous", config)
 
     def test_every_astrald_line_the_authorization_section_cites_lands(self):
         """`path:line` at the pin, each one read and matched against its claim.
@@ -2400,11 +2398,11 @@ class SecurityNoteTest(unittest.TestCase):
             (f"{self.SRC}/op_create_token.go", 25, admin),
             (f"{self.SRC}/op_delete_token.go", 23, "OriginNetwork"),
             (f"{self.SRC}/op_delete_token.go", 27, admin),
-            (f"{self.SRC}/op_cancel.go", 30, "OriginNetwork"),
-            (f"{self.SRC}/op_cancel.go", 32, "}"),
-            (f"{self.SRC}/op_cancel.go", 36, "answers as a missing one"),
-            (f"{self.SRC}/op_cancel.go", 40, "}"),
-            (f"{self.SRC}/op_cancel.go", 57, "func (mod *Module) mayCancel"),
+            (f"{self.SRC}/op_cancel.go", 35, "OriginNetwork"),
+            (f"{self.SRC}/op_cancel.go", 37, "}"),
+            (f"{self.SRC}/op_cancel.go", 41, "answers as a missing one"),
+            (f"{self.SRC}/op_cancel.go", 45, "}"),
+            (f"{self.SRC}/op_cancel.go", 62, "func (mod *Module) mayCancel"),
             (f"{self.SRC}/op_register_handler.go", 33, "ServeAppsAction"),
             (f"{self.SRC}/authorize_admin_manage_apps.go", 19, "func (mod *Module) mayManageApps"),
             (f"{self.SRC}/authorize_admin_manage_apps.go", 24, "AdminManageAppsAction"),
@@ -2422,22 +2420,18 @@ class SecurityNoteTest(unittest.TestCase):
             (f"{self.SRC}/http_query_handler.go", 82, "srv.gateAdmits(ctx, q, false)"),
             (f"{self.SRC}/http_query_handler.go", 83, "http.StatusForbidden"),
             (f"{self.SRC}/http_query_handler.go", 85, "}"),
-            (f"{self.SRC}/gate.go", 53, "func (mod *Module) gateAdmits("),
-            (f"{self.SRC}/gate.go", 57, "if tokenless && (!toNode"),
-            (f"{self.SRC}/gate.go", 63, "mod.config.Gate.States.forState(mod.NodeState(ctx))"),
-            (f"{self.SRC}/gate.go", 64, "}"),
-            (f"{self.SRC}/config.go", 33, "Gate lists the ops a session may call"),
-            (f"{self.SRC}/config.go", 48, "}"),
-            (f"{self.SRC}/config.go", 50, "Policies holds the config value"),
-            (f"{self.SRC}/config.go", 54, "}"),
-            (f"{self.SRC}/config.go", 72, "Gate: Gate{"),
-            (f"{self.SRC}/config.go", 91, "},"),
-            (f"{self.SRC}/config.go", 93, "Policies: Policies{"),
-            (f"{self.SRC}/config.go", 95, "},"),
-            (f"{self.SRC}/config.go", 98, "checkRemovedKeys refuses a config"),
-            (f"{self.SRC}/config.go", 110, "}"),
-            (f"{self.SRC}/loader.go", 33, "mod.config.checkRemovedKeys()"),
-            (f"{self.SRC}/loader.go", 35, "}"),
+            (f"{self.SRC}/gate.go", 20, "func (mod *Module) gateAdmits("),
+            (f"{self.SRC}/gate.go", 24, "if tokenless && (!toNode"),
+            (f"{self.SRC}/gate.go", 30, "mod.config.Gate.States.forState(mod.Sys.NodeState(ctx))"),
+            (f"{self.SRC}/gate.go", 31, "}"),
+            (f"{self.SRC}/config.go", 26, "Gate lists the ops a session may call"),
+            (f"{self.SRC}/config.go", 41, "}"),
+            (f"{self.SRC}/config.go", 43, "Policies holds the config value"),
+            (f"{self.SRC}/config.go", 47, "}"),
+            (f"{self.SRC}/config.go", 73, "Gate: Gate{"),
+            (f"{self.SRC}/config.go", 98, "},"),
+            (f"{self.SRC}/config.go", 100, "Policies: Policies{"),
+            (f"{self.SRC}/config.go", 102, "},"),
             ("mod/user/src/authorize_user_or_node.go", 12, "within apphost's gate"),
             ("mod/user/src/authorize_user_or_node.go", 13, "node-local grant or a signed contract"),
             ("mod/user/src/authorize_user_or_node.go", 17, "authorizeUserOrNode"),
@@ -2450,8 +2444,8 @@ class SecurityNoteTest(unittest.TestCase):
             (f"{self.SRC}/op_hosts.go", 48, "RelayForAction"),
             (f"{self.SRC}/op_hold_object.go", 36, "StoreObjectsAction"),
             (f"{self.SRC}/op_hold_object.go", 37, "auth.ErrNotPermitted"),
-            (f"{self.SRC}/op_request_grant.go", 42, "requester.IsZero()"),
-            (f"{self.SRC}/op_request_grant.go", 62, "ErrGrantDeclined"),
+            (f"{self.SRC}/op_request_grant.go", 45, "requester.IsZero()"),
+            (f"{self.SRC}/op_request_grant.go", 65, "ErrGrantDeclined"),
             (f"{self.SRC}/op_grant.go", 28, "q.AcceptRaw()"),
             (f"{self.SRC}/op_grant.go", 33, "OriginNetwork"),
             (f"{self.SRC}/op_grant.go", 37, admin),
@@ -2477,50 +2471,50 @@ class RegisterCitationTest(unittest.TestCase):
     def test_every_anchor_lands_on_its_claim(self):
         cites = (
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 18, "RegisterDuration = 10 * 365"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 64, "switch {"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 67, "ErrRegistrationDeclined"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 75, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 166, "Add(RegisterDuration)"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 105, "CreateAccessToken(guestID"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 68, "switch {"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 71, "ErrRegistrationDeclined"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 79, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 172, "Add(RegisterDuration)"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 111, "CreateAccessToken(guestID"),
             (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 15,
              "type opSetPolicyArgs struct"),
             (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 25, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 46, "q.AcceptRaw()"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 49,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 45, "q.AcceptRaw()"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 48,
              "mod.maySetPolicies(ctx, q.Caller())"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 50,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 49,
              "auth.ErrNotPermitted"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 51, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 59,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 50, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 58,
              "d, err := mod.newDelegate("),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 61,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 60,
              "writePolicyDelegate(ctx, d, &mod.policy.AppRegister)"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 64,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 63,
              "return ch.Send(astral.Err(err))"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 65, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 124, "if d == nil {"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 125,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 64, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 121, "if d == nil {"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 122,
              "return v.Clear(ctx)"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 126, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 134,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 123, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 131,
              "func (mod *Module) newDelegate"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 135,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 132,
              'name == "" && op == ""'),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 136, "return nil, nil"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 137, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 139,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 133, "return nil, nil"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 134, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 136,
              "mod.Dir.ResolveIdentity(name)"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 144,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 141,
              "the node cannot be its own delegate"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 148, "d.Validate()"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 149, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 151,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 145, "d.Validate()"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 146, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 148,
              "maySetPolicies reports whether caller may select a policy"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 157,
-             "mod.Manager(); !manager.IsZero() && caller.IsEqual(manager)"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 160,
-             "AdminManageAppsAction"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 161, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 153,
+             "func (mod *Module) maySetPolicies("),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 154,
+             "ConfigureNodeStateAction"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 155, "}"),
             (reference.ASTRALD, f"{self.SRC}/register_policy.go", 42,
              "func (mod *Module) GetRegisterAppPolicy()"),
             (reference.ASTRALD, f"{self.SRC}/register_policy.go", 47,
@@ -2538,7 +2532,7 @@ class RegisterCitationTest(unittest.TestCase):
              "func registerGrantRequest"),
             (reference.ASTRALD, f"{self.SRC}/register_grant_request.go", 20,
              "append([]*auth.Permit{serveApps, useBlueprints}, asked...)"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 235,
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 241,
              "ContractPermits: req.ContractPermits"),
             (reference.ASTRALD, "mod/apphost/register_policy.go", 28, "func AcceptAll"),
             (reference.ASTRAL_GO, "api/apphost/errors.go", 7,

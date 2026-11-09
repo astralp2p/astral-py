@@ -19,9 +19,9 @@ on:
 
 Read-only throughout: `shell.spec` touches no node state, which is what makes
 it usable as a self-check. The same handler answers at `.spec`
-(`mod/shell/src/loader.go`, astrald `5b4dde12`). Neither path is on the apphost
+(`mod/shell/src/loader.go`, astrald `a7c773d6`). Neither path is on the apphost
 gate's default tokenless list, and on a node that is not claimed no default
-state list names either (`mod/apphost/src/config.go:72-91`), so the live tier
+state list names either (`mod/apphost/src/config.go:73-98`), so the live tier
 asks `shell.spec` under `ASTRAL_TEST_NODE_TOKEN` and needs a claimed node or a
 gate that admits it.
 """
