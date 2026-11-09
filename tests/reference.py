@@ -43,54 +43,33 @@ ASTRALD: Final = "astrald"
 ASTRAL_GO: Final = "astral-go"
 
 PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
-    # The revisions the modules were read against: astrald `5b4dde12`, the
-    # head of astrald branch `intern0/dev/node-manager-bootstrap` (the apphost
-    # gate, node states and manager appointment), and astral-go `2481dd7a`, the
-    # merge of astral-go pull request #171, which astrald `5b4dde12` requires.
-    # Every `path:line` citation in `astral/api/*.py` resolves at one of these
-    # two and none names another revision. Bumping one means re-reading the
-    # citations that name it. The record of each earlier bump is this comment's
-    # history in `git log -p tests/reference.py`.
+    # The revisions the modules were read against: astrald `a7c773d6`, the
+    # merge of astrald pull request #383 (mod/sys: the node state, the manager
+    # appointment and `sys.register_manager`), and astral-go `4a3e111c`, the
+    # merge of astral-go pull request #175 (`api/sys`), which astrald
+    # `a7c773d6` requires. Every `path:line` citation in `astral/api/*.py`
+    # resolves at one of these two and none names another revision. Bumping
+    # one means re-reading the citations that name it. The record of each
+    # earlier bump is this comment's history in `git log -p tests/reference.py`.
     #
-    # Bumped from astrald `9c466cf3` / astral-go `08ead7ce`. The range carries
-    # astrald's app-signers and coldcard-removal merges besides the bootstrap
-    # commit. Re-read at the bump, every cited astrald file that differs
-    # between the two: `mod/apphost/src` (`config.go`, `guest.go`,
-    # `http_query_handler.go`, `loader.go`, `op_register.go`,
-    # `op_set_app_register_policy.go`, `register_policy.go`, `setup_guard.go`
-    # (deleted), `gate.go` and `op_register_manager.go` (added)),
-    # `mod/apphost/register_policy.go`, `mod/user/module.go`, `mod/user/src`
-    # (`authorize_user_or_node.go`, `authorizers.go`, `config.go`,
-    # `contracts.go`, `op_bootstrap.go`, `op_info.go`, `op_join.go`,
-    # `op_set_swarm_policy.go`, `swarm_policy.go`), `mod/crypto/src/module.go`
-    # and `op_register_signer.go` (added), `mod/crypto/errors.go`,
-    # `mod/auth/src/sign_contract_guard.go`, `mod/shell/src/op_spec.go` and
-    # `lib/policyconf/setting.go` (added); in astral-go,
-    # `api/apphost/client/register.go`, `api/apphost/errors.go`,
-    # `api/apphost/module.go`, `api/user/info.go` and
-    # `api/apphost/register_manager_request.go` (added). Claims rewritten: the
-    # gate replaces the tokenless allowlist and binds a session with a token to
-    # the node state's list as well, and its removed keys stop the node;
-    # `user.info` answers `mod.user.info` with `State` and `Manager` in every
-    # state, so `no active contract` is no longer its answer; the app register,
-    # swarm join and swarm invite policies fall back to a config value whose
-    # default is `reject_all`; the policy setters, `user.bootstrap` and
-    # `user.join` admit the manager; the apphost census counts eighteen files.
-    # Surface added: `mod.user.info`'s `State` and `Manager`, the `STATE_*`
-    # constants, `apphost.register_manager`, `mod.apphost.register_manager_request`,
-    # `mod.apphost.policy_binding`, `POLICY_*` and `ERR_NOT_FRESH`. Surface not
-    # added: `crypto.register_signer` and its types, which
-    # `test_api_crypto.AstraldParityTest` names.
-    #
-    # Ahead of the pins: the sys protocol (`astral/api/sys.py`, design 11.10).
-    # astrald's `mod/sys` is uncommitted on branch `intern0/dev/mod-sys` and
-    # astral-go's `api/sys` is on the unpushed branch `intern0/dev/sys-api`, so
-    # no revision here can name them. Their citations name a path alone, and
-    # this module reads none of them. Bumping onto the merged revisions turns
-    # them into `path:line` claims and re-counts the apphost census, which at
-    # the current pin still holds `op_register_manager.go`.
-    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "5b4dde12"),
-    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "2481dd7a"),
+    # Bumped from astrald `5b4dde12` / astral-go `2481dd7a`. Every cited line
+    # whose text did not change was moved to its new number; every other cited
+    # line, and every cited file whose code changed, was re-read. Claims
+    # rewritten: the node state and the manager are mod/sys's
+    # (`mod/sys/src/state.go`), and every policy setter asks
+    # `ConfigureNodeStateAction` alone, which the manager holds through
+    # `mod/sys/src/authorizers.go`; the default gate lists `.spec` everywhere
+    # and the unclaimed list adds `apphost.bind`, `apphost.register_handler` and
+    # `apphost.cancel`; the removed `allow_anonymous` and `anonymous_allowlist`
+    # keys no longer stop the node (`checkRemovedKeys` is gone); the apphost
+    # census counts seventeen files, fifteen refusing a network origin; the
+    # bip137sig and crypto ops' comments read "no named action guards this op".
+    # The sys citations, which named a path alone while mod/sys was ahead of
+    # the pins, are `path:line` and `test_api_sys.CitationTest` reads them.
+    # Surface added: `user.introduce`, `user.contract` and
+    # `ERR_INTRODUCE_SELF`, with `User.introduce` and `User.contract`.
+    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "a7c773d6"),
+    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "4a3e111c"),
 }
 
 

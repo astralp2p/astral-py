@@ -1,10 +1,12 @@
 """`user.*` -- the swarm a node belongs to: membership, siblings, assets, bans.
 
-Tier 2 and the largest module of it: twenty-one ops, seventeen wire types, and
-the one op in the SDK whose stream ends with a **value** instead of a
-terminator. Every op below is on the `shell.spec`
-registry of an isolated astrald built from `5f17900d`, all twenty-one verified
-there, and the argument names and types were read out of `routing.op_spec`.
+Tier 2 and the largest module of it: twenty-three ops, seventeen wire types,
+and the one op in the SDK whose stream ends with a **value** instead of a
+terminator. Twenty-one of the ops are on the `shell.spec` registry of an
+isolated astrald built from `5f17900d`, all twenty-one verified there, and the
+argument names and types were read out of `routing.op_spec`. `user.introduce`
+and `user.contract` arrived later and are read from the sources at the pin
+alone (`mod/user/src/op_introduce.go:38`, `mod/user/src/op_contract.go:24`).
 
 A node belongs to at most one user. The membership is a `mod.auth.contract`
 signed by the user as issuer and by the node as subject; the node's copy of it is
@@ -26,6 +28,8 @@ per-op contract and is **not** discoverable from the wire):
 | `user.bootstrap` | WA | `mod.user.bootstrap_result` \\| `error_message` | **mutates** |
 | `user.expel` | RR | `mod.user.signed_expulsion` \\| `error_message` | **irreversible** |
 | `user.info` | RR | `mod.user.info` | read-only |
+| `user.introduce` | RR | `ack` \\| `error_message` | **mutates** |
+| `user.contract` | RR | `mod.auth.signed_contract` \\| `error_message` | read-only |
 | `user.list_expelled` | ST | `mod.user.signed_expulsion` x n ++ `eos` | read-only |
 | `user.list_siblings` | ST | `identity` x n ++ `eos` | read-only |
 | `user.new_node_contract` | RR | `mod.auth.contract` \\| `error_message` | read-only |
@@ -92,7 +96,7 @@ form. Verified again on astrald `26bb51d5` for `mod.user.see_swarm_action` and
 `mod.user.adopt_action` and `mod.user.expel_action` with
 `mod.user.admin_swarm_action`, and `mod.user.info_action` with
 `mod.user.see_swarm_action` (`api/user/admin_swarm_action.go` and
-`api/user/see_swarm_action.go` at astral-go `2481dd7a`). On `26bb51d5`, `objects.new` answers `nil` for the three old
+`api/user/see_swarm_action.go` at astral-go `4a3e111c`). On `26bb51d5`, `objects.new` answers `nil` for the three old
 names and `objects.get_blueprint` answers `blueprint not found`, both verified.
 A permit naming an old type matches no action the node authorizes, so it grants
 nothing, and this module no longer declares them.
@@ -108,10 +112,10 @@ and the op's target (the node being adopted or expelled) are different nodes.
 **An empty target is the zero identity, and the node refuses it.**
 `user.adopt`, `user.expel` and `user.sync_with` tag `Identity string` with
 `query:"required"`, and the tag tests that the key is present, not that it
-holds a value (`lib/routing/op.go` `checkRequired` at astral-go `2481dd7a`). An
+holds a value (`lib/routing/op.go` `checkRequired` at astral-go `4a3e111c`). An
 `identity=` carrying no value therefore reaches `Dir.ResolveIdentity("")`,
 which maps the empty string to the zero identity
-(`astrald/mod/dir/src/module.go:58`) rather than failing. All three ops test
+(`astrald/mod/dir/src/module.go:56`) rather than failing. All three ops test
 the identity they resolve and answer the zero identity with `zero identity`
 and a name that does not resolve with `unknown identity`
 (`astrald/mod/user/src/op_adopt.go:34-40`, `op_expel.go`, `op_sync_with.go`).
@@ -119,17 +123,17 @@ and a name that does not resolve with `unknown identity`
 Every one of those arguments is mandatory here and an empty name is refused
 client-side.
 
-**`user.list_siblings`'s `zone` is inert on astrald `5b4dde12`.** It builds a
+**`user.list_siblings`'s `zone` is inert on astrald `a7c773d6`.** It builds a
 context the op then never uses -- `mod.getSiblings()` takes none
 (`astrald/mod/user/src/op_list_siblings.go:27`). It is still sent when the caller
 names one, because a declared argument is the op's own statement of its
 interface, and the value is forwarded to the routing zone too, where it is not
 inert. Defect filed against astrald.
 
-**`user.sync_with` declares no `start` on astrald `5b4dde12`.** Its argument
+**`user.sync_with` declares no `start` on astrald `a7c773d6`.** Its argument
 struct is an identity and an output format and nothing else, and the argument
 binder skips a key the op does not declare (`lib/query/editor.go`
-`Editor.SetMany` at astral-go `2481dd7a`), so a `start` sent there is accepted and
+`Editor.SetMany` at astral-go `4a3e111c`), so a `start` sent there is accepted and
 ignored. `sync_with` therefore accepts no `start` and sends only `identity`.
 
 **Every refusal is an `error_message` after the op accepts.** No op here
@@ -200,7 +204,7 @@ substitutes the module's user identity for an absent `user` and answers
 `user id missing: pass -user <identity>; the node has no active contract to
 default from` when that identity is zero; a named `user` that resolves to the
 zero identity answers `user id missing`
-(`mod/user/src/op_new_node_contract.go:48-53` at `5b4dde12`). Verified on an
+(`mod/user/src/op_new_node_contract.go:48-53` at `a7c773d6`). Verified on an
 unclaimed node built from `5f17900d`: both texts, the second for
 `user=anyone`, and the same query with a real `user` named answers the
 contract.
@@ -212,7 +216,7 @@ its expiry is not this module's to choose.
 
 **`mod.user.notification` is sent and nothing receives it.** `AddAsset` and
 `RemoveAsset` push `Notification{Event: "assets"}` to every linked sibling
-(`astrald/mod/user/src/siblings.go:25`), and astrald's own object receiver has no
+(`astrald/mod/user/src/siblings.go:27`), and astrald's own object receiver has no
 case for the type (`mod/user/src/object_receiver.go` switches on
 `*auth.SignedContract`, `*user.SignedExpulsion` and `*events.Event` only), so the
 push is neither accepted nor rejected and the event triggers nothing. The type is
@@ -248,8 +252,7 @@ a caller holding `mod.auth.configure_node_state_action`, not
 `mod.user.admin_swarm_action`, so a node with no active contract can set its
 invite policy; each accepts first and answers `not permitted` to any other
 caller (`mod/user/src/op_set_swarm_policy.go:61-63`; the action is
-`maySetPolicies`'s in `mod/user/src/op_set_swarm_policy.go` on astrald branch
-`intern0/dev/mod-sys`, uncommitted). The manager holds that action in every
+`maySetPolicies`'s, `mod/user/src/op_set_swarm_policy.go:106-108`). The manager holds that action in every
 node state, claimed included (`astral.api.sys`).
 `sys.register_manager` stores a delegate for each policy its request
 binds (`astral.api.sys`). The delegate cannot be the
@@ -261,13 +264,13 @@ user's key from BIP-39 words along `m/1791'/0'/0'/0/0`, the path a Coldcard
 derives its Astral key on (`mod/user/module.go:16-18`, `UserKeyPath`), signs
 the claim contract as that user and as itself, stores and indexes the user's
 key, then stores the contract and makes it active
-(`mod/user/src/op_bootstrap.go:122-137`), and answers with an access token it
-issues for the user (`mod/user/src/op_bootstrap.go:77`). The contract is the management-node
+(`mod/user/src/op_bootstrap.go:124-139`), and answers with an access token it
+issues for the user (`mod/user/src/op_bootstrap.go:79`). The contract is the management-node
 contract `user.new_node_contract` builds, valid for `DEFAULT_CONTRACT_VALIDITY`
-(`mod/user/src/op_bootstrap.go:170`). It passes the claim rule of
-`auth.sign_contract` before any signature (`mod/user/src/op_bootstrap.go:175`),
+(`mod/user/src/op_bootstrap.go:172`). It passes the claim rule of
+`auth.sign_contract` before any signature (`mod/user/src/op_bootstrap.go:177`),
 with the node as the claim's caller whoever called the op
-(`mod/user/src/op_bootstrap.go:67-69`), and a user the rule refuses is
+(`mod/user/src/op_bootstrap.go:69-71`), and a user the rule refuses is
 answered `claim refused: the claim rule of auth.sign_contract refuses this
 user`.
 
@@ -276,11 +279,11 @@ writes every routed query string to its log (`astrald/core/router.go:83`) and
 replaces the value of `token` and `passphrase` there and of nothing else
 (`astrald/core/query_log.go:12`), so the passphrase travels as the
 `passphrase` argument and the words as one `string16` the op reads off the
-channel (`mod/user/src/op_bootstrap.go:102`). With `generate=true` the node reads
+channel (`mod/user/src/op_bootstrap.go:104`). With `generate=true` the node reads
 no input, generates 24 words from 256 bits of entropy
-(`mod/user/src/op_bootstrap.go:94`), and answers with them in
+(`mod/user/src/op_bootstrap.go:96`), and answers with them in
 `mod.user.bootstrap_result`; words the caller sent never come back
-(`mod/user/src/op_bootstrap.go:83`). The node keeps no copy of generated words,
+(`mod/user/src/op_bootstrap.go:85`). The node keeps no copy of generated words,
 so a reply lost after a generated claim leaves the node owned by a user whose
 words exist nowhere. Verified on an isolated astrald built from `5f17900d`: the
 node logged the routed queries as `user.derive_identity?passphrase=<redacted>`
@@ -296,12 +299,12 @@ admits.** It accepts, then answers a query of any origin other than local with
 `origin not allowed: <origin>`, an already-claimed node with
 `node already claimed`, and a caller that is neither the node identity nor the
 manager `sys.register_manager` appointed with `not permitted`, in that
-order (`mod/user/src/op_bootstrap.go:45-60,194-202`). The apphost gate decides
+order (`mod/user/src/op_bootstrap.go:47-62,196-204`). The apphost gate decides
 first which sessions reach the op at all: on an unclaimed node the default
-state list names `user.bootstrap` (`mod/apphost/src/config.go:86`), a fresh
-node's does not (`mod/apphost/src/config.go:79-82`), and the default tokenless
-list does not name it (`mod/apphost/src/config.go:73-77`), so a token-less
-session is denied the op in every state (`mod/apphost/src/gate.go:57-59`).
+state list names `user.bootstrap` (`mod/apphost/src/config.go:90`), a fresh
+node's does not (`mod/apphost/src/config.go:81-85`), and the default tokenless
+list does not name it (`mod/apphost/src/config.go:74-79`), so a token-less
+session is denied the op in every state (`mod/apphost/src/gate.go:24-26`).
 The manager reaches it with its App token and the node with the node's token. An app that authenticates with its
 own token and is not the manager is its own caller and is answered
 `not permitted`. Verified on an isolated astrald built from `5b4dde12` with
@@ -309,14 +312,13 @@ the default gate: a token-less session was denied `user.derive_identity` on
 the fresh node, the manager's token claimed the unclaimed node with the
 BIP-39 test words and received a token for the user, and after the claim
 `apphost.register_manager` answered `node is not fresh`; that node predates the
-rename to `sys.register_manager`, and `mayClaim` reads the manager from the
-sys module on astrald branch `intern0/dev/mod-sys`, uncommitted
-(`mod/user/src/op_bootstrap.go`). The browser path is
+rename to `sys.register_manager`, and `mayClaim` now reads the manager from the
+sys module (`mod/user/src/op_bootstrap.go:202`). The browser path is
 inferred from the sources above.
 
 Reached as `client.user`, a `functools.cached_property` on `Client` built on
 first use (design section 5.1). Every source citation resolves at astrald
-`5b4dde12` and astral-go `2481dd7a`, the revisions `tests/reference.py` pins;
+`a7c773d6` and astral-go `4a3e111c`, the revisions `tests/reference.py` pins;
 `tests/test_api_user.py` reads every `path:line` back there and fails when it
 stops landing.
 """
@@ -349,6 +351,7 @@ __all__ = [
     "ERR_ALREADY_CLAIMED",
     "ERR_CONTRACT_DECLINED",
     "ERR_EXPELLED",
+    "ERR_INTRODUCE_SELF",
     "ERR_INVITATION_DECLINED",
     "ERR_JOIN_SELF",
     "ERR_NO_ACTIVE_CONTRACT",
@@ -364,9 +367,11 @@ __all__ = [
     "OP_ADOPT",
     "OP_ASSETS",
     "OP_BOOTSTRAP",
+    "OP_CONTRACT",
     "OP_DERIVE_IDENTITY",
     "OP_EXPEL",
     "OP_INFO",
+    "OP_INTRODUCE",
     "OP_JOIN",
     "OP_LIST_EXPELLED",
     "OP_LIST_SIBLINGS",
@@ -405,9 +410,11 @@ OP_ADD_ASSET: Final = "user.add_asset"
 OP_ADOPT: Final = "user.adopt"
 OP_ASSETS: Final = "user.assets"
 OP_BOOTSTRAP: Final = "user.bootstrap"
+OP_CONTRACT: Final = "user.contract"
 OP_DERIVE_IDENTITY: Final = "user.derive_identity"
 OP_EXPEL: Final = "user.expel"
 OP_INFO: Final = "user.info"
+OP_INTRODUCE: Final = "user.introduce"
 OP_JOIN: Final = "user.join"
 OP_LIST_EXPELLED: Final = "user.list_expelled"
 OP_LIST_SIBLINGS: Final = "user.list_siblings"
@@ -442,19 +449,16 @@ STATE_FRESH: Final = "fresh"
 """`Info.state` of a node with no manager and no ownership history.
 
 The one state in which `sys.register_manager` appoints a manager
-(`api/user/info.go:12-14` at astral-go `2481dd7a`). astrald reads fresh when no
+(`api/user/info.go:12-14` at astral-go `4a3e111c`). astrald reads fresh when no
 user contract is active, the node was never owned, and no manager is appointed
-(`mod/apphost/src/gate.go:22-40` at the pin; `NodeState` in
-`mod/sys/src/state.go` on astrald branch `intern0/dev/mod-sys`, uncommitted).
+(`mod/sys/src/state.go:42-60`, `NodeState`).
 """
 
 STATE_UNCLAIMED: Final = "unclaimed"
 """`Info.state` of a node without an active user contract whose appointment is
 closed: a manager is appointed, or a user owned the node before
 (`api/user/info.go:15-17`). An expired or expelled claim leaves the node
-unclaimed, never fresh (`mod/apphost/src/gate.go:19-20,32-34` at the pin;
-`NodeState` in `mod/sys/src/state.go` on astrald branch `intern0/dev/mod-sys`,
-uncommitted).
+unclaimed, never fresh (`mod/sys/src/state.go:39-40,52-54`).
 """
 
 STATE_CLAIMED: Final = "claimed"
@@ -463,7 +467,7 @@ STATE_CLAIMED: Final = "claimed"
 EVENT_ASSETS: Final = "assets"
 """The only `mod.user.notification` event astrald sends.
 
-`AddAsset` and `RemoveAsset` push it (`astrald/mod/user/src/siblings.go:25`),
+`AddAsset` and `RemoveAsset` push it (`astrald/mod/user/src/siblings.go:27`),
 and no other call site exists.
 """
 
@@ -506,6 +510,10 @@ already has an active contract, and claiming a node is a one-time transition."""
 ERR_JOIN_SELF: Final = "cannot join self"
 """`join`: the swarm node named is this node itself."""
 
+ERR_INTRODUCE_SELF: Final = "cannot introduce to self"
+"""`introduce`: the node named is this node or its user
+(`mod/user/src/op_introduce.go:59-61`)."""
+
 # The parameter specs, so every value travels as the bare payload half of its
 # type's text encoding and nothing re-derives one (design section 5.1, rule 2).
 _BOOL: Final[Spec] = Primitive("bool")
@@ -527,7 +535,7 @@ class Info:
     `STATE_UNCLAIMED` or `STATE_CLAIMED`. `manager` is the App identity
     `sys.register_manager` appointed, and `None` while none is. The first
     four fields are empty unless `state` is `STATE_CLAIMED`
-    (`api/user/info.go:22-37` at astral-go `2481dd7a`). `State` and `Manager`
+    (`api/user/info.go:22-37` at astral-go `4a3e111c`). `State` and `Manager`
     follow the four older fields on the wire, so a claimed node's payload is the
     four fields' bytes, then `string8(state)`, then the manager's presence byte
     and identity. Verified on an isolated astrald built from `5b4dde12`:
@@ -539,7 +547,7 @@ class Info:
     moment of the query, so neither is a stable identifier and neither is part
     of the contract. `Dir.DisplayName` is an alias when there is one, else a
     resolver's name, else the identity's fingerprint -- eight hex characters, a
-    colon, eight hex characters (`astrald/mod/dir/src/module.go:107`); the zero
+    colon, eight hex characters (`astrald/mod/dir/src/module.go:105`); the zero
     identity renders as `<anyone>`. Verified live: `furry-bolt` for the node,
     `03a40290:839f941d` for the user, which is a fingerprint and not a name.
 
@@ -598,7 +606,7 @@ class Notification:
 
     Pushed, never answered: `AddAsset` and `RemoveAsset` push one with
     `event == "assets"` to every linked sibling
-    (`astrald/mod/user/src/siblings.go:25`). astrald's own receiver has no case
+    (`astrald/mod/user/src/siblings.go:27`). astrald's own receiver has no case
     for the type, so nothing acts on it there; an app that serves
     `objects.push` receives it and decides for itself.
     """
@@ -702,11 +710,11 @@ class BootstrapResult:
     `identity` is the user, the issuer of the node's new active contract.
     `mnemonic` is the BIP-39 words the node generated, separated by single
     spaces, and is empty when the caller sent the words
-    (`mod/user/src/op_bootstrap.go:83-85`). The node keeps no copy of generated
+    (`mod/user/src/op_bootstrap.go:85-87`). The node keeps no copy of generated
     words, so this object holds the only one. `token` is an access token the
-    node issued for the user (`mod/user/src/op_bootstrap.go:77`): a session
+    node issued for the user (`mod/user/src/op_bootstrap.go:79`): a session
     without a token reaches only the apphost gate's tokenless list
-    (`mod/apphost/src/gate.go:57-59`), so the token is how the claiming app goes
+    (`mod/apphost/src/gate.go:24-26`), so the token is how the claiming app goes
     on as the user.
 
     **The repr shows the word count and never the words or the token.** The
@@ -845,7 +853,7 @@ class AdminSwarmAction(Action):
     `remove_asset` and `sync_with`. `subject` names the node an op adopts,
     expels or syncs with, and `object_id` the asset it adds or removes; an op
     leaves unset the one it does not name, and the node evaluates neither yet
-    (`api/user/admin_swarm_action.go` at astral-go `2481dd7a`).
+    (`api/user/admin_swarm_action.go` at astral-go `4a3e111c`).
 
     Granted with `Delegation: 1` on a management node's contract, so the node
     can contract it out one hop to an app it hosts. The zero payload is eleven
@@ -913,18 +921,18 @@ class AssetSync(NamedTuple):
 
 
 class User(ModuleClient):
-    """The `user` module's twenty-one ops, over one `Client`.
+    """The `user` module's twenty-three ops, over one `Client`.
 
     Reached as `client.user`, a cached property built on first use;
     `User(client)` constructs the same object directly. The scaffolding and the
     `**kw` contract are `ModuleClient`'s.
 
-    Eight of the twenty-one are read-only: `info`, `assets`, `sync_assets`,
-    `list_siblings`, `list_expelled`, `swarm_status`, `new_node_contract` and
-    `derive_identity`. Of the other thirteen, `adopt`, `expel`,
-    `accept_contract`, `accept_membership`, `request_membership`, `bootstrap`
-    and `join` change who a node belongs to, `add_asset`, `remove_asset` and
-    `sync_with` change what it holds, `set_swarm_join_policy`,
+    Nine of the twenty-three are read-only: `info`, `contract`, `assets`,
+    `sync_assets`, `list_siblings`, `list_expelled`, `swarm_status`,
+    `new_node_contract` and `derive_identity`. Of the other fourteen, `adopt`,
+    `expel`, `introduce`, `accept_contract`, `accept_membership`,
+    `request_membership`, `bootstrap` and `join` change who a node belongs to,
+    `add_asset`, `remove_asset` and `sync_with` change what it holds, `set_swarm_join_policy`,
     `set_swarm_invite_policy` and `set_contract_accept_policy` change who
     decides, and `expel` is irreversible.
     """
@@ -947,7 +955,7 @@ class User(ModuleClient):
         authorized implicitly. **`state` is the setup probe**: `no active
         contract` is not an answer this op gives at the pin. `user.info` is on
         the gate's default tokenless list and on every default state list
-        (`mod/apphost/src/config.go:73-90`), so a session without a token
+        (`mod/apphost/src/config.go:74-97`), so a session without a token
         reaches it in every state.
 
         Verified on an isolated astrald built from `5b4dde12`: a token-less
@@ -1031,7 +1039,7 @@ class User(ModuleClient):
 
         `zone` is sent as the op's argument **and** as the routing zone, the
         way `Objects` sends its one scope to both levers. The op's own
-        argument is inert on astrald `5b4dde12` -- the context built from it is
+        argument is inert on astrald `a7c773d6` -- the context built from it is
         never used (`mod/user/src/op_list_siblings.go:27`) -- and the routing
         zone is not.
 
@@ -1262,6 +1270,51 @@ class User(ModuleClient):
             OP_EXPEL,
         )
 
+    async def introduce(self, node: Identity | str, **kw: Any) -> None:
+        """Push this node's active contract to `node`, then sync with it. RR,
+        one `ack`. **Mutates.**
+
+        `node` indexes the contract and so joins the local swarm of this node's
+        user; the sync carries the rest of the swarm
+        (`mod/user/src/op_introduce.go:80-102`). The `ack` arrives once the
+        push succeeded and the sync is scheduled, not when it finished.
+
+        Answers, in this order: `origin not allowed: network` for a network
+        origin, `no active contract`, `unknown identity` when `node` does not
+        resolve, `zero identity`, `ERR_INTRODUCE_SELF` when `node` is this node
+        or its user, and `not permitted` when the caller holds no
+        `mod.user.admin_swarm_action` permit over `node` or is expelled
+        (`mod/user/src/op_introduce.go:42-70`). A failed push is an
+        `error_message` too. Each arrives as `RemoteError`.
+
+        `node` is a directory name or an identity, sent under the wire key
+        `identity` for the node to resolve, as `adopt` sends it; an empty one
+        is refused here. `target` in `**kw` keeps meaning the node this query
+        is routed to.
+        """
+        self._expect(
+            await self._c.call_one(_targeted(OP_INTRODUCE, node), **kw),
+            Ack,
+            OP_INTRODUCE,
+        )
+
+    async def contract(self, **kw: Any) -> SignedContract:
+        """The node's active contract. RR, one object. Read-only.
+
+        The node answers only a caller with a direct link to it; any other
+        caller is answered `not permitted`, and then a node without an active
+        contract `no active contract` (`mod/user/src/op_contract.go:28-37`).
+        No action gates the op: a node of the user reads the contract of a peer
+        it found nearby before it holds a permit for that peer. A local app is
+        not linked, so the op is meant for a node querying another; route it
+        with `target=`.
+        """
+        return self._expect(
+            await self._c.call_one(OP_CONTRACT, **kw),
+            SignedContract,
+            OP_CONTRACT,
+        )
+
     async def request_membership(self, **kw: Any) -> SignedContract:
         """Ask a node's user to admit **this caller**. RR, one object.
         **Mutates.**
@@ -1470,10 +1523,10 @@ class User(ModuleClient):
         query whose origin is not local, and words the node refuses or a node
         without the `bip137sig` module are an `error_message`; each arrives as
         `RemoteError`. `user.derive_identity` is on the gate's default list
-        for an unclaimed node (`mod/apphost/src/config.go:85`) and on neither
+        for an unclaimed node (`mod/apphost/src/config.go:89`) and on neither
         the fresh list nor the tokenless one, so a session with a token reaches
         it while the node is unclaimed and a session without one never does
-        (`mod/apphost/src/gate.go:57-63`). Verified on an isolated astrald built
+        (`mod/apphost/src/gate.go:24-30`). Verified on an isolated astrald built
         from `5b4dde12`: a token-less session was denied the op on a fresh
         node.
         """
@@ -1520,11 +1573,11 @@ class User(ModuleClient):
         has an active contract, `not permitted` when the caller is neither the
         node itself nor the manager, `unknown identity` and `zero identity` for
         an unusable `node`, and `cannot join self` (`ERR_JOIN_SELF`) when
-        `node` is this node (`mod/user/src/op_join.go:29-55`); the swarm node's
+        `node` is this node (`mod/user/src/op_join.go:31-57`); the swarm node's
         refusal, such as `ERR_REQUEST_DECLINED`, arrives as its own text. Each
         is a `RemoteError`. The caller rule is `user.bootstrap`'s `mayClaim`
         (`mod/user/src/op_join.go:26-27`). `user.join` is on the gate's default
-        list for an unclaimed node (`mod/apphost/src/config.go:87`) and not on
+        list for an unclaimed node (`mod/apphost/src/config.go:91`) and not on
         the default tokenless list, so the manager reaches it with its App
         token while the node is unclaimed and a token-less session does not.
 
@@ -1621,7 +1674,7 @@ def new_node_contract_local(
     The same object `user.new_node_contract` answers with, constructed here:
     one `mod.user.swarm_membership_action` permit, plus admin-swarm and
     see-swarm permits with `Delegation: 1` for a management node, in that
-    order (`api/user/contract.go` at astral-go `2481dd7a`, `NewNodeContract`).
+    order (`api/user/contract.go` at astral-go `4a3e111c`, `NewNodeContract`).
 
     The op passes `managementNode=true` unconditionally, so its answer always
     carries three permits; this helper defaults to `False`, which is the shape

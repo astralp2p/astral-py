@@ -4,7 +4,7 @@ Tier 1. Six ops -- five of astrald's six `crypto.*` ops plus `secp256k1.new`,
 which design sections 0.1 and 5.2 fold in here rather than giving it a module
 of its own -- and four pure local helpers that need no node at all.
 
-**`crypto.register_signer` has no client here.** astrald `5b4dde12` serves it:
+**`crypto.register_signer` has no client here.** astrald `a7c773d6` serves it:
 an app holding the op's channel open is the signer of the keys it names, the
 node sends it signing requests on that channel and the app answers each
 (`mod/crypto/src/op_register_signer.go:21-24`). The op, its six
@@ -43,7 +43,7 @@ on the channel body (`mod/crypto/src/op_verify_hash_signature.go`,
 `op_verify_text_signature.go`), so an implementation that never streams one
 gets an accepted query, no answer, EOF -- and, if it reports that as success,
 **silently never verifies**. Every shape below was read out of astrald's
-`mod/crypto/src` at `5b4dde12`, never out of a sibling SDK.
+`mod/crypto/src` at `a7c773d6`, never out of a sibling SDK.
 
 **One rule decides where each value travels**, and it is stated once here so no
 method has to argue it again:
@@ -79,8 +79,8 @@ the second of two independent guards.
 no node secret and asks no authorizer (`mod/crypto/src/op_public_key.go`, the
 comment above `OpPublicKey`). apphost's gate confines a session without a
 token, IPC and WebSocket alike, to `gate.tokenless`
-(`mod/apphost/src/gate.go:57-59`), and no default gate list but the claimed
-node's `*` names any `crypto.*` op (`mod/apphost/src/config.go:72-91`), so such
+(`mod/apphost/src/gate.go:24-26`), and no default gate list but the claimed
+node's `*` names any `crypto.*` op (`mod/apphost/src/config.go:73-98`), so such
 a session is denied before the op runs, and so is a session with a token on a
 node that is not claimed.
 
@@ -92,14 +92,14 @@ form.
 
 **A caller signs as itself, and the node's own identity cannot sign at all.**
 Every signature passes `AuthorizeSigner`
-(`mod/crypto/src/sign_guard.go` at `5b4dde12`): the key must be the caller's
+(`mod/crypto/src/sign_guard.go` at `a7c773d6`): the key must be the caller's
 own identity, or one the caller holds a `mod.auth.sudo_action` for, and the
 node's own key is refused on the self branch. A session holding a token that
 names the node speaks as the node (`mod/apphost/src/guest.go:153-157`), so it
 is refused whatever it asks for: `cannot sign with the node's key` with no
 `key`, and `cannot sign with another identity's key` naming any other key. A
 session without a token never reaches either op, because apphost's gate denies
-it first (`mod/apphost/src/gate.go:57-59`). Both sign ops accept
+it first (`mod/apphost/src/gate.go:24-26`). Both sign ops accept
 the query and answer a network-origin one with `origin not allowed: network`
 (`mod/crypto/src/op_sign_hash.go`, `op_sign_text.go`). An app signs under its
 own token. Verified on astrald `26bb51d5`: with a token from
@@ -142,7 +142,7 @@ Reached as `client.crypto`, the `functools.cached_property` design section 5.1
 asks for, or as `Crypto(client)`, which constructs the same object and is what
 the tests here use.
 
-Source citations are pinned to astrald `5b4dde12` and astral-go `2481dd7a`, the
+Source citations are pinned to astrald `a7c773d6` and astral-go `4a3e111c`, the
 revisions `tests/reference.py` names. The SDK supports the node at those
 revisions and no older one, so every citation here resolves at a pin.
 `tests/test_api_crypto.py` reads those directories rather than trusting this
@@ -394,7 +394,7 @@ def _split_key_text(text: str, type_name: str) -> tuple[str, str]:
     A missing colon is `invalid format` there and a `ParseError` here. **An empty
     prefix is not refused**, because astral-go does not refuse it -- its
     `UnmarshalText` checks the part count and nothing else (`api/crypto/
-    public_key.go` at `2481dd7a`) -- and because the zero value of all three types
+    public_key.go` at `4a3e111c`) -- and because the zero value of all three types
     is exactly the one this used to reject: `PublicKey().text()` is `":"`, so a
     parser that refused it refused its own encoder's output and the text channel
     was the one framing of four that could not carry a zero key.

@@ -106,7 +106,7 @@ Source citations name a single line each, and every one of them is read back by
 `tests/test_api_tree.py`. astrald and astral-go are moving targets, and a
 citation that has drifted by two lines costs a reader more than an absent one:
 it makes them distrust the exact ones. Line numbers are pinned to astral-go
-`2481dd7a` and astrald `5b4dde12`, the revisions `tests/reference.py` pins, and
+`4a3e111c` and astrald `a7c773d6`, the revisions `tests/reference.py` pins, and
 no citation names another revision.
 """
 

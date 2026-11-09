@@ -16,8 +16,8 @@ All four generate or derive and store nothing, on the node's side and on this
 one. No action gates any of the four (the comment above each `Op` method in
 `astrald/mod/bip137sig/src/op_*.go`). The apphost gate decides who reaches
 them: none is on the default tokenless list, the fresh list or the unclaimed
-list, and the claimed list is `*` (`astrald/mod/apphost/src/config.go:72-91`
-at `5b4dde12`), so under the defaults a session with a token reaches them on a
+list, and the claimed list is `*` (`astrald/mod/apphost/src/config.go:73-98`
+at `a7c773d6`), so under the defaults a session with a token reaches them on a
 claimed node, and a session without one, or any session on a node that is not
 claimed, is denied.
 
@@ -206,7 +206,7 @@ class _Bytes8Alias(AliasRecord):
 
         **The length rule holds here too, and in astral-go it does not.** Go
         checks it in `WriteTo`/`ReadFrom` and not in `MarshalText`/`UnmarshalText`
-        (`api/bip137sig/entropy.go` at `2481dd7a`), so over there a JSON or text
+        (`api/bip137sig/entropy.go` at `4a3e111c`), so over there a JSON or text
         channel carries an entropy the binary channel refuses -- and once such a
         value exists nothing can re-emit it, because the only encoding it came
         through is the one that let it in. The rule belongs to the type rather

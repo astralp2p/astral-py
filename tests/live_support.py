@@ -58,13 +58,13 @@ def token() -> str | None:
     """The token every live client presents, or `None` for a token-less one.
 
     astrald's apphost gate confines a session without a token to the ops
-    `gate.tokenless` lists (`mod/apphost/src/gate.go:57-59` at `5b4dde12`), and
+    `gate.tokenless` lists (`mod/apphost/src/gate.go:24-26` at `a7c773d6`), and
     the read-only ops this tier runs are not on the default list, so a run
     against a node at the pin sets `ASTRAL_TEST_NODE_TOKEN` to a token the node
     maps to its own identity, which is the caller the tier's assertions call
     the node. With a token, the gate's state lists still apply: under the
     defaults a fresh or unclaimed node denies every read the tier runs but
-    `user.info` (`mod/apphost/src/config.go:72-91`), so the node under test is
+    `user.info` (`mod/apphost/src/config.go:73-98`), so the node under test is
     a claimed one or one whose `gate.states` admit the reads. Against any other
     node the reads outside `test_api_user` fail with `Denied`.
     `ASTRAL_TEST_TOKEN` is the serving and signing tests' app identity, a

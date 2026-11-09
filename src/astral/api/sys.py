@@ -9,15 +9,10 @@ client below.
 
 ## Where the citations point
 
-**No citation in this module is at a pin.** astrald's `mod/sys` is the
-uncommitted working tree of astrald branch `intern0/dev/mod-sys`, and
-astral-go's `api/sys` is the head of astral-go branch `intern0/dev/sys-api`,
-which is not pushed. So every citation of either names a path, with no line and
-no revision, and `tests/reference.py`, which reads a pinned commit with
-`git show`, reads none of them. The protocol text is astral-docs
-`protocols/sys/` on astral-docs branch `intern0/dev/sys-protocol`. When the pins
-move onto the merged revisions, these citations become `path:line` and the
-tests read them (`tests/test_api_sys.py`).
+**Every `path:line` in this module is read at the revisions `tests/reference.py`
+pins, astrald `a7c773d6` and astral-go `4a3e111c`**, the merges that brought
+`mod/sys` and `api/sys` (`tests/test_api_sys.py`, `CitationTest`). The protocol
+text is astral-docs `protocols/sys/`.
 
 ## The appointment
 
@@ -25,47 +20,49 @@ tests read them (`tests/test_api_sys.py`).
 `apphost.register_manager` with the same arguments, input, answer and errors;
 its types replace `mod.apphost.register_manager_request` and
 `mod.apphost.policy_binding` with the same fields
-(`api/sys/register_manager_request.go`, `api/sys/module.go`). It provisions a
-new App identity as `apphost.register` does, holding the permits the request
-asks for, without asking the app register policy; it stores a delegate whose
-identity is the new manager for each policy the request binds, clears the
-stored delegate of every policy the request does not bind, writes the manager
-record last and answers the access token (`mod/sys/src/op_register_manager.go`,
-`OpRegisterManager`, `appointManager`, `bindManagerPolicies`). The policies a
+(`api/sys/register_manager_request.go:36-41,64-68`, `api/sys/module.go:10`).
+It provisions a new App identity as `apphost.register` does, holding the
+permits the request asks for, without asking the app register policy; it
+stores a delegate whose identity is the new manager for each policy the
+request binds, clears the stored delegate of every policy the request does not
+bind, writes the manager record last and answers the access token
+(`mod/sys/src/op_register_manager.go:38-63`, `OpRegisterManager`;
+`appointManager`, `:67-88`; `bindManagerPolicies`, `:123-136`). The policies a
 binding names are `app_register`, `grant_request`, `swarm_join`,
-`swarm_invite` and `contract_accept` (`api/sys/register_manager_request.go`,
-`PolicyNames`). The op refuses a network origin, then answers an invalid
-permit, an unknown or repeated policy name, a binding with no operation, a
-timeout outside zero to ten minutes and a `user` policy on a node without the
-`user` module with an `error_message` (`validateManagerRequest`), and a node
-that is not fresh with `node is not fresh` (`api/sys/errors.go`,
-`ErrNotFresh`).
+`swarm_invite` and `contract_accept`
+(`api/sys/register_manager_request.go:23-29`, `PolicyNames`). The op refuses a
+network origin (`mod/sys/src/op_register_manager.go:43-45`), then answers an
+invalid permit, an unknown or repeated policy name, a binding with no
+operation, a timeout outside zero to ten minutes and a `user` policy on a node
+without the `user` module with an `error_message` (`validateManagerRequest`,
+`mod/sys/src/op_register_manager.go:93-118`), and a node that is not fresh
+with `node is not fresh` (`api/sys/errors.go:7`, `ErrNotFresh`).
 
 The node stores the manager at `/mod/sys/manager`, and a node with no record
 there reads the one at `/mod/apphost/manager`, where an apphost-appointed
-manager was stored (`mod/sys/src/state.go`, `Manager`). The node state moved
-with it: claimed while a user contract is active; else unclaimed when a
+manager was stored (`mod/sys/src/state.go:27-32`, `Manager`). The node state
+moved with it: claimed while a user contract is active; else unclaimed when a
 manager is appointed or a user owned the node before; else fresh
-(`mod/sys/src/state.go`, `NodeState`).
+(`mod/sys/src/state.go:42-60`, `NodeState`).
 
-**The gate.** The default gate lists `sys.register_manager` where it listed
-`apphost.register_manager`: on `gate.tokenless` and on `gate.states.fresh`
-(`mod/apphost/src/config.go`, `defaultConfig`, in the astrald branch). So a
-fresh node admits the op to a session with a token or without, an unclaimed
-node's list does not name it and denies it, and a claimed node's `*` admits it
-and the op answers `node is not fresh`.
+**The gate.** The default gate lists `sys.register_manager` on
+`gate.tokenless` and on `gate.states.fresh`
+(`mod/apphost/src/config.go:77,83`). So a fresh node admits the op to a
+session with a token or without, an unclaimed node's list does not name it and
+denies it, and a claimed node's `*` admits it and the op answers
+`node is not fresh`.
 
 **The manager holds `mod.auth.configure_node_state_action` in every node state,
-claimed included** (`mod/sys/src/authorizers.go`,
-`AuthorizeConfigureNodeState`). That action is what every policy setter now
+claimed included** (`mod/sys/src/authorizers.go:15-18`,
+`AuthorizeConfigureNodeState`). That action is what every policy setter
 requires -- `apphost.set_app_register_policy`,
 `apphost.set_grant_request_policy`, `user.set_swarm_join_policy`,
 `user.set_swarm_invite_policy` and `user.set_contract_accept_policy`
-(`mod/apphost/src/op_set_app_register_policy.go` and
-`mod/user/src/op_set_swarm_policy.go`, `maySetPolicies`, in the astrald
-branch) -- so the manager sets every policy's delegate through it. The manager
-may claim the node with `user.bootstrap` or `user.join`
-(`mod/user/src/op_bootstrap.go`, `mayClaim`, in the astrald branch).
+(`maySetPolicies`, `mod/apphost/src/op_set_app_register_policy.go:153-155`
+and `mod/user/src/op_set_swarm_policy.go:106-108`) -- so the manager sets
+every policy's delegate through it. The manager may claim the node with
+`user.bootstrap` or `user.join` (`mayClaim`,
+`mod/user/src/op_bootstrap.go:198-204`).
 
 **What was verified, and against which node.** The answers
 `tests/test_api_sys.py` pins were captured from `apphost.register_manager` on
@@ -75,7 +72,8 @@ answered `node is not fresh`. Neither frame names the op, and the handler
 moved to `mod/sys` with its answers unchanged, so the captures stand for
 `sys.register_manager` by inference from the astrald diff; no node running the
 sys module was queried. The `mod.sys.*` vectors were produced by a Go program
-linked against the head of astral-go branch `intern0/dev/sys-api`.
+linked against astral-go branch `intern0/dev/sys-api`, which merged as
+`4a3e111c`; the test reads the two types' names and fields at that pin.
 """
 
 from __future__ import annotations
@@ -106,22 +104,22 @@ __all__ = [
 ]
 
 OP_REGISTER_MANAGER: Final = "sys.register_manager"
-"""astral-go's `MethodRegisterManager` (`api/sys/module.go`)."""
+"""astral-go's `MethodRegisterManager` (`api/sys/module.go:10`)."""
 
 ERR_NOT_FRESH: Final = "node is not fresh"
 """`register_manager`: a manager is appointed, or a user owns or owned the node.
 
 Sent as an `error_message` after the op accepts, which surfaces as
-`RemoteError` with this `message` (`api/sys/errors.go`, `ErrNotFresh`, sent by
-`appointManager` in `mod/sys/src/op_register_manager.go`). An unclaimed node
+`RemoteError` with this `message` (`api/sys/errors.go:7`, `ErrNotFresh`, sent by
+`appointManager`, `mod/sys/src/op_register_manager.go:72`). An unclaimed node
 under the default gate denies the query instead, which surfaces as `Denied`.
 """
 
 # --- the policy names a binding takes --------------------------------------
 #
-# `api/sys/register_manager_request.go`, the constants and `PolicyNames`. Each
-# names the admission policy of one op; the node refuses any other name
-# (`validateManagerRequest`, `mod/sys/src/op_register_manager.go`).
+# `api/sys/register_manager_request.go:14-29`, the constants and `PolicyNames`.
+# Each names the admission policy of one op; the node refuses any other name
+# (`validateManagerRequest`, `mod/sys/src/op_register_manager.go:93-118`).
 
 POLICY_APP_REGISTER: Final = "app_register"
 """Decides `apphost.register`."""
@@ -151,15 +149,15 @@ POLICY_NAMES: Final = (
 @record("mod.sys.policy_binding")
 class PolicyBinding:
     """The manager's op that answers one policy
-    (`api/sys/register_manager_request.go`, `PolicyBinding`).
+    (`api/sys/register_manager_request.go:64-68`, `PolicyBinding`).
 
     `policy` is one of `POLICY_NAMES`. `operation` is the op of the manager the
     node asks. `timeout` bounds one question as `policy.delegate`'s does: zero
     waits ten minutes (`api/policy/delegate.go:18-20` at astral-go
-    `2481dd7a`), and the node refuses a negative one or one above ten minutes
+    `4a3e111c`), and the node refuses a negative one or one above ten minutes
     (`validateManagerRequest`). The node stores the binding as a
     `policy.delegate` whose identity is the new manager
-    (`bindManagerPolicies`, `mod/sys/src/op_register_manager.go`).
+    (`bindManagerPolicies`, `mod/sys/src/op_register_manager.go:123-136`).
     """
 
     policy: str = wire("Policy", Primitive("string8"))
@@ -170,7 +168,7 @@ class PolicyBinding:
 @record("mod.sys.register_manager_request")
 class RegisterManagerRequest:
     """What an app sends `sys.register_manager` to become the node's manager
-    (`api/sys/register_manager_request.go`, `RegisterManagerRequest`).
+    (`api/sys/register_manager_request.go:36-41`, `RegisterManagerRequest`).
 
     `name`, `grant_permits` and `contract_permits` mean what they mean in
     `astral.api.apphost.RegisterRequest`. `policies` names the policies the
@@ -254,8 +252,8 @@ class Sys(ModuleClient):
         stores a delegate whose identity is the new manager; every policy the
         request does not bind loses its stored delegate. It records the
         appointment last and answers the manager's token
-        (`api/sys/client/register_manager.go`,
-        `mod/sys/src/op_register_manager.go`). The node is then unclaimed,
+        (`api/sys/client/register_manager.go:26-42`,
+        `mod/sys/src/op_register_manager.go:67-88`). The node is then unclaimed,
         `user.info` names the manager, and the manager may claim the node with
         `user.bootstrap` or `user.join` and, holding
         `mod.auth.configure_node_state_action`, set every policy setter's
@@ -272,13 +270,13 @@ class Sys(ModuleClient):
 
         The default gate admits the op on a fresh node, to a session with a
         token or without, and denies it on an unclaimed node, which surfaces
-        as `Denied` (`mod/apphost/src/config.go`, in the astrald branch). Past
+        as `Denied` (`mod/apphost/src/config.go:81-96`). Past
         the gate the node accepts, then answers a network origin, an invalid
         permit, an unknown or repeated policy name, a binding with no
         operation, a timeout outside zero to ten minutes, a `user` policy on a
         node without the `user` module, and a node that is not fresh
         (`ERR_NOT_FRESH`) with an `error_message`, each a `RemoteError`
-        (`mod/sys/src/op_register_manager.go`).
+        (`mod/sys/src/op_register_manager.go:43-58`).
         """
         req = RegisterManagerRequest(
             name=_app_name(name, OP_REGISTER_MANAGER) or "",

@@ -15,8 +15,8 @@ document states the resolution, and the resolution is binding.
 | Rank | Authority | Location |
 |---|---|---|
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
-| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `2481dd7a` (the merge of astral-go pull request #171, which adds `mod.user.info`'s `State` and `Manager` and `apphost.register_manager`) |
-| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `5b4dde12` (the head of branch `intern0/dev/node-manager-bootstrap`, not merged to master at the bump: the apphost gate, node states and manager appointment; it requires astral-go `2481dd7a`) — authoritative for session semantics the client never exercises |
+| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `4a3e111c` (the merge of astral-go pull request #175, which adds `api/sys` and removes `apphost.register_manager`) |
+| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `a7c773d6` (the merge of astrald pull request #383, which adds `mod/sys`; it requires astral-go `4a3e111c`, `go.mod:7`) — authoritative for session semantics the client never exercises |
 | 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `645f3c0`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
@@ -1839,3 +1839,27 @@ astral-go branch `intern0/dev/sys-api`. The live answers pinned there were captu
 `apphost.register_manager` on astrald `5b4dde12`; neither frame names the op, so they stand for
 `sys.register_manager` by inference from the astrald diff, and no node running the sys module was
 queried.
+
+## 11.11 Sections 11.8, 11.9 and 11.10 — the pins reach `mod/sys` (AMENDED, implemented)
+
+The pins move to astrald `a7c773d6` and astral-go `4a3e111c`, the merges of astrald pull request
+#383 and astral-go pull request #175. 11.10's sources are at the pins: its citations in
+`astral.api.sys` are `path:line`, and `tests/test_api_sys.py` reads every one of them and the two
+`mod.sys.*` types' names and fields. The node state is `NodeState` in `mod/sys/src/state.go:42-60`,
+no longer in `mod/apphost/src/gate.go`.
+
+The range changes three facts 11.8 states. The default gate lists `.spec` on every list; the
+unclaimed list adds `apphost.bind`, `apphost.register_handler` and `apphost.cancel`
+(`mod/apphost/src/config.go:73-98`). `allow_anonymous` and `anonymous_allowlist` no longer stop
+the node: astrald dropped the named errors, so a file that sets either key loads and the key has
+no effect (astrald `e617db54`). The apphost census is seventeen `op_*.go` files, and
+`apphost.set_app_register_policy` asks `mod.auth.configure_node_state_action`, not
+`mod.auth.admin_manage_apps_action` (`mod/apphost/src/op_set_app_register_policy.go:153-155`).
+
+**Amendment: `astral.api.user` declares `user.introduce` and `user.contract`.** astrald serves
+both at the pin (`mod/user/src/op_introduce.go:38-77`, `mod/user/src/op_contract.go:24-38`) and
+astral-go declares them with `ErrIntroduceSelf` (`api/user/module.go:20-21`,
+`api/user/errors.go:12`). `User.introduce` and `User.contract` are their clients, and
+`ERR_INTRODUCE_SELF` is the new error text. Neither op was run against a node; their tests run
+against `MockApphost` only. 11.8's and 11.9's live verifications stand as records of
+astrald `5b4dde12`.

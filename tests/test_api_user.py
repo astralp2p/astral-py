@@ -1,4 +1,4 @@
-"""The `user` module client: twenty-one ops, seventeen types, one non-`eos` stream.
+"""The `user` module client: twenty-three ops, seventeen types, one non-`eos` stream.
 
 Three tiers in one file, because the same claim is made at each and the three
 must agree:
@@ -17,7 +17,7 @@ must agree:
   with the default gate: `user.info` in each of the three node states, and
   `user.bootstrap` called by the manager. `mod.user.info` is also pinned
   against astral-go `2481dd7a`'s own output in `INFO_GO_VECTORS`.
-- **Tier B** pins the twenty-one ops against `MockApphost`: the query string each
+- **Tier B** pins the twenty-three ops against `MockApphost`: the query string each
   one builds, the answer each one accepts, the three body-input ops' frame order
   and their absent terminator, and the guards that keep an empty target from
   reaching a node that would read it as `anyone`.
@@ -55,6 +55,7 @@ from astral.api.user import (
     DeriveIdentityResult,
     ERR_ALREADY_CLAIMED,
     ERR_CONTRACT_DECLINED,
+    ERR_INTRODUCE_SELF,
     ERR_JOIN_SELF,
     ERR_NO_ACTIVE_CONTRACT,
     ERR_REQUEST_DECLINED,
@@ -69,9 +70,11 @@ from astral.api.user import (
     OP_ADOPT,
     OP_ASSETS,
     OP_BOOTSTRAP,
+    OP_CONTRACT,
     OP_DERIVE_IDENTITY,
     OP_EXPEL,
     OP_INFO,
+    OP_INTRODUCE,
     OP_JOIN,
     OP_LIST_EXPELLED,
     OP_LIST_SIBLINGS,
@@ -923,11 +926,14 @@ class TypeRegistrationTest(unittest.TestCase):
 
     def test_the_op_names_are_the_twenty_one_the_registry_reports(self):
         """The `shell.spec` registry of an isolated astrald built from
-        `5f17900d` answered exactly these twenty-one `user.*` names."""
+        `5f17900d` answered exactly these twenty-one `user.*` names.
+        `user.introduce` and `user.contract` arrived after that node; the
+        census in `CitationTest` reads them at the pin."""
         names = sorted(
             value
             for name, value in vars(user_module).items()
             if name.startswith("OP_") and isinstance(value, str)
+            and value not in ("user.introduce", "user.contract")
         )
         self.assertEqual(len(names), 21)
         self.assertEqual(
@@ -1097,6 +1103,7 @@ class ErrorTextTest(unittest.TestCase):
             user_module.ERR_EXPELLED,
             user_module.ERR_ALREADY_CLAIMED,
             user_module.ERR_JOIN_SELF,
+            user_module.ERR_INTRODUCE_SELF,
         ):
             with self.subTest(text=text):
                 self.assertIn(f'astral.NewError("{text}")', source)
@@ -1438,7 +1445,7 @@ class ListSiblingsOpTest(UserCase):
     @bounded()
     async def test_a_zone_goes_to_the_op_argument_and_to_the_routing_zone(self):
         """One scope, two levers, as `Objects` does it. The op's own argument is
-        inert on astrald `5b4dde12` -- the context it builds is never used --
+        inert on astrald `a7c773d6` -- the context it builds is never used --
         and the routing zone is not, so sending only one of them is wrong
         whichever one it is."""
         api = await self.serving(
@@ -1622,7 +1629,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_sends_the_identity_alone(self):
-        """`start` is undeclared on astrald `5b4dde12`, and the node reads the
+        """`start` is undeclared on astrald `a7c773d6`, and the node reads the
         height out of its own tree."""
         query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
@@ -1632,7 +1639,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_accepts_no_start_keyword(self):
-        """`start` is undeclared on astrald `5b4dde12`, so naming one is a
+        """`start` is undeclared on astrald `a7c773d6`, so naming one is a
         `TypeError` and nothing reaches the node."""
         api = await self.serving({OP_SYNC_WITH: Accept(objects=[ACK_FRAME])})
         with self.assertRaises(TypeError):
@@ -1749,6 +1756,73 @@ class AdoptAndExpelOpTest(UserCase):
         with self.assertRaises(ProtocolError) as caught:
             await api.adopt("somebody")
         self.assertIn(SignedContract.ASTRAL_TYPE, str(caught.exception))
+
+
+class IntroduceAndContractOpTest(UserCase):
+    """`user.introduce`, RR with an `identity=` argument and an `ack`, and
+    `user.contract`, RR with no argument and the signed contract."""
+
+    @bounded()
+    async def test_introduce_sends_the_identity_and_returns_on_the_ack(self):
+        api = await self.serving(
+            {f"{OP_INTRODUCE}?identity=somebody": Accept(objects=[ACK_FRAME])}
+        )
+        self.assertIsNone(await api.introduce("somebody"))
+        self.assertEqual(self.sent(), f"{OP_INTRODUCE}?identity=somebody")
+
+    @bounded()
+    async def test_introduce_sends_an_identity_as_sixty_six_hex_characters(self):
+        api = await self.serving(
+            {f"{OP_INTRODUCE}?identity={OTHER.text()}": Accept(objects=[ACK_FRAME])}
+        )
+        await api.introduce(OTHER)
+        self.assertEqual(self.params()[1], {"identity": OTHER.text()})
+
+    @bounded()
+    async def test_introduce_refuses_an_empty_name_before_a_query_leaves(self):
+        api = await self.serving({OP_INTRODUCE: Accept()})
+        with self.assertRaises(BadArgument):
+            await api.introduce("")
+        self.assertEqual(self.mock.queries, [])
+
+    @bounded()
+    async def test_introduce_to_self_surfaces_as_a_remote_error(self):
+        api = await self.serving(
+            {
+                f"{OP_INTRODUCE}?identity=somebody": Accept(
+                    objects=[frame_error(ERR_INTRODUCE_SELF)]
+                )
+            }
+        )
+        with self.assertRaises(RemoteError) as caught:
+            await api.introduce("somebody")
+        self.assertEqual(caught.exception.message, "cannot introduce to self")
+
+    @bounded()
+    async def test_contract_sends_no_parameters_and_returns_the_signed_contract(self):
+        api = await self.serving(
+            {
+                OP_CONTRACT: Accept(
+                    objects=[(SignedContract.ASTRAL_TYPE, payload_bytes(a_signed_contract()))]
+                )
+            }
+        )
+        self.assertIsInstance(await api.contract(target=OTHER), SignedContract)
+        self.assertEqual(self.sent(), OP_CONTRACT)
+        self.assertEqual(self.mock.queries[0].target, OTHER)
+
+    @bounded()
+    async def test_contract_without_a_link_is_answered_not_permitted(self):
+        api = await self.serving({OP_CONTRACT: Accept(objects=[frame_error("not permitted")])})
+        with self.assertRaises(RemoteError) as caught:
+            await api.contract()
+        self.assertEqual(caught.exception.message, "not permitted")
+
+    @bounded()
+    async def test_a_wrong_answer_type_is_a_protocol_error(self):
+        api = await self.serving({OP_CONTRACT: Accept(objects=[ACK_FRAME])})
+        with self.assertRaises(ProtocolError):
+            await api.contract()
 
 
 class RequestMembershipOpTest(UserCase):
@@ -2347,7 +2421,7 @@ class LiveUserTest(live_support.LiveCase):
     the probe. On a node that is not claimed every swarm read is refused, and
     the assertions there are the refusals rather than the answers: the
     apphost gate denies a query to the node that the state's list does not
-    name (`mod/apphost/src/gate.go:63` at astrald `5b4dde12`), which arrives as
+    name (`mod/apphost/src/gate.go:30` at astrald `a7c773d6`), which arrives as
     `Denied`, and a gate configured to admit the read leaves the refusal to
     astrald's swarm authorizers, which refuse without an active contract.
     """
@@ -2380,7 +2454,7 @@ class LiveUserTest(live_support.LiveCase):
     async def require_claimed(self, client: astral.Client) -> None:
         """Skip unless the node is claimed: the default gate names none of the
         reads below for a fresh or unclaimed node
-        (`mod/apphost/src/config.go:79-89` at astrald `5b4dde12`)."""
+        (`mod/apphost/src/config.go:81-96` at astrald `a7c773d6`)."""
         if await self.unclaimed(client):
             self.skipTest("the node is not claimed, and the default gate denies this op")
 
@@ -2571,7 +2645,7 @@ class CitationTest(unittest.TestCase):
         ("mod/user/module.go", 27): "DefaultContractValidity = 365 * 24 * time.Hour",
         ("mod/user/module.go", 16): "why the Coldcard path",
         ("mod/user/module.go", 18): 'UserKeyPath = "m/1791\'/0\'/0\'/0/0"',
-        ("mod/user/src/siblings.go", 25): "user.Notification{Event",
+        ("mod/user/src/siblings.go", 27): "user.Notification{Event",
         ("mod/user/src/op_adopt.go", 34): "mod.Dir.ResolveIdentity(args.Identity)",
         ("mod/user/src/op_adopt.go", 40): "}",
         ("mod/user/src/op_adopt.go", 46): "return ch.Send(auth.ErrNotPermitted)",
@@ -2618,46 +2692,59 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/op_derive_identity.go", 51): "}",
         ("mod/user/src/op_join.go", 20): "OpJoin makes this unclaimed node request membership",
         ("mod/user/src/op_join.go", 23): "The reply is the signed contract.",
-        ("mod/user/src/op_join.go", 29): "q.Accept(",
-        ("mod/user/src/op_join.go", 55): "}",
+        ("mod/user/src/op_join.go", 31): "q.Accept(",
+        ("mod/user/src/op_join.go", 57): "}",
         ("mod/user/src/op_sync_with.go", 43): "mod.syncAssets(ctx.IncludeZone",
         ("mod/user/src/sync.go", 31): "tree.Get[*astral.Uint64](ctx, heightNode)",
-        ("mod/dir/src/module.go", 58): 'if s == "" || s == "anyone"',
-        ("mod/dir/src/module.go", 107): "return identity.Fingerprint()",
+        ("mod/dir/src/module.go", 56): 'if s == "" || s == "anyone"',
+        ("mod/dir/src/module.go", 105): "return identity.Fingerprint()",
         ("mod/user/src/contracts.go", 206): "usermod.DefaultContractValidity",
-        ("mod/user/src/op_bootstrap.go", 45): "q.Accept(",
-        ("mod/user/src/op_bootstrap.go", 58): "if !mod.mayClaim(q.Caller())",
-        ("mod/user/src/op_bootstrap.go", 60): "}",
-        ("mod/user/src/op_bootstrap.go", 67): "why the node as claim caller",
-        ("mod/user/src/op_bootstrap.go", 69): "mod.bootstrap(ctx, mod.node.Identity(), words",
-        ("mod/user/src/op_bootstrap.go", 77): "mod.Apphost.CreateAccessToken(userID",
-        ("mod/user/src/op_bootstrap.go", 83): "if args.Generate {",
-        ("mod/user/src/op_bootstrap.go", 85): "}",
-        ("mod/user/src/op_bootstrap.go", 94): "bip137sig.MaxEntropyBits",
-        ("mod/user/src/op_bootstrap.go", 102): "channel.Expect(&phrase), channel.FailOnEOF()",
-        ("mod/user/src/op_bootstrap.go", 122): "mod.signClaim(ctx, caller, &key)",
-        ("mod/user/src/op_bootstrap.go", 137): "mod.claim(ctx, signed)",
-        ("mod/user/src/op_bootstrap.go", 170): "NewNodeContract(userID, mod.node.Identity(), true",
-        ("mod/user/src/op_bootstrap.go", 175): "mod.Auth.IsNodeClaim(ctx, caller, contract)",
-        ("mod/user/src/op_bootstrap.go", 194): "mayClaim reports whether caller may claim",
-        ("mod/user/src/op_bootstrap.go", 202): "}",
-        ("mod/apphost/src/config.go", 73): "Tokenless: []string{",
-        ("mod/apphost/src/config.go", 77): "},",
-        ("mod/apphost/src/config.go", 79): "Fresh: []string{",
-        ("mod/apphost/src/config.go", 82): "},",
-        ("mod/apphost/src/config.go", 85): '"user.derive_identity"',
-        ("mod/apphost/src/config.go", 86): '"user.bootstrap"',
-        ("mod/apphost/src/config.go", 87): '"user.join"',
-        ("mod/apphost/src/config.go", 90): "Claimed: []string{gateAny}",
-        ("mod/apphost/src/gate.go", 19): "why ownership history closes fresh",
-        ("mod/apphost/src/gate.go", 20): "reopen the appointment of a manager",
-        ("mod/apphost/src/gate.go", 22): "func (mod *Module) NodeState(",
-        ("mod/apphost/src/gate.go", 32): "if mod.User.WasOwned() {",
-        ("mod/apphost/src/gate.go", 34): "}",
-        ("mod/apphost/src/gate.go", 40): "}",
-        ("mod/apphost/src/gate.go", 57): "if tokenless && (!toNode || !gateLists(mod.config.Gate.Tokenless, op))",
-        ("mod/apphost/src/gate.go", 59): "}",
-        ("mod/apphost/src/gate.go", 63): "gateLists(mod.config.Gate.States.forState(mod.NodeState(ctx)), op)",
+        ("mod/user/src/op_bootstrap.go", 47): "q.Accept(",
+        ("mod/user/src/op_bootstrap.go", 60): "if !mod.mayClaim(q.Caller())",
+        ("mod/user/src/op_bootstrap.go", 62): "}",
+        ("mod/user/src/op_bootstrap.go", 69): "why the node as claim caller",
+        ("mod/user/src/op_bootstrap.go", 71): "mod.bootstrap(ctx, mod.node.Identity(), words",
+        ("mod/user/src/op_bootstrap.go", 79): "mod.Apphost.CreateAccessToken(userID",
+        ("mod/user/src/op_bootstrap.go", 85): "if args.Generate {",
+        ("mod/user/src/op_bootstrap.go", 87): "}",
+        ("mod/user/src/op_bootstrap.go", 96): "bip137sig.MaxEntropyBits",
+        ("mod/user/src/op_bootstrap.go", 104): "channel.Expect(&phrase), channel.FailOnEOF()",
+        ("mod/user/src/op_bootstrap.go", 124): "mod.signClaim(ctx, caller, &key)",
+        ("mod/user/src/op_bootstrap.go", 139): "mod.claim(ctx, signed)",
+        ("mod/user/src/op_bootstrap.go", 172): "NewNodeContract(userID, mod.node.Identity(), true",
+        ("mod/user/src/op_bootstrap.go", 177): "mod.Auth.IsNodeClaim(ctx, caller, contract)",
+        ("mod/user/src/op_bootstrap.go", 196): "mayClaim reports whether caller may claim",
+        ("mod/user/src/op_bootstrap.go", 204): "}",
+        ("mod/apphost/src/config.go", 74): "Tokenless: []string{",
+        ("mod/apphost/src/config.go", 79): "},",
+        ("mod/apphost/src/config.go", 81): "Fresh: []string{",
+        ("mod/apphost/src/config.go", 85): "},",
+        ("mod/apphost/src/config.go", 89): '"user.derive_identity"',
+        ("mod/apphost/src/config.go", 90): '"user.bootstrap"',
+        ("mod/apphost/src/config.go", 91): '"user.join"',
+        ("mod/apphost/src/config.go", 97): "Claimed: []string{gateAny}",
+        ("mod/user/src/op_introduce.go", 38): "func (mod *Module) OpIntroduce(",
+        ("mod/user/src/op_introduce.go", 42): "q.Origin() == astral.OriginNetwork",
+        ("mod/user/src/op_introduce.go", 59): "nodeID.IsEqual(mod.node.Identity()) || nodeID.IsEqual(ac.Issuer)",
+        ("mod/user/src/op_introduce.go", 61): "}",
+        ("mod/user/src/op_introduce.go", 70): "}",
+        ("mod/user/src/op_introduce.go", 80): "func (mod *Module) introduce(",
+        ("mod/user/src/op_introduce.go", 102): "}",
+        ("mod/user/src/op_contract.go", 24): "func (mod *Module) OpContract(",
+        ("mod/user/src/op_contract.go", 28): "if !mod.Nodes.IsLinked(q.Caller()) {",
+        ("mod/user/src/op_contract.go", 37): "return ch.Send(ac)",
+        ("mod/sys/src/state.go", 39): "why ownership history closes fresh",
+        ("mod/sys/src/state.go", 40): "reopen the appointment of a manager",
+        ("mod/sys/src/state.go", 42): "func (mod *Module) NodeState(",
+        ("mod/sys/src/state.go", 52): "if mod.User.WasOwned() {",
+        ("mod/sys/src/state.go", 54): "}",
+        ("mod/sys/src/state.go", 60): "}",
+        ("mod/user/src/op_bootstrap.go", 202): "manager := mod.Sys.Manager()",
+        ("mod/user/src/op_set_swarm_policy.go", 106): "func (mod *Module) maySetPolicies(",
+        ("mod/user/src/op_set_swarm_policy.go", 108): "}",
+        ("mod/apphost/src/gate.go", 24): "if tokenless && (!toNode || !gateLists(mod.config.Gate.Tokenless, op))",
+        ("mod/apphost/src/gate.go", 26): "}",
+        ("mod/apphost/src/gate.go", 30): "gateLists(mod.config.Gate.States.forState(mod.Sys.NodeState(ctx)), op)",
         ("core/router.go", 45): "if q.Caller == nil {",
         ("core/router.go", 83): '"%v routed in %v", logged',
         ("core/query_log.go", 12): '"passphrase": true',
@@ -2785,14 +2872,14 @@ class ShapeDeclarationTest(unittest.TestCase):
 
     def test_the_module_declares_a_shape_for_every_op_in_its_table(self):
         """The docstring table is the module's declaration of op shape, which
-        design section 4.7 makes a per-op contract. Twenty-one rows,
-        twenty-one ops."""
+        design section 4.7 makes a per-op contract. Twenty-three rows,
+        twenty-three ops."""
         table = [
             line
             for line in (user_module.__doc__ or "").splitlines()
             if line.startswith("| `user.")
         ]
-        self.assertEqual(len(table), 21)
+        self.assertEqual(len(table), 23)
         named = {line.split("`")[1] for line in table}
         declared = {
             value

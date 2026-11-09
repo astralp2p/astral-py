@@ -5,8 +5,8 @@
   `MANAGER_GO_VECTORS` was produced by a Go program linked against the head of
   astral-go branch `intern0/dev/sys-api`, printing `hex.EncodeToString` of what
   `WriteTo` wrote, `json.Marshal` of the value, the line `channel.TextSender`
-  wrote, and `astral.ResolveObjectID`. That branch is not pushed, so no pin in
-  `tests/reference.py` reaches it. The node's answers are captures from
+  wrote, and `astral.ResolveObjectID`. That branch merged as astral-go
+  `4a3e111c`, the pin, and `CitationTest` reads the two types there. The node's answers are captures from
   `apphost.register_manager` on an isolated astrald built from `5b4dde12`, the
   op `sys.register_manager` replaces; neither frame names the op.
 - **Tier B** pins the query and the request object against `MockApphost`.
@@ -17,6 +17,7 @@ No live test: the op mutates the node once and for all (design section 7.3).
 from __future__ import annotations
 
 import json
+import pathlib
 import re
 import unittest
 
@@ -292,8 +293,7 @@ class ManagerTypesTest(unittest.TestCase):
     def test_the_policy_names_are_the_five_the_protocol_names(self):
         """`api/sys/register_manager_request.go`'s `PolicyNames`, in its order.
 
-        Read off that file on astral-go branch `intern0/dev/sys-api` when this
-        was written, and not re-read here: no pin reaches it.
+        Read at the pin by `CitationTest.test_the_types_are_the_pinned_ones`.
         """
         self.assertEqual(
             POLICY_NAMES,
@@ -433,12 +433,67 @@ class SurfaceTest(unittest.TestCase):
 
 
 class CitationTest(unittest.TestCase):
-    """What the module's citations claim about themselves."""
+    """Every `path:line` the module cites, read at the pins.
 
-    def test_no_sys_source_is_cited_by_line(self):
-        """`api/sys/*` and `mod/sys/*` sit on branches no pin reaches, so a
-        `path:line` to either is a claim `tests/reference.py` cannot read."""
-        text = " ".join(
+    The anchors are listed here by first and last line, each with the text the
+    line must carry. `test_every_citation_is_checked` reads the citations out
+    of the module's own prose, so a citation added without an anchor here
+    names itself.
+    """
+
+    GO, D = reference.ASTRAL_GO, reference.ASTRALD
+    REQ = "api/sys/register_manager_request.go"
+    OP = "mod/sys/src/op_register_manager.go"
+    ANCHORS = {
+        (GO, REQ, 14): "const (",
+        (GO, REQ, 23): "var PolicyNames = []string{",
+        (GO, REQ, 29): "}",
+        (GO, REQ, 36): "type RegisterManagerRequest struct {",
+        (GO, REQ, 41): "}",
+        (GO, REQ, 64): "type PolicyBinding struct {",
+        (GO, REQ, 68): "}",
+        (GO, "api/sys/module.go", 10): 'MethodRegisterManager = "sys.register_manager"',
+        (GO, "api/sys/errors.go", 7): 'ErrNotFresh = astral.NewError("node is not fresh")',
+        (GO, "api/sys/client/register_manager.go", 26): "func (client *Client) RegisterManager(",
+        (GO, "api/sys/client/register_manager.go", 42): "}",
+        (GO, "api/policy/delegate.go", 18): "Delegate names the op",
+        (GO, "api/policy/delegate.go", 20): "MaxTimeout; a Timeout above it fails",
+        (D, OP, 38): "func (mod *Module) OpRegisterManager(",
+        (D, OP, 43): "query.Origin() == astral.OriginNetwork",
+        (D, OP, 45): "}",
+        (D, OP, 58): "return ch.Send(astral.Err(err))",
+        (D, OP, 63): "}",
+        (D, OP, 67): "func (mod *Module) appointManager(",
+        (D, OP, 72): "return nil, sysapi.ErrNotFresh",
+        (D, OP, 88): "}",
+        (D, OP, 93): "func (mod *Module) validateManagerRequest(",
+        (D, OP, 118): "}",
+        (D, OP, 123): "func (mod *Module) bindManagerPolicies(",
+        (D, OP, 136): "}",
+        (D, "mod/sys/src/state.go", 27): "func (mod *Module) Manager()",
+        (D, "mod/sys/src/state.go", 32): "}",
+        (D, "mod/sys/src/state.go", 42): "func (mod *Module) NodeState(",
+        (D, "mod/sys/src/state.go", 60): "}",
+        (D, "mod/sys/src/authorizers.go", 15): "func (mod *Module) AuthorizeConfigureNodeState(",
+        (D, "mod/sys/src/authorizers.go", 18): "}",
+        (D, "mod/apphost/src/config.go", 77): '"sys.register_manager",',
+        (D, "mod/apphost/src/config.go", 83): '"sys.register_manager",',
+        (D, "mod/apphost/src/config.go", 81): "Fresh: []string{",
+        (D, "mod/apphost/src/config.go", 96): "},",
+        (D, "mod/apphost/src/op_set_app_register_policy.go", 153):
+            "func (mod *Module) maySetPolicies(",
+        (D, "mod/apphost/src/op_set_app_register_policy.go", 154): "ConfigureNodeStateAction",
+        (D, "mod/apphost/src/op_set_app_register_policy.go", 155): "}",
+        (D, "mod/user/src/op_set_swarm_policy.go", 106): "func (mod *Module) maySetPolicies(",
+        (D, "mod/user/src/op_set_swarm_policy.go", 107): "ConfigureNodeStateAction",
+        (D, "mod/user/src/op_set_swarm_policy.go", 108): "}",
+        (D, "mod/user/src/op_bootstrap.go", 198): "func (mod *Module) mayClaim(",
+        (D, "mod/user/src/op_bootstrap.go", 202): "manager := mod.Sys.Manager()",
+        (D, "mod/user/src/op_bootstrap.go", 204): "}",
+    }
+
+    def text(self) -> str:
+        return " ".join(
             filter(
                 None,
                 [sys_module.__doc__]
@@ -448,21 +503,57 @@ class CitationTest(unittest.TestCase):
                     if getattr(obj, "__module__", None) == sys_module.__name__
                 ],
             )
-        )
-        self.assertIsNone(re.search(r"(api|mod)/sys/[\w/.]+:\d", text))
+        ) + pathlib.Path(sys_module.__file__).read_text()
 
     def test_every_pinned_anchor_lands_on_its_claim(self):
-        cites = (
-            (reference.ASTRAL_GO, "api/policy/delegate.go", 18, "Delegate names the op"),
-            (reference.ASTRAL_GO, "api/policy/delegate.go", 20, "MaxTimeout; a Timeout above it fails"),
-        )
-        for repo, path, number, fragment in cites:
+        for (repo, path, number), fragment in sorted(self.ANCHORS.items()):
             with self.subTest(citation=f"{path}:{number}"):
                 try:
                     line = reference.cited_line(repo, path, number)
                 except reference.Unavailable as exc:  # pragma: no cover
                     self.skipTest(str(exc))
                 self.assertIn(fragment, line)
+
+    def test_every_citation_is_checked(self):
+        """Each number of each `path:a-b,c` the module writes, and each bare
+        `:a-b` that continues the path before it, is an anchor above."""
+        anchored = {(path, number) for _, path, number in self.ANCHORS}
+        cited = set()
+        path = None
+        for match in re.finditer(
+            r"`(?:((?:api|mod)/[\w/.]+\.go))?:([\d,-]+)`", self.text()
+        ):
+            path = match.group(1) or path
+            for part in match.group(2).split(","):
+                for number in part.split("-"):
+                    cited.add((path, int(number)))
+        self.assertTrue(cited)
+        self.assertEqual(cited - anchored, set())
+
+    def test_the_types_are_the_pinned_ones(self):
+        """The two type names and their fields, in order, as `api/sys` declares
+        them at the pin; the vectors above were produced before it merged."""
+        try:
+            source = reference.read(reference.ASTRAL_GO, self.REQ)
+        except reference.Unavailable as exc:  # pragma: no cover
+            self.skipTest(str(exc))
+        for cls, go in (
+            (RegisterManagerRequest, "RegisterManagerRequest"),
+            (PolicyBinding, "PolicyBinding"),
+        ):
+            with self.subTest(type=go):
+                self.assertIn(
+                    f'func ({go}) ObjectType() string {{ return "{cls.ASTRAL_TYPE}" }}',
+                    source,
+                )
+                body = source.split(f"type {go} struct {{")[1].split("}")[0]
+                fields = [line.split()[0] for line in body.strip().splitlines()]
+                self.assertEqual(fields, [f.wire_name for f in cls.FIELDS])
+        names = source.split("var PolicyNames = []string{")[1].split("}")[0]
+        consts = dict(re.findall(r'(Policy\w+)\s+= "(\w+)"', source))
+        self.assertEqual(
+            tuple(consts[n.strip()] for n in names.split(",") if n.strip()), POLICY_NAMES
+        )
 
 
 if __name__ == "__main__":
