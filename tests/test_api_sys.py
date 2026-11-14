@@ -6,7 +6,8 @@
   astral-go branch `intern0/dev/sys-api`, printing `hex.EncodeToString` of what
   `WriteTo` wrote, `json.Marshal` of the value, the line `channel.TextSender`
   wrote, and `astral.ResolveObjectID`. That branch merged as astral-go
-  `4a3e111c`, the pin, and `CitationTest` reads the two types there. The node's answers are captures from
+  `4a3e111c`, which the pin `1ec701ca` carries, and `CitationTest` reads the
+  two types at the pin. The node's answers are captures from
   `apphost.register_manager` on an isolated astrald built from `5b4dde12`, the
   op `sys.register_manager` replaces; neither frame names the op.
 - **Tier B** pins the query and the request object against `MockApphost`.
@@ -476,10 +477,10 @@ class CitationTest(unittest.TestCase):
         (D, "mod/sys/src/state.go", 60): "}",
         (D, "mod/sys/src/authorizers.go", 15): "func (mod *Module) AuthorizeConfigureNodeState(",
         (D, "mod/sys/src/authorizers.go", 18): "}",
-        (D, "mod/apphost/src/config.go", 77): '"sys.register_manager",',
-        (D, "mod/apphost/src/config.go", 83): '"sys.register_manager",',
-        (D, "mod/apphost/src/config.go", 81): "Fresh: []string{",
-        (D, "mod/apphost/src/config.go", 96): "},",
+        (D, "mod/apphost/src/config.go", 84): '"sys.register_manager",',
+        (D, "mod/apphost/src/config.go", 90): '"sys.register_manager",',
+        (D, "mod/apphost/src/config.go", 88): "Fresh: []string{",
+        (D, "mod/apphost/src/config.go", 103): "},",
         (D, "mod/apphost/src/op_set_app_register_policy.go", 153):
             "func (mod *Module) maySetPolicies(",
         (D, "mod/apphost/src/op_set_app_register_policy.go", 154): "ConfigureNodeStateAction",

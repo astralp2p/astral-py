@@ -2,13 +2,13 @@
 
 astral-go's `api/policy` package holds what a node and the app it delegates an
 admission decision to share (`api/policy/delegate.go` at astral-go
-`4a3e111c`). Two node modules store a delegate:
+`1ec701ca`). Two node modules store a delegate:
 `apphost` for `apphost.register` and `apphost.request_grant`, and `user` for
 `user.request_membership`, `user.accept_membership` and `user.accept_contract`,
 each persisted as a `policy.delegate` in the node's tree under
 `/mod/apphost/policy` and `/mod/user/policy`
-(`mod/apphost/src/register_policy.go:13,29-30` and
-`mod/user/src/swarm_policy.go:15,21-23` at astrald `a7c773d6`). The question and
+(`mod/apphost/src/register_policy.go:13,28-29` and
+`mod/user/src/swarm_policy.go:15,21-23` at astrald `e6d691c6`). The question and
 the answer are the owning module's types -- `mod.apphost.app_register_request`
 and `mod.apphost.app_register_decision` in `astral.api.apphost`, the four
 `mod.user.swarm_*` types and the two `mod.user.contract_accept_*` types in
@@ -21,7 +21,7 @@ this SDK.
 back** (`api/policy/ask.go`). An app serving as a delegate therefore answers
 one query carrying one request object, from the node's identity, with one
 decision object. An answer of another type, or no answer, declines
-(`mod/apphost/src/register_policy.go:71-79`).
+(`mod/apphost/src/register_policy.go:70-78`).
 
 The type name has **no `mod.` prefix**: `Delegate.ObjectType()` returns
 `policy.delegate` (`api/policy/delegate.go:27`), and design section 5.1 rule 6
@@ -38,7 +38,7 @@ that reason: a module client is a bound set of ops and this module has none.
 op declares `Identity string`, `Operation string` and `Timeout
 astral.Duration`, and reads both names empty as a clear of the stored delegate
 (`mod/apphost/src/op_set_app_register_policy.go:15-25` and
-`mod/user/src/op_set_swarm_policy.go:14-25` at astrald `a7c773d6`).
+`mod/user/src/op_set_swarm_policy.go:14-25` at astrald `e6d691c6`).
 `apphost.set_grant_request_policy` also takes a `mode`, `accept_all` or
 `reject_all`, which `setter_query` does not send
 (`mod/apphost/src/op_set_app_register_policy.go:27-38`). Every setter admits
@@ -57,11 +57,11 @@ swarm join and invite policies `policies.swarm_join` and
 `policies.swarm_invite` of `user.yaml`; each value is `accept_all`,
 `reject_all` or a delegate mapping (`mod/apphost/src/register_policy.go:15-16`,
 `mod/user/src/swarm_policy.go:17-19`, `lib/policyconf/setting.go:20-25`), and
-each defaults to `reject_all` (`mod/apphost/src/config.go:100-102`,
+each defaults to `reject_all` (`mod/apphost/src/config.go:107-109`,
 `mod/user/src/config.go:32-37`). The
 contract accept policy accepts every valid contract. The grant request policy
-accepts all when its mode is unset or `accept_all`, and refuses all otherwise
-(`mod/apphost/src/register_policy.go:16-19`).
+accepts all when its mode is `accept_all`, and refuses all otherwise, an unset
+mode included (`mod/apphost/src/register_policy.go:16-19`).
 """
 
 from __future__ import annotations

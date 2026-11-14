@@ -61,7 +61,7 @@ a property of astrald rather than an omission here:
 ## Authorization
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `a7c773d6` and astral-go `4a3e111c`.** An identity argument travels
+pins, astrald `e6d691c6` and astral-go `1ec701ca`.** An identity argument travels
 under the key `identity` and `apphost.cancel`'s nonce under `query_id`.
 
 **Every op accepts the query before it refuses one.** A refused caller reads an
@@ -81,13 +81,13 @@ state. A query with a token to another identity passes the gate
 (`mod/apphost/src/gate.go:20-31`). The gate runs before routing, IPC and
 WebSocket alike, and a refusal is `error_msg{denied}`, which surfaces as
 `Denied` (`mod/apphost/src/guest.go:148-151`); the HTTP handler applies the
-state lists and answers 403 (`mod/apphost/src/http_query_handler.go:78-85`).
+state lists and answers 403 (`mod/apphost/src/http_query_handler.go:80-87`).
 The defaults are `.spec`, `apphost.register`, `sys.register_manager` and
 `user.info` without a token; `.spec`, `sys.register_manager` and `user.info`
 on a fresh node; `.spec`, `user.info`, `user.derive_identity`,
 `user.bootstrap`, `user.join`, `apphost.register`, `apphost.bind`,
 `apphost.register_handler` and `apphost.cancel` on an unclaimed node; and `*`
-on a claimed node (`mod/apphost/src/config.go:73-98`). `user.StateFresh`,
+on a claimed node (`mod/apphost/src/config.go:80-105`). `user.StateFresh`,
 `StateUnclaimed` and `StateClaimed` are the states
 (`astral.api.user.STATE_FRESH`). The gate keys replaced `allow_anonymous` and
 `anonymous_allowlist`; the node no longer names those keys, so an
@@ -122,12 +122,15 @@ it asks the authority (`authorize_admin_manage_apps.go:20-22`) and takes the
 session's authenticated identity rather than `q.Caller()`. The token and grant
 ops do not use it.
 
-**The census, re-derived at `a7c773d6`.** Seventeen `op_*.go` files. Fifteen
+**The census, re-derived at `e6d691c6`.** Eighteen `op_*.go` files. Sixteen
 refuse a network origin; the two that do not are `whoami` and
 `set_app_register_policy`, whose file also serves
-`apphost.set_grant_request_policy`. Six ask
+`apphost.set_grant_request_policy`. Seven ask
 `mod.auth.admin_manage_apps_action` -- `create_token`, `delete_token`,
-`list_tokens`, `grant`, `list_grants` and `revoke`. `set_app_register_policy`
+`list_tokens`, `grant`, `list_grants`, `revoke` and `withdraw_relay`.
+`withdraw_relay` takes back the `mod.nodes.relay_for_action` contract of an app
+or a mailbox on this node and has no client here
+(`op_withdraw_relay.go:17-25,32-38`). `set_app_register_policy`
 asks `mod.auth.configure_node_state_action` through `maySetPolicies`, which the
 manager holds through mod/sys (`op_set_app_register_policy.go:153-155`).
 `sys.register_manager` is served by mod/sys, not apphost.
@@ -145,10 +148,10 @@ through `mayManageApps`. The other four -- `list_held_objects`, `register`,
 **The app register policy decides every `apphost.register`.** A stored
 delegate decides first; without one the node applies the `policies.app_register`
 value of `apphost.yaml`, which is `accept_all`, `reject_all` or a delegate, and
-whose code default is `reject_all` (`register_policy.go:42-61`,
-`mod/apphost/src/config.go:43-47,100-102`). `accept_all` admits every
+whose code default is `reject_all` (`register_policy.go:41-60`,
+`mod/apphost/src/config.go:43-47,107-109`). `accept_all` admits every
 registration with the permits it asked for; `reject_all` refuses every one
-(`mod/apphost/register_policy.go:26-40`). **So a node on the defaults answers
+(`mod/apphost/register_policy.go:27-41`). **So a node on the defaults answers
 every `apphost.register` with `registration declined`** until a delegate or the
 config admits it. `apphost.set_app_register_policy` stores a delegate, an op of
 another identity, or with no delegate named clears it, which restores the
@@ -173,7 +176,7 @@ declares them all and cites its sources.
 **`apphost.register`, `apphost.grant` and `apphost.request_grant` each read
 one object off the channel after they accept.** The query carries no argument,
 and the object carries everything the op needs:
-`mod.apphost.register_request` (`api/apphost/register_request.go:10-22`),
+`mod.apphost.register_request` (`api/apphost/register_request.go:10-30`),
 `mod.apphost.grant_request` (`api/apphost/grant_request.go:10-19`) and
 `mod.apphost.request_grant_request`
 (`api/apphost/request_grant_request.go:10-19`), each permit a whole
@@ -187,10 +190,10 @@ validator refuses are refused with `invalid permit: <action>: <detail>` before
 anything is written (`api/auth/errors.go:16-19`).
 
 **The node reads the object and refuses the removed query arguments.**
-Each of the three reads its object and fails on EOF (`op_register.go:226-229`,
+Each of the three reads its object and fails on EOF (`op_register.go:255-258`,
 `op_grant.go:45-48`, `op_request_grant.go:86-89`). Each refuses a query that
 still names an argument the object replaced -- `name`, `grant_permits` and
-`contract_permits` on register (`op_register.go:222`), `identity`, `action`,
+`contract_permits` on register (`op_register.go:251`), `identity`, `action`,
 `duration` and `constrained` on grant (`op_grant.go:41`), `permits` on
 request_grant (`op_request_grant.go:82`) -- with an `error_message`, so a
 caller sending the old form is answered rather than left waiting for an object
@@ -202,13 +205,14 @@ duration with `negative duration` (`op_grant.go:50-57`,
 unexpired grant, then `eos` (`op_list_grants.go:15-17,50-56`). `revoke` reads
 a zero `id` as absent, because grant IDs start at 1 (`op_revoke.go:49-57`).
 The grant request policy asks a stored delegate; else it accepts all when the
-mode is unset or `accept_all`; else it refuses all (`register_policy.go:85-106`);
+mode is `accept_all`; else it refuses all, also when no mode is stored
+(`register_policy.go:84-102`);
 `apphost.set_grant_request_policy` sets it and has no client here. The register
 grant request opens with `mod.auth.serve_apps_action` and
 `mod.auth.use_blueprints_action` (`register_grant_request.go:17-20`), the op
 answers a network origin with `origin not allowed: network`
-(`op_register.go:52-55`), and `accept_all` answers with both lists as asked
-(`mod/apphost/register_policy.go:28-34`).
+(`op_register.go:56-59`), and `accept_all` answers with both lists as asked
+(`mod/apphost/register_policy.go:29-35`).
 
 **A session holding a token that names the node passes every action check.**
 `mod/user/src/authorize_user_or_node.go:17-22` allows the user identity and the
@@ -335,8 +339,8 @@ ERR_REGISTRATION_DECLINED: Final = "registration declined"
 
 The node accepts the query before its policy decides and then sends this as
 an `error_message`, which surfaces as `RemoteError` with this `message`
-(`api/apphost/errors.go:5-7` at astral-go `4a3e111c`, sent at
-`mod/apphost/src/op_register.go:68-79`). The code default of the policy refuses
+(`api/apphost/errors.go:5-7` at astral-go `1ec701ca`, sent at
+`mod/apphost/src/op_register.go:72-83`). The code default of the policy refuses
 every registration, so a node on the defaults answers this to every
 `register`.
 """
@@ -346,7 +350,7 @@ ERR_GRANT_DECLINED: Final = "grant declined"
 
 The node accepts the query before its policy decides and then sends this as
 an `error_message`, which surfaces as `RemoteError` with this `message`
-(`api/apphost/errors.go:9-11` at astral-go `4a3e111c`, sent at
+(`api/apphost/errors.go:9-11` at astral-go `1ec701ca`, sent at
 `mod/apphost/src/op_request_grant.go:59-66`).
 """
 
@@ -461,7 +465,7 @@ class AppRegisterRequest:
     contract. astral-go's comment says the origin's trusted-source entitlement
     is joined into `contract_permits` (`api/apphost/app_register_policy.go:12-26`);
     astrald joins nothing and sends the asked list
-    (`mod/apphost/src/op_register.go:241`). The grant request always opens with
+    (`mod/apphost/src/op_register.go:276`). The grant request always opens with
     `mod.auth.serve_apps_action` and `mod.auth.use_blueprints_action`
     (`mod/apphost/src/register_grant_request.go:17-20`).
     """
@@ -482,8 +486,10 @@ class AppRegisterDecision:
     (`api/apphost/app_register_policy.go:46-58`). An assignment that is nil,
     invalid, or names an `actor` fails astral-go's
     `AppRegisterDecision.Validate`, and the node refuses the registration on it
-    (`mod/apphost/src/op_register.go:76-79`): the delegate names the authorizer
-    and the node names the actor.
+    (`mod/apphost/src/op_register.go:80-83`): the delegate names the authorizer
+    and the node names the actor. A decision whose `contract_permits` name
+    `mod.auth.sudo_action` is refused the same way, because the node signs every
+    contract permit as issuer (`mod/apphost/src/op_register.go:96-116`).
     """
 
     allow: bool = wire("Allow", Primitive("bool"))
@@ -498,10 +504,10 @@ class AppRegisterDecision:
 #
 # One grant as `apphost.list_grants` reports it, and the three objects
 # `apphost.register`, `apphost.grant` and `apphost.request_grant` read off the
-# channel. Each is astral-go's `api/apphost` type at `4a3e111c`, whose field
+# channel. Each is astral-go's `api/apphost` type at `1ec701ca`, whose field
 # order is the wire order, and each field list is `astral.BlueprintOf`'s answer
 # there, which is what the node's `objects.get_blueprint` sends
-# (`mod/objects/src/module.go:237-255` at astrald `a7c773d6`).
+# (`mod/objects/src/module.go:238-256` at astrald `e6d691c6`).
 
 
 @record("mod.apphost.grant")
@@ -522,18 +528,27 @@ class Grant:
 @record("mod.apphost.register_request")
 class RegisterRequest:
     """What an app sends `apphost.register`
-    (`api/apphost/register_request.go:10-22`).
+    (`api/apphost/register_request.go:10-30`).
 
     The node hands it to the app register policy as an `AppRegisterRequest`,
     which adds the caller's web origin. `name` is the app's own claim and the
     node does not verify it. `grant_permits` are the permits the app asks to
     hold as node-local grants and `contract_permits` the permits it asks to hold
     in a signed node-to-app contract, each with its constraints.
+
+    `vfs` asks the node to create a VFS for the app, and `evaluator` asks it to
+    name the app the evaluator of that VFS. Each is a `Ptr(bool)`: `None` is
+    nil, `0x00` on the wire, and the node reads nil as true; a set value is
+    `0x01` then the `bool` byte. `evaluator` has no effect when `vfs` is false
+    (`api/apphost/register_request.go:19-23,28-29,32-40`). The policy's
+    `AppRegisterRequest` carries neither (`mod/apphost/src/op_register.go:271-278`).
     """
 
     name: str = wire("Name", Primitive("string8"))
     grant_permits: list[Permit | None] = wire("GrantPermits", Slice("mod.auth.permit"))
     contract_permits: list[Permit | None] = wire("ContractPermits", Slice("mod.auth.permit"))
+    vfs: bool | None = wire("Vfs", Ptr("bool"))
+    evaluator: bool | None = wire("Evaluator", Ptr("bool"))
 
 
 @record("mod.apphost.grant_request")
@@ -653,6 +668,15 @@ def _app_name(value: str | None, op: str = OP_REGISTER) -> str | None:
     return value
 
 
+def _switch(value: bool | None, key: str, op: str = OP_REGISTER) -> bool | None:
+    """`RegisterRequest.vfs` and `.evaluator`: a `Ptr(bool)`, so `None` is
+    nil and anything but a `bool` is refused here with the op named. An `int`
+    is refused too, so `0` cannot pass for false."""
+    if value is None or isinstance(value, bool):
+        return value
+    raise BadArgumentType(f"{op}: {key} expects a bool or None, got {type(value).__name__}")
+
+
 # One implementation, on `ModuleClient`. These names stay because the call sites
 # and the tests spell them, but the bodies are the base class's: four spellings
 # of one encoder across six modules is how thirteen dialects start.
@@ -691,7 +715,7 @@ class Apphost(ModuleClient):
         caller after the session's token (`mod/apphost/src/guest.go:153-157`).
         A session without a token is denied this op, and under the default
         gate so is every session on a node that is not claimed: no default
-        list but the claimed one names it (`mod/apphost/src/config.go:73-98`).
+        list but the claimed one names it (`mod/apphost/src/config.go:80-105`).
         """
         return self._expect(await self._c.call_one(OP_WHOAMI, **kw), Identity, OP_WHOAMI)
 
@@ -963,6 +987,8 @@ class Apphost(ModuleClient):
         name: str | None = None,
         grant_permits: Iterable[Permit | str] | None = None,
         contract_permits: Iterable[Permit | str] | None = None,
+        vfs: bool | None = None,
+        evaluator: bool | None = None,
         **kw: Any,
     ) -> AccessToken:
         """Provision a fresh guest identity and a token for it. WA: one
@@ -973,10 +999,10 @@ class Apphost(ModuleClient):
         with the token, so this is the bootstrap an app with no credentials
         starts from (`api/apphost/client/register.go:22-26`). The token and
         every permit written expire after ten years
-        (`op_register.go:18,172,111`). The default gate admits it on an
+        (`op_register.go:20,202,141`). The default gate admits it on an
         unclaimed or claimed node, to a session with a token or without, and
         denies it on a fresh one, where `sys.register_manager` is the first
-        app (`mod/apphost/src/config.go:73-98`).
+        app (`mod/apphost/src/config.go:80-105`).
 
         `grant_permits` are the permits to hold as node-local grants and
         `contract_permits` those to hold in a signed node-to-app contract; each
@@ -984,16 +1010,27 @@ class Apphost(ModuleClient):
         shown to a delegated policy and the node does not verify it. Asking is
         not receiving: the node's register policy decides what is written, on
         which rail, and the answer carries the token alone
-        (`register.go:28-32`). Grants add up. All three are keyword-only, and
-        the request travels as one object even when every field is empty
-        (`register.go:49-50`). An action name that is empty or over 255 UTF-8
-        bytes, or a `name` over 255 bytes, raises `BadArgument` before a query
-        leaves.
+        (`register.go:28-32`). Grants add up.
+
+        `vfs` asks the node to create a VFS for the new identity, and
+        `evaluator` asks it to name the app the evaluator of that VFS at
+        `astral://<app identity>:vfs.authorize`. `None` sends the field nil,
+        which the node reads as true, so a request that names neither gets a
+        VFS the app evaluates; `evaluator` has no effect when `vfs` is false
+        (`api/apphost/register_request.go:19-23,32-40`). The register policy
+        does not see either switch, and the node acts on them only after the
+        policy admits the registration (`op_register.go:37-39,90-92,280-304`).
+
+        All five are keyword-only, and the request travels as one object even
+        when every field is empty (`register.go:49-50`). An action name that is
+        empty or over 255 UTF-8 bytes, or a `name` over 255 bytes, raises
+        `BadArgument` before a query leaves; a `vfs` or `evaluator` that is
+        neither a `bool` nor `None` raises `BadArgumentType`.
 
         The node accepts the query before its register policy decides, so a
         refusal is an `error_message` reading `ERR_REGISTRATION_DECLINED` and
         arrives as `RemoteError` (`register.go:37-39`). The policy's code
-        default refuses every registration (`register_policy.go:42-61`), so on
+        default refuses every registration (`register_policy.go:41-60`), so on
         a node with no delegate and no `policies.app_register` value this is
         the answer.
         """
@@ -1003,6 +1040,8 @@ class Apphost(ModuleClient):
             contract_permits=_permit_list(
                 contract_permits, "contract_permits", OP_REGISTER
             ),
+            vfs=_switch(vfs, "vfs"),
+            evaluator=_switch(evaluator, "evaluator"),
         )
         answers = await self._c.call_with(OP_REGISTER, req, expect=1, **kw)
         if not answers:
@@ -1039,7 +1078,7 @@ class Apphost(ModuleClient):
         ten minutes is an `error_message` too; every one arrives as
         `RemoteError` (`op_set_app_register_policy.go:58-64,131-146`).
 
-        astral-go `4a3e111c` has no client for this op.
+        astral-go `1ec701ca` has no client for this op.
         """
         qs = setter_query(OP_SET_APP_REGISTER_POLICY, identity, operation, timeout)
         self._expect(

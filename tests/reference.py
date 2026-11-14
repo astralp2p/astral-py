@@ -43,16 +43,27 @@ ASTRALD: Final = "astrald"
 ASTRAL_GO: Final = "astral-go"
 
 PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
-    # The revisions the modules were read against: astrald `a7c773d6`, the
-    # merge of astrald pull request #383 (mod/sys: the node state, the manager
-    # appointment and `sys.register_manager`), and astral-go `4a3e111c`, the
-    # merge of astral-go pull request #175 (`api/sys`), which astrald
-    # `a7c773d6` requires. Every `path:line` citation in `astral/api/*.py`
+    # The revisions the modules were read against: astrald `e6d691c6`, master
+    # at the bump (the merge of astrald pull request #466), and astral-go
+    # `1ec701ca`, the merge of astral-go pull request #180 (`Vfs` and
+    # `Evaluator` on `mod.apphost.register_request`), which astrald
+    # `e6d691c6` requires. Every `path:line` citation in `astral/api/*.py`
     # resolves at one of these two and none names another revision. Bumping
     # one means re-reading the citations that name it. The record of each
     # earlier bump is this comment's history in `git log -p tests/reference.py`.
     #
-    # Bumped from astrald `5b4dde12` / astral-go `2481dd7a`. Every cited line
+    # Bumped from astrald `a7c773d6` / astral-go `4a3e111c`. Every cited line
+    # whose text did not change was moved to its new number; `defaultConfig`
+    # became a function, so every gate line moved by seven. Claims rewritten:
+    # `mod.apphost.register_request` declares `Vfs` and `Evaluator`; the grant
+    # request policy refuses all when no mode is stored; the apphost census
+    # counts eighteen files with `withdraw_relay`; an active contract requires
+    # `withdrawn_at IS NULL`; a register decision naming `mod.auth.sudo_action`
+    # in its contract permits is refused. Not re-read: the services citations
+    # (`astral.api.services`, and `astral.api.tree`'s discovery note), whose
+    # source the provider visibility change rewrote (design 11.12).
+    #
+    # Earlier: bumped from astrald `5b4dde12` / astral-go `2481dd7a`. Every cited line
     # whose text did not change was moved to its new number; every other cited
     # line, and every cited file whose code changed, was re-read. Claims
     # rewritten: the node state and the manager are mod/sys's
@@ -68,8 +79,8 @@ PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
     # the pins, are `path:line` and `test_api_sys.CitationTest` reads them.
     # Surface added: `user.introduce`, `user.contract` and
     # `ERR_INTRODUCE_SELF`, with `User.introduce` and `User.contract`.
-    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "a7c773d6"),
-    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "4a3e111c"),
+    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "e6d691c6"),
+    ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "1ec701ca"),
 }
 
 

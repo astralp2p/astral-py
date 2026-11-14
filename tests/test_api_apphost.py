@@ -13,6 +13,9 @@ same sixteen ops:
   `astral.ResolveObjectID`. The four grant types are pinned the same way in
   `GRANT_GO_VECTORS`, from a program linked against astral-go `dbc27574`, the
   head of astral-go #167, whose tree its merge `08ead7ce` carries unchanged,
+  except `mod.apphost.register_request`: its five vectors and its blueprint
+  are the output of the same program linked against astral-go `1ec701ca`,
+  the merge of astral-go #180, which adds `Vfs` and `Evaluator`.
   The manager types left with the manager appointment:
   `tests/test_api_sys.py` pins `mod.sys.*` and `sys.register_manager`.
 - **Tier B** pins the query strings and the shapes against `MockApphost`. A
@@ -257,7 +260,10 @@ DISCOVERY_PERMIT = Permit(
 )
 
 # Name -> (value, payload hex, JSON, text line, ObjectID), each string astral-go
-# `08ead7ce`'s output for the Go struct literal the value mirrors.
+# `08ead7ce`'s output for the Go struct literal the value mirrors; the
+# `register_request_*` strings are astral-go `1ec701ca`'s. Each `Vfs` and
+# `Evaluator` pair is nil, both set, both false or one of each, so the nil
+# flag `00` and the set form `01 <bool>` are pinned on both fields.
 GRANT_GO_VECTORS: dict[str, tuple[object, str, str, str, str]] = {
     "grant_full": (
         Grant(id=7, permit=DISCOVERY_PERMIT, expires_at=EXPIRES),
@@ -301,24 +307,49 @@ GRANT_GO_VECTORS: dict[str, tuple[object, str, str, str, str]] = {
         "73636f766572795f616374696f6e0100000001000000351c6d6f642e7365727669636573"
         "2e646973636f766572795f73636f70650000000101000000010109696e666572656e6365"
         "000000000000000001011b6d6f642e617574682e7365655f6f626a656374735f61637469"
-        "6f6e0001",
-        '{"ContractPermits":[{"Action":"mod.auth.see_objects_action","Constraints":nu'
-        'll,"Delegation":1}],"GrantPermits":[{"Action":"mod.services.service_discover'
-        'y_action","Constraints":[{"Type":"mod.services.discovery_scope","Object":{"R'
-        'ules":[{"Nodes":[],"Services":["inference"]}]}}],"Delegation":0}],"Name":"sm'
-        'ithd"}',
-        "#[mod.apphost.register_request]:BnNtaXRoZAAAAAEBJW1vZC5zZXJ2aWNlcy5zZXJ2aWNl"
-        "X2Rpc2NvdmVyeV9hY3Rpb24BAAAAAQAAADUcbW9kLnNlcnZpY2VzLmRpc2NvdmVyeV9zY29wZQAA"
-        "AAEBAAAAAQEJaW5mZXJlbmNlAAAAAAAAAAABARttb2QuYXV0aC5zZWVfb2JqZWN0c19hY3Rpb24A"
-        "AQ==",
-        "data1mmcbbp8f9c6exhdcpxahbaanmhxi69fxgicuz5jen4f4w7hj3yt1h",
+        "6f6e00010000",
+        '{"ContractPermits":[{"Action":"mod.auth.see_objects_action","Constraints":nul'
+        'l,"Delegation":1}],"Evaluator":null,"GrantPermits":[{"Action":"mod.services.s'
+        'ervice_discovery_action","Constraints":[{"Type":"mod.services.discovery_scope'
+        '","Object":{"Rules":[{"Nodes":[],"Services":["inference"]}]}}],"Delegation":0'
+        '}],"Name":"smithd","Vfs":null}',
+        '#[mod.apphost.register_request]:BnNtaXRoZAAAAAEBJW1vZC5zZXJ2aWNlcy5zZXJ2aWNlX'
+        '2Rpc2NvdmVyeV9hY3Rpb24BAAAAAQAAADUcbW9kLnNlcnZpY2VzLmRpc2NvdmVyeV9zY29wZQAAAA'
+        'EBAAAAAQEJaW5mZXJlbmNlAAAAAAAAAAABARttb2QuYXV0aC5zZWVfb2JqZWN0c19hY3Rpb24AAQA'
+        'A',
+        "data1mqb1i78m3fbtd6duknnj58tmnsst7xeptk7bh384eeaymus5ga6tr",
     ),
     "register_request_zero": (
         RegisterRequest(),
-        "000000000000000000",
-        '{"ContractPermits":[],"GrantPermits":[],"Name":""}',
-        "#[mod.apphost.register_request]:AAAAAAAAAAAA",
-        "data1nimzs4rzda6o37sqoogcdj834dgkz6dtbqezeoy4kfqigukt83mgt",
+        "0000000000000000000000",
+        '{"ContractPermits":[],"Evaluator":null,"GrantPermits":[],"Name":"","Vfs":null'
+        '}',
+        '#[mod.apphost.register_request]:AAAAAAAAAAAAAAA=',
+        "data1n3t8eewi7t9uu19pahtgwe1pg58x97s7y1psceyt7y8o6prpk3cph",
+    ),
+    "register_request_switches_off": (
+        RegisterRequest(name="smithd", vfs=False, evaluator=False),
+        "06736d69746864000000000000000001000100",
+        '{"ContractPermits":[],"Evaluator":false,"GrantPermits":[],"Name":"smithd","Vf'
+        's":false}',
+        '#[mod.apphost.register_request]:BnNtaXRoZAAAAAAAAAAAAQABAA==',
+        "data1deqmhg3zwbh4dzgt7nrebfgyk156n79gaow3q68x6hn1dksgdsh9r",
+    ),
+    "register_request_switches_on": (
+        RegisterRequest(vfs=True, evaluator=True),
+        "00000000000000000001010101",
+        '{"ContractPermits":[],"Evaluator":true,"GrantPermits":[],"Name":"","Vfs":true'
+        '}',
+        '#[mod.apphost.register_request]:AAAAAAAAAAAAAQEBAQ==',
+        "data1nhm9xmo1wbubww8th5coxfozfo4iwd9c985ruu5ry7dqzf4yakt97",
+    ),
+    "register_request_vfs_without_evaluator": (
+        RegisterRequest(vfs=True, evaluator=False),
+        "00000000000000000001010100",
+        '{"ContractPermits":[],"Evaluator":false,"GrantPermits":[],"Name":"","Vfs":tru'
+        'e}',
+        '#[mod.apphost.register_request]:AAAAAAAAAAAAAQEBAA==',
+        "data1nhngbayzhrwwqnao7h3qbhgpuschmr75gprig5bq6nfaucpx4xd5z",
     ),
     "grant_request_full": (
         GrantRequest(
@@ -375,9 +406,10 @@ GRANT_GO_VECTORS: dict[str, tuple[object, str, str, str, str]] = {
     ),
 }
 
-# `astral.BlueprintOf` at astral-go `08ead7ce`, the function the node's
-# `objects.get_blueprint` answers with (`mod/objects/src/module.go:237-255` at
-# astrald `9c466cf3`), decoded.
+# `astral.BlueprintOf` at astral-go `08ead7ce`, and at `1ec701ca` for
+# `mod.apphost.register_request`, the function the node's
+# `objects.get_blueprint` answers with (`mod/objects/src/module.go:238-256` at
+# astrald `e6d691c6`), decoded.
 GRANT_BLUEPRINTS = {
     "mod.apphost.grant": [
         ("ID", Primitive("uint64")),
@@ -388,6 +420,8 @@ GRANT_BLUEPRINTS = {
         ("Name", Primitive("string8")),
         ("GrantPermits", Slice("mod.auth.permit")),
         ("ContractPermits", Slice("mod.auth.permit")),
+        ("Vfs", Ptr("bool")),
+        ("Evaluator", Ptr("bool")),
     ],
     "mod.apphost.grant_request": [
         ("Identity", Ptr("identity")),
@@ -400,7 +434,8 @@ GRANT_BLUEPRINTS = {
     ],
 }
 
-# The four blueprints as astral-go `08ead7ce` writes them, `astral.blueprint`
+# The four blueprints as astral-go `08ead7ce` writes them, and
+# `mod.apphost.register_request` as `1ec701ca` writes it, `astral.blueprint`
 # payloads in hex, for decoding rather than for trusting the table above.
 GRANT_BLUEPRINT_PAYLOADS = {
     "mod.apphost.grant": (
@@ -411,12 +446,15 @@ GRANT_BLUEPRINT_PAYLOADS = {
         "7072696e742e7074725f73706563000474696d650000"
     ),
     "mod.apphost.register_request": (
-        "001c6d6f642e617070686f73742e72656769737465725f72657175657374000000030100"
+        "001c6d6f642e617070686f73742e72656769737465725f72657175657374000000050100"
         "044e616d651f61737472616c2e626c75657072696e742e7072696d69746976655f737065"
         "630007737472696e673801000c4772616e745065726d6974731b61737472616c2e626c75"
         "657072696e742e736c6963655f73706563000f6d6f642e617574682e7065726d69740100"
         "0f436f6e74726163745065726d6974731b61737472616c2e626c75657072696e742e736c"
-        "6963655f73706563000f6d6f642e617574682e7065726d69740000"
+        "6963655f73706563000f6d6f642e617574682e7065726d69740100035666731961737472"
+        "616c2e626c75657072696e742e7074725f737065630004626f6f6c0100094576616c7561"
+        "746f721961737472616c2e626c75657072696e742e7074725f737065630004626f6f6c00"
+        "00"
     ),
     "mod.apphost.grant_request": (
         "00196d6f642e617070686f73742e6772616e745f72657175657374000000030100084964"
@@ -584,16 +622,23 @@ class AppRegisterPolicyTypesTest(unittest.TestCase):
              "AppRegisterDecision is the app registration policy's answer"),
             (reference.ASTRAL_GO, "api/apphost/app_register_policy.go", 57,
              "Authorizers []*auth.AuthorizerAssignment"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 241,
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 276,
              "ContractPermits: req.ContractPermits"),
             (reference.ASTRALD, "mod/apphost/src/register_grant_request.go", 17,
              "func registerGrantRequest"),
             (reference.ASTRALD, "mod/apphost/src/register_grant_request.go", 20,
              "append([]*auth.Permit{serveApps, useBlueprints}, asked...)"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 76, "dec.Validate()"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 78,
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 80,
+             "validateRegisterDecision(dec)"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 96,
+             "validateRegisterDecision returns the first reason"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 106, "dec.Validate()"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 111,
+             "string(p.Action) == sudo"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 116, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 82,
              "ErrRegistrationDeclined"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 79, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 83, "}"),
         )
         for repo, path, number, fragment in cites:
             with self.subTest(citation=f"{path}:{number}"):
@@ -605,7 +650,8 @@ class AppRegisterPolicyTypesTest(unittest.TestCase):
 
 
 class GrantTypesTest(unittest.TestCase):
-    """The grant and the three request objects, against astral-go `08ead7ce`."""
+    """The grant and the three request objects, against astral-go `08ead7ce`,
+    and `mod.apphost.register_request` against `1ec701ca`."""
 
     def test_every_value_encodes_to_the_go_bytes(self):
         for name, (value, payload, _, _, _) in GRANT_GO_VECTORS.items():
@@ -697,7 +743,7 @@ class GrantTypesTest(unittest.TestCase):
             (reference.ASTRAL_GO, "api/apphost/grant.go", 21, "}"),
             (reference.ASTRAL_GO, "api/apphost/register_request.go", 10,
              "RegisterRequest is the registration an app sends"),
-            (reference.ASTRAL_GO, "api/apphost/register_request.go", 22, "}"),
+            (reference.ASTRAL_GO, "api/apphost/register_request.go", 30, "}"),
             (reference.ASTRAL_GO, "api/apphost/grant_request.go", 10,
              "GrantRequest is the grants a caller asks apphost.grant"),
             (reference.ASTRAL_GO, "api/apphost/grant_request.go", 13,
@@ -766,18 +812,18 @@ class GrantTypesTest(unittest.TestCase):
              "MaxTimeout bounds one admission question"),
             (reference.ASTRAL_GO, "api/policy/delegate.go", 16,
              "MaxTimeout = 10 * time.Minute"),
-            (reference.ASTRALD, "mod/objects/src/module.go", 237,
+            (reference.ASTRALD, "mod/objects/src/module.go", 238,
              "func (mod *Module) GetBlueprint(typeName string)"),
-            (reference.ASTRALD, "mod/objects/src/module.go", 254, "astral.BlueprintOf(proto)"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 222,
+            (reference.ASTRALD, "mod/objects/src/module.go", 255, "astral.BlueprintOf(proto)"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 251,
              'refuseRemovedArgs(queryString, "name", "grant_permits", "contract_permits")'),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 226,
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 255,
              "var req *apphostapi.RegisterRequest"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 229, "}"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 52,
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 258, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 56,
              "identities minted over a link"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 54, "NewErrOriginNotAllowed"),
-            (reference.ASTRALD, "mod/apphost/src/op_register.go", 55, "}"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 58, "NewErrOriginNotAllowed"),
+            (reference.ASTRALD, "mod/apphost/src/op_register.go", 59, "}"),
             (reference.ASTRALD, "mod/apphost/src/op_grant.go", 41,
              '"identity", "action", "duration", "constrained"'),
             (reference.ASTRALD, "mod/apphost/src/op_grant.go", 45,
@@ -812,20 +858,21 @@ class GrantTypesTest(unittest.TestCase):
              "refuseRemovedArgs returns an error"),
             (reference.ASTRALD, "mod/apphost/src/validate_permits.go", 31,
              "func refuseRemovedArgs"),
-            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 85,
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 84,
              "GetGrantRequestPolicy returns the policy apphost.request_grant applies"),
-            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 94,
-             "mod.policy.GrantRequest.Get(); !d.IsZero()"),
             (reference.ASTRALD, "mod/apphost/src/register_policy.go", 95,
+             "mod.policy.GrantRequest.Get(); !d.IsZero()"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 96,
              "return mod.GrantRequestPolicyDelegated(d)"),
-            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 98, "case nil:"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 86,
+             "else RefuseAllGrants, also when no mode is stored"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 98,
+             "m.String() == apphostmod.GrantRequestAcceptAll"),
             (reference.ASTRALD, "mod/apphost/src/register_policy.go", 99,
              "return apphostmod.AcceptAllGrants"),
             (reference.ASTRALD, "mod/apphost/src/register_policy.go", 101,
-             "apphostmod.GrantRequestAcceptAll"),
-            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 105,
              "return apphostmod.RefuseAllGrants"),
-            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 106, "}"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 102, "}"),
             (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 15,
              "OpListGrants lists the node-local grants"),
             (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 16,
@@ -1528,6 +1575,43 @@ class RegisterTest(ApphostCase):
         )
 
     @bounded()
+    async def test_the_vfs_switches_travel_in_the_object(self):
+        """Byte for byte astral-go's request with each switch pair: set to
+        false, set to true, and one of each. Omitted, both travel nil, which
+        `test_no_arguments_send_one_zero_request_and_answer_a_token` pins."""
+        for name, kw in (
+            ("register_request_switches_off", {"name": "smithd", "vfs": False, "evaluator": False}),
+            ("register_request_switches_on", {"vfs": True, "evaluator": True}),
+            ("register_request_vfs_without_evaluator", {"vfs": True, "evaluator": False}),
+        ):
+            with self.subTest(vector=name):
+                _, mock = await self.register(**kw)
+                self.assertEqual(
+                    body(mock), [("mod.apphost.register_request", go_payload(name))]
+                )
+
+    @bounded()
+    async def test_an_omitted_switch_is_nil_not_false(self):
+        """Nil means true on the node, so `None` must never encode as false."""
+        _, mock = await self.register(vfs=False)
+        request = RegisterRequest.read_payload(object_reader(body(mock)[0][1]))
+        self.assertIs(request.vfs, False)
+        self.assertIsNone(request.evaluator)
+
+    @bounded()
+    async def test_a_switch_that_is_not_a_bool_never_reaches_the_node(self):
+        """`0` and `"false"` are refused rather than read as false."""
+        async with MockApphost(routes={OP_REGISTER: read_one_then()}) as mock:
+            api = await self.apphost(mock)
+            for key in ("vfs", "evaluator"):
+                for value in (0, 1, "false", b"\x00"):
+                    with self.subTest(key=key, value=value):
+                        with self.assertRaises(BadArgumentType) as caught:
+                            await api.register(**{key: value})
+                        self.assertIn(key, str(caught.exception))
+            self.assertEqual(mock.queries, [])
+
+    @bounded()
     async def test_an_action_name_becomes_an_unconstrained_permit(self):
         _, mock = await self.register(grant_permits=["mod.user.see_swarm_action"])
         request = RegisterRequest.read_payload(object_reader(body(mock)[0][1]))
@@ -2173,7 +2257,8 @@ class SecurityNoteTest(unittest.TestCase):
         "list_grants",
         "revoke",
     }
-    ADMIN_MANAGE_APPS = TOKEN_AND_GRANT
+    # `withdraw_relay` takes back an app's relay contract and has no client here.
+    ADMIN_MANAGE_APPS = TOKEN_AND_GRANT | {"withdraw_relay"}
     CONFIGURE_NODE_STATE = {"set_app_register_policy"}
     SERVE_APPS = {"register_handler"}
     CURRENT_UNGUARDED = {"whoami", "set_app_register_policy"}
@@ -2209,17 +2294,17 @@ class SecurityNoteTest(unittest.TestCase):
         ops = self.ops()
         guarded = {name for name, src in ops.items() if "OriginNetwork" in src}
 
-        self.assertEqual(len(ops), 17)
+        self.assertEqual(len(ops), 18)
         self.assertEqual(set(ops) - guarded, self.CURRENT_UNGUARDED)
-        self.assertEqual(len(guarded), 15)
+        self.assertEqual(len(guarded), 16)
 
         # Unwrapped, because a line break inside a sentence is a formatting
         # choice and the claim is the sentence.
         doc = " ".join((apphost_module.__doc__ or "").split())
         self.assertNotIn("alone among its neighbours", doc)
         self.assertIn(f"re-derived at `{reference.PINS[reference.ASTRALD][1]}`", doc)
-        self.assertIn("Seventeen `op_*.go` files.", doc)
-        self.assertIn("Fifteen refuse a network origin", doc)
+        self.assertIn("Eighteen `op_*.go` files.", doc)
+        self.assertIn("Sixteen refuse a network origin", doc)
         self.assertIn(
             "the two that do not are `whoami` and `set_app_register_policy`", doc
         )
@@ -2263,7 +2348,7 @@ class SecurityNoteTest(unittest.TestCase):
                 )
                 self.assertLess(src.index("q.Accept"), src.index(guard))
                 self.assertIn("return ch.Send(auth.ErrNotPermitted)", src)
-                if name in self.TOKEN_AND_GRANT:
+                if name in self.ADMIN_MANAGE_APPS:
                     action = src.index("AdminManageAppsAction")
                     self.assertLess(src.index("OriginNetwork"), action)
                     work = [
@@ -2347,7 +2432,7 @@ class SecurityNoteTest(unittest.TestCase):
             config = reference.read(reference.ASTRALD, f"{self.SRC}/config.go")
         except reference.Unavailable as exc:  # pragma: no cover -- may be absent
             self.skipTest(str(exc))
-        defaults = config.split("var defaultConfig = Config{")[1]
+        defaults = config.split("func defaultConfig() Config {")[1]
 
         def listed(key: str) -> list[str]:
             body = defaults.split(f"{key}: []string{{")[1].split("}")[0]
@@ -2416,10 +2501,10 @@ class SecurityNoteTest(unittest.TestCase):
             (f"{self.SRC}/guest.go", 157, "}"),
             (f"{self.SRC}/guest.go", 270, "isAuthenticated()"),
             (f"{self.SRC}/guest.go", 272, "}"),
-            (f"{self.SRC}/http_query_handler.go", 78, "q := query.New("),
-            (f"{self.SRC}/http_query_handler.go", 82, "srv.gateAdmits(ctx, q, false)"),
-            (f"{self.SRC}/http_query_handler.go", 83, "http.StatusForbidden"),
-            (f"{self.SRC}/http_query_handler.go", 85, "}"),
+            (f"{self.SRC}/http_query_handler.go", 80, "q := launchHTTPQuery(request, query.New("),
+            (f"{self.SRC}/http_query_handler.go", 84, "srv.gateAdmits(ctx, q.Query, false)"),
+            (f"{self.SRC}/http_query_handler.go", 85, "http.StatusForbidden"),
+            (f"{self.SRC}/http_query_handler.go", 87, "}"),
             (f"{self.SRC}/gate.go", 20, "func (mod *Module) gateAdmits("),
             (f"{self.SRC}/gate.go", 24, "if tokenless && (!toNode"),
             (f"{self.SRC}/gate.go", 30, "mod.config.Gate.States.forState(mod.Sys.NodeState(ctx))"),
@@ -2428,10 +2513,10 @@ class SecurityNoteTest(unittest.TestCase):
             (f"{self.SRC}/config.go", 41, "}"),
             (f"{self.SRC}/config.go", 43, "Policies holds the config value"),
             (f"{self.SRC}/config.go", 47, "}"),
-            (f"{self.SRC}/config.go", 73, "Gate: Gate{"),
-            (f"{self.SRC}/config.go", 98, "},"),
-            (f"{self.SRC}/config.go", 100, "Policies: Policies{"),
-            (f"{self.SRC}/config.go", 102, "},"),
+            (f"{self.SRC}/config.go", 80, "Gate: Gate{"),
+            (f"{self.SRC}/config.go", 105, "},"),
+            (f"{self.SRC}/config.go", 107, "Policies: Policies{"),
+            (f"{self.SRC}/config.go", 109, "},"),
             ("mod/user/src/authorize_user_or_node.go", 12, "within apphost's gate"),
             ("mod/user/src/authorize_user_or_node.go", 13, "node-local grant or a signed contract"),
             ("mod/user/src/authorize_user_or_node.go", 17, "authorizeUserOrNode"),
@@ -2441,6 +2526,11 @@ class SecurityNoteTest(unittest.TestCase):
             ("core/router.go", 46, "q.Caller = r.node.identity"),
             (f"{self.SRC}/op_hosts.go", 29, "OriginNetwork"),
             (f"{self.SRC}/op_hosts.go", 35, "SeeSwarmAction"),
+            (f"{self.SRC}/op_withdraw_relay.go", 17, "OpWithdrawRelay takes back the relay contract"),
+            (f"{self.SRC}/op_withdraw_relay.go", 25, "identity's access tokens and grants"),
+            (f"{self.SRC}/op_withdraw_relay.go", 32, "OriginNetwork"),
+            (f"{self.SRC}/op_withdraw_relay.go", 36, admin),
+            (f"{self.SRC}/op_withdraw_relay.go", 38, "}"),
             (f"{self.SRC}/op_hosts.go", 48, "RelayForAction"),
             (f"{self.SRC}/op_hold_object.go", 36, "StoreObjectsAction"),
             (f"{self.SRC}/op_hold_object.go", 37, "auth.ErrNotPermitted"),
@@ -2470,12 +2560,12 @@ class RegisterCitationTest(unittest.TestCase):
 
     def test_every_anchor_lands_on_its_claim(self):
         cites = (
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 18, "RegisterDuration = 10 * 365"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 68, "switch {"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 71, "ErrRegistrationDeclined"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 79, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 172, "Add(RegisterDuration)"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 111, "CreateAccessToken(guestID"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 20, "RegisterDuration = 10 * 365"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 72, "switch {"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 75, "ErrRegistrationDeclined"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 83, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 202, "Add(RegisterDuration)"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 141, "CreateAccessToken(guestID"),
             (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 15,
              "type opSetPolicyArgs struct"),
             (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 25, "}"),
@@ -2515,29 +2605,57 @@ class RegisterCitationTest(unittest.TestCase):
             (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 154,
              "ConfigureNodeStateAction"),
             (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 155, "}"),
-            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 42,
+            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 41,
              "func (mod *Module) GetRegisterAppPolicy()"),
-            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 47,
+            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 46,
              "setting := mod.config.Policies.AppRegister"),
-            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 60, "return apphostmod.RejectAll"),
-            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 61, "}"),
-            (reference.ASTRALD, "mod/apphost/register_policy.go", 26,
+            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 59, "return apphostmod.RejectAll"),
+            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 60, "}"),
+            (reference.ASTRALD, "mod/apphost/register_policy.go", 27,
              "AcceptAll is the accept_all policy"),
-            (reference.ASTRALD, "mod/apphost/register_policy.go", 33, "}, nil"),
-            (reference.ASTRALD, "mod/apphost/register_policy.go", 34, "}"),
-            (reference.ASTRALD, "mod/apphost/register_policy.go", 36,
+            (reference.ASTRALD, "mod/apphost/register_policy.go", 34, "}, nil"),
+            (reference.ASTRALD, "mod/apphost/register_policy.go", 35, "}"),
+            (reference.ASTRALD, "mod/apphost/register_policy.go", 37,
              "RejectAll is the reject_all policy and the code default"),
-            (reference.ASTRALD, "mod/apphost/register_policy.go", 40, "}"),
+            (reference.ASTRALD, "mod/apphost/register_policy.go", 41, "}"),
             (reference.ASTRALD, f"{self.SRC}/register_grant_request.go", 17,
              "func registerGrantRequest"),
             (reference.ASTRALD, f"{self.SRC}/register_grant_request.go", 20,
              "append([]*auth.Permit{serveApps, useBlueprints}, asked...)"),
-            (reference.ASTRALD, f"{self.SRC}/op_register.go", 241,
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 276,
              "ContractPermits: req.ContractPermits"),
-            (reference.ASTRALD, "mod/apphost/register_policy.go", 28, "func AcceptAll"),
+            (reference.ASTRALD, "mod/apphost/register_policy.go", 29, "func AcceptAll"),
             (reference.ASTRAL_GO, "api/apphost/errors.go", 7,
              'NewError("registration declined")'),
             (reference.ASTRAL_GO, "astral/string_types.go", 25, "if len(s) > 1<<8-1"),
+            # The VFS switches: astral-go's declaration and what astrald does with them.
+            (reference.ASTRAL_GO, "api/apphost/register_request.go", 19,
+             "Vfs asks the node to create a VFS for the app"),
+            (reference.ASTRAL_GO, "api/apphost/register_request.go", 21,
+             "A nil field means true"),
+            (reference.ASTRAL_GO, "api/apphost/register_request.go", 23, "when Vfs is false."),
+            (reference.ASTRAL_GO, "api/apphost/register_request.go", 28, "Vfs             *astral.Bool"),
+            (reference.ASTRAL_GO, "api/apphost/register_request.go", 29, "Evaluator       *astral.Bool"),
+            (reference.ASTRAL_GO, "api/apphost/register_request.go", 33,
+             "return r.Vfs == nil || bool(*r.Vfs)"),
+            (reference.ASTRAL_GO, "api/apphost/register_request.go", 39,
+             "r.RequestsVFS() && (r.Evaluator == nil || bool(*r.Evaluator))"),
+            (reference.ASTRAL_GO, "api/apphost/register_request.go", 40, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 37, "Its Vfs and Evaluator"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 39, "the policy does not see them"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 85, "mod.provisionApp(ctx, dec)"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 90,
+             "mod.provisionAppVFS(req, token.Identity)"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 92, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 280,
+             "provisionAppVFS creates the VFS of a new app"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 293, "if !req.RequestsVFS()"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 299, "if !req.RequestsEvaluator()"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 303,
+             "mod.VFS.SetEvaluator(app, appEvaluatorEndpoint(app))"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 304, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_register.go", 272,
+             "return &apphostapi.AppRegisterRequest{"),
         )
         for repo, path, number, fragment in cites:
             with self.subTest(citation=f"{path}:{number}"):

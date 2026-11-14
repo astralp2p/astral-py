@@ -1130,8 +1130,8 @@ class AstraldParityTest(unittest.TestCase):
         source = self.source("mod/apphost/src/config.go")
         gate = source.split("Gate: Gate{")[1].split("Claimed: []string{gateAny}")[0]
         self.assertNotIn('"crypto.', gate)
-        self.assertEqual(source.splitlines()[72].strip(), "Gate: Gate{")
-        self.assertEqual(source.splitlines()[97].strip(), "},")
+        self.assertEqual(source.splitlines()[79].strip(), "Gate: Gate{")
+        self.assertEqual(source.splitlines()[104].strip(), "},")
 
     def test_the_signer_fallback_and_register_signer_lines_land(self):
         """The module docstring's `register_signer` paragraph, read at the pin."""

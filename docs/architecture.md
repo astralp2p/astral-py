@@ -15,8 +15,8 @@ document states the resolution, and the resolution is binding.
 | Rank | Authority | Location |
 |---|---|---|
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
-| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `4a3e111c` (the merge of astral-go pull request #175, which adds `api/sys` and removes `apphost.register_manager`) |
-| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `a7c773d6` (the merge of astrald pull request #383, which adds `mod/sys`; it requires astral-go `4a3e111c`, `go.mod:7`) — authoritative for session semantics the client never exercises |
+| 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `1ec701ca` (the merge of astral-go pull request #180, which adds `Vfs` and `Evaluator` to `mod.apphost.register_request`) |
+| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `e6d691c6` (master at the bump, the merge of astrald pull request #466; it requires astral-go `1ec701ca`, `go.mod:7`) — authoritative for session semantics the client never exercises |
 | 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `645f3c0`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
@@ -1863,3 +1863,39 @@ astral-go declares them with `ErrIntroduceSelf` (`api/user/module.go:20-21`,
 `ERR_INTRODUCE_SELF` is the new error text. Neither op was run against a node; their tests run
 against `MockApphost` only. 11.8's and 11.9's live verifications stand as records of
 astrald `5b4dde12`.
+
+## 11.12 Section 11.11 — the pins reach the VFS evaluator (AMENDED, partly implemented)
+
+The pins move to astrald `e6d691c6` and astral-go `1ec701ca`. astrald pull request #463
+(`a2a44f33`) moved astrald onto astral-go `1ec701ca`, whose `RegisterRequest` has five fields
+(`api/apphost/register_request.go:24-30`). astral-py sent three, so the node read past the end
+of the object and answered every `apphost.register` with `unexpected EOF` (verified: astrald's
+`./tests/run claim-window` passes at `d9bc952c` and fails from `a2a44f33` on).
+
+**Amendment: `mod.apphost.register_request` declares `Vfs` and `Evaluator`.** Each is
+`Ptr("bool")`: `0x00` nil, `0x01` then the `bool` byte. Nil means true on the node, and
+`Evaluator` has no effect when `Vfs` is false (`api/apphost/register_request.go:19-23,32-40`).
+`Apphost.register` takes `vfs` and `evaluator` as keyword arguments, default `None`. The
+register policy does not see either field (`mod/apphost/src/op_register.go:271-278`).
+`tests/test_api_apphost.py` pins five `register_request` vectors and the blueprint against
+astral-go `1ec701ca`'s own output: both fields nil, both true, both false, and one of each.
+
+The range changes these facts elsewhere. `defaultConfig` is a function, and every gate line
+moves by seven (`mod/apphost/src/config.go:55-111`). The grant request policy refuses all when
+no mode is stored (`mod/apphost/src/register_policy.go:84-102`). The apphost census is eighteen
+`op_*.go` files: `apphost.withdraw_relay` asks `mod.auth.admin_manage_apps_action` and refuses a
+network origin, and it has no client here. An active contract also requires
+`withdrawn_at IS NULL` (`mod/auth/src/db.go:16-21`). A decision whose contract permits name
+`mod.auth.sudo_action` is refused (`mod/apphost/src/op_register.go:96-116`). An HTTP query
+from a non-loopback TCP peer carries the network origin
+(`mod/apphost/src/http_query_handler.go:110-142`).
+
+**Not done at this pin: the services module.** astrald's provider visibility (`2d09f7ee`,
+before `a2a44f33`) changes `services.discover` and `services.advertise`: a discovery opens
+with `services.not_granted` when the caller lacks a permit for a named service, and a binding
+can be private. `astral.api.services` reads `services.update`, `services.removed`,
+`services.incomplete` and `eos` alone, so it raises `ProtocolError` on a `services.not_granted`
+(inferred from `api/services.py` `_view` and astrald `mod/services/src/op_discover.go` at the
+pin; not run against a node). The services citations in `astral.api.services` and
+`astral.api.tree` are not re-read at this pin, and `test_api_services.CitationTest` and
+`test_api_tree.CitationTest` fail on eight of them.

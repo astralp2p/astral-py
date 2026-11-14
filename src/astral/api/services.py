@@ -14,38 +14,38 @@ verified on an isolated astrald built from `1286a469`.
 **A provider binds a fixed set of services for as long as its channel is open.**
 `services.advertise?services=a,b` names the set. The op accepts the query, then
 answers a network origin with `origin not allowed: network`
-(`astrald/mod/services/src/op_advertise.go:28`), asks
+(`astrald/mod/services/src/op_advertise.go:29`), asks
 `mod.auth.serve_apps_action` for the caller and answers `not permitted` when it
-is refused (`astrald/mod/services/src/op_advertise.go:34`), and answers a zero
+is refused (`astrald/mod/services/src/op_advertise.go:35`), and answers a zero
 caller and the node's own identity with `not permitted` too
-(`astrald/mod/services/src/op_advertise.go:42`). A session holding a token that
+(`astrald/mod/services/src/op_advertise.go:43`). A session holding a token that
 names the node is the node, so it is refused: verified on an isolated astrald
 built from `5f17900d`, `RemoteError` reading `not permitted`. A malformed service list and a name
 this provider already advertises are answered after accept with an
-`error_message` (`astrald/mod/services/src/op_advertise.go:49`,
-`astrald/mod/services/src/op_advertise.go:55`); the second carries the text
+`error_message` (`astrald/mod/services/src/op_advertise.go:50`,
+`astrald/mod/services/src/op_advertise.go:57`); the second carries the text
 `ERR_ADVERTISED`. Then the node sends `ack`, and after it one `services.ask` per
 caller and service it needs evaluated. The provider sends one `services.answer`
 per ask and a `services.change` whenever offerings may have changed; any other
 object, and closing the channel, ends the binding
-(`astrald/mod/services/src/op_advertise.go:65`). `advertise()` returns a
+(`astrald/mod/services/src/op_advertise.go:67`). `advertise()` returns a
 `Binding`, the counterpart of astral-go's (`api/services/client/advertise.go` at
-astral-go `4a3e111c`), and `async with` is its contract, because the open channel
+astral-go `1ec701ca`), and `async with` is its contract, because the open channel
 **is** the advertisement.
 
 **An answer is the complete offering of one service for one caller.** The
 handler a `Binding` holds evaluates it. `None` or an exception is answered as
 unavailable, so an ask is never left unanswered, which is astral-go's rule
-(`astral-go/api/services/client/advertise.go:81`). The answer always carries the asked
+(`astral-go/api/services/client/advertise.go:93`). The answer always carries the asked
 name and no provider: the node refuses an answer whose name differs from the
 ask's and one naming another provider, and it sets the provider from the binding
-(`astrald/mod/services/src/coordinator/source_messages.go:45`,
+(`astrald/mod/services/src/coordinator/source_messages.go:47`,
 `astrald/mod/services/src/coordinator/source_messages.go:47`,
 `astrald/mod/services/src/coordinator/source_messages.go:30`). One ask waits 10 s
-for its answer (`astrald/mod/services/src/coordinator/coordinator.go:36`).
+for its answer (`astrald/mod/services/src/coordinator/coordinator.go:45`).
 
 **A change that selects no caller fails the binding**
-(`astrald/mod/services/src/coordinator/source_messages.go:85`), so
+(`astrald/mod/services/src/coordinator/source_messages.go:90`), so
 `Binding.change()` with no callers sends nothing.
 
 **A consumer discovers named services for itself.** `services.discover?
@@ -69,7 +69,7 @@ did not resolve; a bare `eos` means the initial attempt completed. Without
 `follow` the channel closes after the `eos`; with `follow` it carries later views
 and removals (`astrald/mod/services/src/op_discover.go:34`,
 `astrald/mod/services/src/op_discover.go:36`). The node gives the initial attempt
-5 s (`astrald/mod/services/src/coordinator/coordinator.go:36`). This module turns
+5 s (`astrald/mod/services/src/coordinator/coordinator.go:45`). This module turns
 the `eos` into an `InitialOutcome` event, so a reader never sees the separator:
 `complete` true for a bare `eos`, false with the incomplete service names
 otherwise. A one-shot stream that ends before its `eos` and a follow stream that
@@ -103,7 +103,7 @@ property design section 5.1 gives every module. Registration does not wait on
 it: `astral/__init__.py` imports the whole `api` package eagerly, so whether
 `services.update` decodes never depends on which property a caller touched.
 
-Line numbers cite astrald `a7c773d6` and astral-go `4a3e111c`, the revisions
+Line numbers cite astrald `e6d691c6` and astral-go `1ec701ca`, the revisions
 `tests/reference.py` pins, and `tests/test_api_services.py` reads each one back.
 """
 
@@ -511,7 +511,7 @@ class Watcher:
     Follows a discovery and keeps the available offerings, keyed by provider and
     name: an `Update` with `available` true sets one, with `available` false
     deletes it, and a `Removed` deletes the offerings it names. astral-go's
-    `Watcher` (`api/services/client/watch.go` at astral-go `4a3e111c`). It has no
+    `Watcher` (`api/services/client/watch.go` at astral-go `1ec701ca`). It has no
     reconnect policy: once `done` is set, the app starts a new one.
 
     **The stream must be closed.** Leaving the `async with` closes it.

@@ -1019,22 +1019,22 @@ class CitationTest(unittest.TestCase):
     """
 
     ASTRALD_LINES = (
-        ("mod/services/src/op_advertise.go", 28, "astral.OriginNetwork"),
-        ("mod/services/src/op_advertise.go", 34, "auth.ServeAppsAction"),
-        ("mod/services/src/op_advertise.go", 42, "id.IsEqual(mod.node.Identity())"),
-        ("mod/services/src/op_advertise.go", 49, "astral.Err(err)"),
-        ("mod/services/src/op_advertise.go", 55, "astral.Err(err)"),
-        ("mod/services/src/op_advertise.go", 65, "ch.Switch("),
+        ("mod/services/src/op_advertise.go", 29, "astral.OriginNetwork"),
+        ("mod/services/src/op_advertise.go", 35, "auth.ServeAppsAction"),
+        ("mod/services/src/op_advertise.go", 43, "id.IsEqual(mod.node.Identity())"),
+        ("mod/services/src/op_advertise.go", 50, "astral.Err(err)"),
+        ("mod/services/src/op_advertise.go", 57, "astral.Err(err)"),
+        ("mod/services/src/op_advertise.go", 67, "ch.Switch("),
         ("mod/services/src/op_discover.go", 29, "reach=swarm is accepted only from a local app"),
         ("mod/services/src/op_discover.go", 34, "An eos ends the initial attempt"),
         ("mod/services/src/op_discover.go", 36, "with follow it carries later views"),
         ("mod/services/src/op_discover.go", 159, 'not permitted to discover %q'),
-        ("mod/services/src/coordinator/coordinator.go", 21, "service already advertised by this provider"),
-        ("mod/services/src/coordinator/coordinator.go", 36, "InitialBudget: 5 * time.Second, RequestTimeout: 10 * time.Second"),
+        ("mod/services/src/coordinator/coordinator.go", 29, "service already advertised by this provider"),
+        ("mod/services/src/coordinator/coordinator.go", 45, "InitialBudget: 5 * time.Second, RequestTimeout: 10 * time.Second"),
         ("mod/services/src/coordinator/source_messages.go", 30, "u.ProviderID = src.provider"),
-        ("mod/services/src/coordinator/source_messages.go", 45, "string(a.Update.Name) != req.service"),
+        ("mod/services/src/coordinator/source_messages.go", 47, "string(a.Update.Name) != req.service"),
         ("mod/services/src/coordinator/source_messages.go", 47, "!a.Update.ProviderID.IsEqual(src.provider)"),
-        ("mod/services/src/coordinator/source_messages.go", 85, "if !ch.Valid() {"),
+        ("mod/services/src/coordinator/source_messages.go", 90, "if !ch.Valid() {"),
     )
 
     ASTRAL_GO_LINES = (
@@ -1044,7 +1044,7 @@ class CitationTest(unittest.TestCase):
         ("api/services/names.go", 13, "maxNameLen = 255"),
         ("api/services/reach.go", 11, 'ReachLocal Reach = "local"'),
         ("api/services/reach.go", 14, 'ReachSwarm Reach = "swarm"'),
-        ("api/services/client/advertise.go", 81, "if err == nil && u != nil {"),
+        ("api/services/client/advertise.go", 93, "if err == nil && u != nil {"),
         ("api/services/client/services.go", 17, 'ErrStreamEnded = errors.New("discovery stream ended")'),
         ("lib/query/field_editor.go", 143, "case reflect.Bool:"),
     )
@@ -1073,7 +1073,7 @@ class CitationTest(unittest.TestCase):
         self.assertEqual(
             set(re.findall(r"astrald/(mod/[\w/]+\.go:\d+)", prose)),
             {f"{p}:{n}" for p, n, _ in self.ASTRALD_LINES}
-            - {"mod/services/src/coordinator/coordinator.go:21"},
+            - {"mod/services/src/coordinator/coordinator.go:29"},
         )
         self.assertEqual(
             set(re.findall(r"astral-go/((?:api|lib)/[\w/]+\.go:\d+)", prose)),
@@ -1085,7 +1085,7 @@ class CitationTest(unittest.TestCase):
         astral-go must agree on it."""
         try:
             line = reference.cited_line(
-                reference.ASTRALD, "mod/services/src/coordinator/coordinator.go", 21
+                reference.ASTRALD, "mod/services/src/coordinator/coordinator.go", 29
             )
         except reference.Unavailable as exc:  # pragma: no cover
             self.skipTest(str(exc))

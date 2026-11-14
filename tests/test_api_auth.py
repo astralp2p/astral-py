@@ -1123,8 +1123,8 @@ class LiveAuthTest(live_support.LiveCase):
         `type auth.Action does not implement Object and is not a supported
         container`. `5b1d282` added both, and `specFromType` probes
         `tryObjectType` ahead of its container dispatch, so the embedded field
-        now yields a `RefSpec` naming `mod.auth.action`. astrald `a7c773d6`
-        requires `4a3e111c`, the SDK's own astral-go pin, which is past
+        now yields a `RefSpec` naming `mod.auth.action`. astrald `e6d691c6`
+        requires `1ec701ca`, the SDK's own astral-go pin, which is past
         `5b1d282`.
         """
         async with await self.client() as client:
@@ -1212,6 +1212,23 @@ class ReaderSourceTest(unittest.TestCase):
         self.assertIn("return channel.Batch(ch, func(c *auth.Contract)", src)
         self.assertNotIn("ch.Switch", src)
         self.assertNotIn("BreakOnEOS", src)
+
+    def test_the_active_contract_query_and_the_withdrawal_land(self):
+        """The module docstring's validity-window paragraph, read at the pin."""
+        lines = self.source(reference.ASTRALD, "mod/auth/src/db.go").splitlines()
+        for number, fragment in (
+            (16, "func (db *DB) findActiveContracts("),
+            (19, 'Where("starts_at <= ?", now)'),
+            (20, 'Where("expires_at > ?", now)'),
+            (21, 'Where("withdrawn_at IS NULL")'),
+            (67, "withdrawContracts marks every unexpired, unwithdrawn contract"),
+            (82, 'Update("withdrawn_at", now)'),
+            (84, "}"),
+        ):
+            with self.subTest(line=number):
+                self.assertIn(fragment, lines[number - 1])
+        withdraw = self.source(reference.ASTRALD, "mod/apphost/src/op_withdraw_relay.go")
+        self.assertIn("mod.Auth.WithdrawContracts(identity, &nodes.RelayForAction{})", withdraw)
 
     def test_batch_mirrors_an_explicit_terminator_and_not_an_eof(self):
         """The half the module's `eos` claim rests on: a stream the caller ends
