@@ -59,9 +59,10 @@ PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
     # request policy refuses all when no mode is stored; the apphost census
     # counts eighteen files with `withdraw_relay`; an active contract requires
     # `withdrawn_at IS NULL`; a register decision naming `mod.auth.sudo_action`
-    # in its contract permits is refused. Not re-read: the services citations
-    # (`astral.api.services`, and `astral.api.tree`'s discovery note), whose
-    # source the provider visibility change rewrote (design 11.12).
+    # in its contract permits is refused; `astral.api.services` mirrors
+    # astral-go `1ec701ca`'s services client: `services.not_granted`,
+    # `services.tagged_update` and the private list are declared, a discovery
+    # without names is accepted, and a binding can be private (design 11.12).
     #
     # Earlier: bumped from astrald `5b4dde12` / astral-go `2481dd7a`. Every cited line
     # whose text did not change was moved to its new number; every other cited

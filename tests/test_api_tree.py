@@ -1084,8 +1084,8 @@ class CitationTest(unittest.TestCase):
         "mod/tree/src/module.go:224": "return tree.ErrNodeHasSubnodes",
         # The op that does have a separator, cited so the objection is scoped:
         # ST+follow is a real mode and `tree.get` is not in it.
-        "mod/services/src/op_discover.go:34": "An eos ends the initial attempt",
-        "mod/services/src/op_discover.go:36": "with follow it carries later views",
+        "mod/services/src/op_discover.go:39": "An eos ends the initial attempt",
+        "mod/services/src/op_discover.go:41": "with follow it carries later views",
         "mod/services/src/op_discover.go:260": "return s.send(&astral.EOS{})",
     }
 

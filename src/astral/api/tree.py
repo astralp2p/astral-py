@@ -42,8 +42,8 @@ separator this op never sends.
 The row is right about its other two members and wrong only about this one:
 `services.discover?follow=true` sends one `eos` that ends the initial attempt
 and keeps the channel open for later views and removals
-(`astrald/mod/services/src/op_discover.go:34`,
-`astrald/mod/services/src/op_discover.go:36`, sent at
+(`astrald/mod/services/src/op_discover.go:39`,
+`astrald/mod/services/src/op_discover.go:41`, sent at
 `astrald/mod/services/src/op_discover.go:260`). ST+follow is therefore a real
 mode with a real member, and `tree.get` is not in it.
 

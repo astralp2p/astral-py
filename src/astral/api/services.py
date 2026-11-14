@@ -5,7 +5,7 @@ The Services v1 wire. Two ops; `services.sync` is gone from the node.
 | Op | Mode | Answer | Effect |
 |---|---|---|---|
 | `services.advertise` | BD, held open | `ack` \\| `error_message`, then `services.ask` × n | binds while open |
-| `services.discover` | ST+follow | `services.update` \\| `services.removed` × n, `services.incomplete`?, `eos` | read-only |
+| `services.discover` | ST+follow | `services.not_granted`?, then `services.update` \\| `services.tagged_update` \\| `services.removed` × n, `services.incomplete`?, `eos` | read-only |
 
 The two are the complete surface: the live `shell.spec` registry holds
 `services.advertise` and `services.discover` and nothing else under this module,
@@ -33,6 +33,16 @@ object, and closing the channel, ends the binding
 astral-go `1ec701ca`), and `async with` is its contract, because the open channel
 **is** the advertisement.
 
+**A binding is open or private.** `services.advertise?open=false` binds a
+private provider, and an absent `open` binds an open one
+(`astrald/mod/services/src/op_advertise.go:13`,
+`astrald/mod/services/src/op_advertise.go:54`). `advertise(open=False)` sends
+the argument, and `open=True`, the default, omits it, as astral-go's
+`AdvertiseOpen` does (`astral-go/api/services/client/advertise.go:42`). The
+node's field is a `*bool`, which the query parser allocates and then reads as
+it reads `follow` (`astral-go/lib/query/field_editor.go:99`). A private binding
+is found only by a caller holding a discovery permit for it.
+
 **An answer is the complete offering of one service for one caller.** The
 handler a `Binding` holds evaluates it. `None` or an exception is answered as
 unavailable, so an ask is never left unanswered, which is astral-go's rule
@@ -40,26 +50,46 @@ unavailable, so an ask is never left unanswered, which is astral-go's rule
 name and no provider: the node refuses an answer whose name differs from the
 ask's and one naming another provider, and it sets the provider from the binding
 (`astrald/mod/services/src/coordinator/source_messages.go:47`,
-`astrald/mod/services/src/coordinator/source_messages.go:47`,
-`astrald/mod/services/src/coordinator/source_messages.go:30`). One ask waits 10 s
+`astrald/mod/services/src/coordinator/source_messages.go:49`,
+`astrald/mod/services/src/coordinator/source_messages.go:32`). One ask waits 10 s
 for its answer (`astrald/mod/services/src/coordinator/coordinator.go:45`).
 
 **A change that selects no caller fails the binding**
 (`astrald/mod/services/src/coordinator/source_messages.go:90`), so
 `Binding.change()` with no callers sends nothing.
 
-**A consumer discovers named services for itself.** `services.discover?
-services=a,b` admits the request before any work: the list must parse, `reach`
-must be `local` or `swarm`, and the caller must hold
-`mod.services.service_discovery_action` for every named service on every
-contributing node, else the op answers `not permitted to discover "<name>"`
-(`astrald/mod/services/src/op_discover.go:159`). `reach=swarm` carries the
-discovery to every member of the node's local swarm in the caller's name, and is
-accepted only from a local app (`astrald/mod/services/src/op_discover.go:29`).
-Verified on an isolated astrald built from `1286a469` and again on one built
-from `5f17900d`: a caller that is the node is refused
-`not permitted to discover "chat"`, because the node identity holds no discovery
-permit.
+**A consumer discovers services for itself, and permits decide what it sees.**
+`services.discover?services=a,b` names the services; with no `services` it
+discovers every service the node's providers advertise, and then it cannot
+follow (`astrald/mod/services/src/op_discover.go:129`,
+`astrald/mod/services/src/op_discover.go:157`). The list must parse and
+`reach` must be `local` or `swarm`, or the op answers an `error_message`; a
+follow without names is answered `follow requires services`
+(`astrald/mod/services/src/op_discover.go:34`). Permits refuse no caller
+(`astrald/mod/services/src/op_discover.go:120`). A caller sees an open
+offering when it is the node's user, a node of its swarm, or an app hosted on
+one, and any offering of a service it holds
+`mod.services.service_discovery_action` for on the provider's node
+(`astrald/mod/services/src/visibility.go:14`,
+`astrald/mod/services/src/visibility.go:54`). The node itself is not a swarm
+caller, so a caller-less query sees permitted offerings alone
+(`astrald/mod/services/src/visibility.go:40`). A request that names services
+opens with one `services.not_granted` listing, sorted, the named services the
+caller holds no discovery permit for on at least one contributing node
+(`astrald/mod/services/src/op_discover.go:59`,
+`astrald/mod/services/src/visibility.go:88`). `reach=swarm` carries the
+discovery to every member of the node's local swarm in the caller's name, and
+is accepted only from a local app
+(`astrald/mod/services/src/op_discover.go:32`).
+
+**`services.tagged_update` reaches a node, not an app.** A member answers a
+carried discovery that asks for tags with one per offering, the provider's
+visibility beside the update; `tagged` is accepted only with `for`, and `for`
+only over a link (`astrald/mod/services/src/op_discover.go:140`,
+`astrald/mod/services/src/op_discover.go:172`). This module sends neither
+argument. Its reader still accepts the object, as astral-go's reader does:
+`TaggedUpdate` is yielded as it arrives, and one without an update is a
+`ProtocolError` (`astral-go/api/services/client/services.go:176`).
 
 **The stream has one `eos`, and it ends the initial attempt.** Before it come the
 offering views -- `services.update`, one complete offering, `available` false
@@ -67,12 +97,14 @@ when the provider offers nothing -- and `services.removed`, the offerings of a
 lost provider. `services.incomplete` precedes the `eos` when some initial work
 did not resolve; a bare `eos` means the initial attempt completed. Without
 `follow` the channel closes after the `eos`; with `follow` it carries later views
-and removals (`astrald/mod/services/src/op_discover.go:34`,
-`astrald/mod/services/src/op_discover.go:36`). The node gives the initial attempt
+and removals (`astrald/mod/services/src/op_discover.go:39`,
+`astrald/mod/services/src/op_discover.go:41`). The node gives the initial attempt
 5 s (`astrald/mod/services/src/coordinator/coordinator.go:45`). This module turns
 the `eos` into an `InitialOutcome` event, so a reader never sees the separator:
 `complete` true for a bare `eos`, false with the incomplete service names
-otherwise. A one-shot stream that ends before its `eos` and a follow stream that
+otherwise. A `services.not_granted` is yielded as the `NotGranted` it is, before
+the first view, as astral-go's reader makes it an event
+(`astral-go/api/services/client/services.go:181`). A one-shot stream that ends before its `eos` and a follow stream that
 ends at all are `ProtocolError`, as `ErrStreamEnded` is in astral-go
 (`astral-go/api/services/client/services.go:17`).
 
@@ -90,13 +122,17 @@ fields. `Info` is a full `bundle` decoded through the registry (R-13), settled b
 `objects.echo?strict=true` round-tripping a populated update byte for byte. The
 type name carries **no `mod.` prefix** -- astral-go's `Update.ObjectType()`
 returns `services.update` (`astral-go/api/services/update.go:19`) -- and so do
-`ask`, `answer`, `change`, `incomplete`, `removed`, `offering_key` and
-`operations_list`. The three authorization types carry it:
-`mod.services.service_discovery_action`, `mod.services.discovery_scope`,
-`mod.services.discovery_rule`. Design section 5.1 rule 6 lists the exceptions.
+`ask`, `answer`, `change`, `incomplete`, `removed`, `offering_key`,
+`operations_list`, `not_granted` and `tagged_update`. The three authorization
+types carry it -- `mod.services.service_discovery_action`,
+`mod.services.discovery_scope`, `mod.services.discovery_rule` -- and so do the
+two private-list types, `mod.services.private_entry` and
+`mod.services.private_list`, the value the node keeps at the tree path
+`/mod/services/private`. Design section 5.1 rule 6 lists the exceptions.
 
-Every type here round-trips the bytes astral-go `221ce52` writes for it,
-`tests/test_api_services.py` `GoWireTest` holds those bytes.
+Every type here round-trips the bytes astral-go writes for it:
+`tests/test_api_services.py` `GoWireTest` holds those bytes, from astral-go
+`221ce52` and, for the four types astral-go #176 added, from `1ec701ca`.
 
 `Services(client)` constructs the module client, and `client.services` is the
 property design section 5.1 gives every module. Registration does not wait on
@@ -143,17 +179,22 @@ __all__ = [
     "InitialOutcome",
     "MAX_NAMES",
     "MAX_NAME_LEN",
+    "NotGranted",
     "OP_ADVERTISE",
     "OP_DISCOVER",
     "OfferingHandler",
     "OfferingKey",
     "OperationsList",
+    "PRIVATE_LIST_PATH",
+    "PrivateEntry",
+    "PrivateList",
     "REACH_LOCAL",
     "REACH_SWARM",
     "Removed",
     "SERVICES_TYPES",
     "ServiceDiscoveryAction",
     "Services",
+    "TaggedUpdate",
     "Update",
     "Watcher",
     "join_names",
@@ -181,6 +222,10 @@ REACH_LOCAL: Final = "local"
 """Discover the providers the queried node hosts. The node's default
 (`astral-go/api/services/reach.go:11`)."""
 
+PRIVATE_LIST_PATH: Final = "/mod/services/private"
+"""The tree path of the node's `mod.services.private_list`
+(`astral-go/api/services/private_list.go:10`)."""
+
 REACH_SWARM: Final = "swarm"
 """Also carry the discovery to every member of the node's local swarm, in the
 caller's name (`astral-go/api/services/reach.go:14`)."""
@@ -191,6 +236,7 @@ caller's name (`astral-go/api/services/reach.go:14`)."""
 # strings `services` and `reach`, `bool` for `follow`.
 _ADVERTISE: Final[dict[str, Spec]] = {
     "services": Primitive("string8"),
+    "open": Primitive("bool"),
 }
 _DISCOVER: Final[dict[str, Spec]] = {
     "services": Primitive("string8"),
@@ -317,6 +363,60 @@ class Incomplete:
     services: list[str] = wire("Services", Slice("string8"))
 
 
+@record("services.not_granted")
+class NotGranted:
+    """Opens a discovery stream that names services when the caller holds no
+    discovery permit for some of them on at least one contributing node.
+    Private offerings of those services there are filtered; open ones still
+    arrive (`astral-go/api/services/not_granted.go:9`)."""
+
+    services: list[str] = wire("Services", Slice("string8"))
+
+
+@record("services.tagged_update")
+class TaggedUpdate:
+    """An offering a swarm member sends to the node carrying a discovery that
+    asked for tags. `open` is the provider's effective visibility on the
+    member; the carrying node filters by it and forwards only `update`
+    (`astral-go/api/services/tagged_update.go:9`)."""
+
+    open: bool = wire("Open", Primitive("bool"))  # noqa: A003 -- the Go field
+    update: Update | None = wire("Update", Ptr("services.update"))
+
+
+@record("mod.services.private_entry")
+class PrivateEntry:
+    """Covers the bindings of `provider_id` that advertise `service`. An
+    absent or zero `provider_id` covers every provider of `service` on the
+    node (`astral-go/api/services/private_list.go:12`)."""
+
+    service: str = wire("Service", Primitive("string8"))
+    provider_id: Identity | None = wire("ProviderID", Ptr("identity"))
+
+    def covers(self, provider: Identity | None, service: str) -> bool:
+        """astral-go's `PrivateEntry.Covers`."""
+        if self.service != service:
+            return False
+        if self.provider_id is None or self.provider_id.is_zero:
+            return True
+        return provider is not None and self.provider_id == provider
+
+
+@record("mod.services.private_list")
+class PrivateList:
+    """The node's list of providers the user made private. An entry only makes
+    a binding private; nothing in the list makes one open
+    (`astral-go/api/services/private_list.go:40`)."""
+
+    entries: list[PrivateEntry | None] = wire(
+        "Entries", Slice("mod.services.private_entry")
+    )
+
+    def covers(self, provider: Identity | None, service: str) -> bool:
+        """astral-go's `PrivateList.Covers`."""
+        return any(e.covers(provider, service) for e in self.entries if e is not None)
+
+
 @record("services.offering_key")
 class OfferingKey:
     """One offering's identity: a provider and a service name."""
@@ -415,9 +515,10 @@ class InitialOutcome:
     incomplete: tuple[str, ...] = ()
 
 
-DiscoveryEvent = Union[Update, Removed, InitialOutcome]
-"""One item of a discovery: an offering view, a removal, or the initial
-outcome."""
+DiscoveryEvent = Union[NotGranted, Update, TaggedUpdate, Removed, InitialOutcome]
+"""One item of a discovery: the services not granted, an offering view, a
+tagged view, a removal, or the initial outcome. astral-go's `Event`
+(`astral-go/api/services/client/services.go:42`)."""
 
 
 async def _events(stream: Stream, *, follow: bool) -> AsyncIterator[Any]:
@@ -451,11 +552,15 @@ async def _events(stream: Stream, *, follow: bool) -> AsyncIterator[Any]:
     raise ProtocolError(f"{stream.query_string}: the discovery stream ended")
 
 
-def _view(obj: Any) -> Update | Removed:
-    if isinstance(obj, (Update, Removed)):
+def _view(obj: Any) -> NotGranted | Update | TaggedUpdate | Removed:
+    """astral-go's `discoveryReader.read` for everything but the separator."""
+    if isinstance(obj, (NotGranted, Update, Removed)):
+        return obj
+    if isinstance(obj, TaggedUpdate) and obj.update is not None:
         return obj
     raise ProtocolError(
-        f"{OP_DISCOVER}: expected 'services.update' or 'services.removed', got "
+        f"{OP_DISCOVER}: expected 'services.not_granted', 'services.update', "
+        "'services.tagged_update' or 'services.removed', got "
         f"{getattr(obj, 'ASTRAL_TYPE', type(obj).__name__)!r}"
     )
 
@@ -463,8 +568,9 @@ def _view(obj: Any) -> Update | Removed:
 class DiscoveryStream:
     """`async with services.discover_follow(names) as events:` -- ST+follow.
 
-    `async for event in events` yields `Update`, `Removed` and one
-    `InitialOutcome`, and continues until the caller leaves the block. A stream
+    `async for event in events` yields `NotGranted` when the node sends one,
+    `Update`, `TaggedUpdate`, `Removed` and one `InitialOutcome`, and continues
+    until the caller leaves the block. A stream
     the node ends is a `ProtocolError`, because a followed discovery never ends
     on its own. Nothing is routed on construction.
 
@@ -510,7 +616,8 @@ class Watcher:
 
     Follows a discovery and keeps the available offerings, keyed by provider and
     name: an `Update` with `available` true sets one, with `available` false
-    deletes it, and a `Removed` deletes the offerings it names. astral-go's
+    deletes it, a `TaggedUpdate` does the same with its update, and a `Removed`
+    deletes the offerings it names. A `NotGranted` sets `not_granted()`. astral-go's
     `Watcher` (`api/services/client/watch.go` at astral-go `1ec701ca`). It has no
     reconnect policy: once `done` is set, the app starts a new one.
 
@@ -520,6 +627,7 @@ class Watcher:
     __slots__ = (
         "_discovery",
         "_offerings",
+        "_ungranted",
         "_initial",
         "_changed",
         "_done",
@@ -530,6 +638,7 @@ class Watcher:
     def __init__(self, discovery: DiscoveryStream) -> None:
         self._discovery = discovery
         self._offerings: dict[tuple[str, str], Update] = {}
+        self._ungranted: tuple[str, ...] = ()
         self._initial: asyncio.Future[InitialOutcome] | None = None
         self._changed = asyncio.Event()
         self._done = asyncio.Event()
@@ -579,10 +688,14 @@ class Watcher:
             if self._initial is not None and not self._initial.done():
                 self._initial.set_result(event)
             return
-        if isinstance(event, Update):
-            key = (_key_text(event.provider_id), event.name)
-            if event.available:
-                self._offerings[key] = event
+        if isinstance(event, NotGranted):
+            self._ungranted = tuple(event.services)
+        elif isinstance(event, (Update, TaggedUpdate)):
+            update = event.update if isinstance(event, TaggedUpdate) else event
+            assert update is not None  # `_view` refuses a tagged update without one
+            key = (_key_text(update.provider_id), update.name)
+            if update.available:
+                self._offerings[key] = update
             else:
                 self._offerings.pop(key, None)
         else:
@@ -594,6 +707,12 @@ class Watcher:
     def offerings(self) -> list[Update]:
         """The available offerings, ordered by provider and name."""
         return [self._offerings[k] for k in sorted(self._offerings)]
+
+    def not_granted(self) -> tuple[str, ...]:
+        """The watched services the caller holds no discovery permit for on
+        some contributing node. Their private offerings there are filtered; an
+        app can ask for a grant to see them. astral-go's `Watcher.NotGranted`."""
+        return self._ungranted
 
     async def initial(self) -> InitialOutcome:
         """The outcome of the initial attempt, once it arrived. Raises the
@@ -664,6 +783,7 @@ class Binding:
         "_services",
         "_names",
         "_handler",
+        "_public",
         "_kw",
         "_stream",
         "_reader",
@@ -676,11 +796,13 @@ class Binding:
         services: Services,
         names: tuple[str, ...],
         handler: OfferingHandler,
+        open_: bool,
         kw: dict[str, Any],
     ) -> None:
         self._services = services
         self._names = names
         self._handler = handler
+        self._public = open_
         self._kw = kw
         self._stream: Stream | None = None
         self._reader: asyncio.Task[None] | None = None
@@ -691,6 +813,11 @@ class Binding:
     def names(self) -> tuple[str, ...]:
         """The service names this binding advertises."""
         return self._names
+
+    @property
+    def open(self) -> bool:  # noqa: A003 -- astral-go's word
+        """False for a private binding, found only by permitted callers."""
+        return self._public
 
     @property
     def done(self) -> bool:
@@ -706,9 +833,12 @@ class Binding:
         client = self._services.client
         timeout = kw.pop("timeout", client.query_timeout)
         kw.setdefault("persistent", True)
-        qs = querystring.build(
-            OP_ADVERTISE, _encode(_ADVERTISE, {"services": ",".join(self._names)})
-        )
+        params: dict[str, Any] = {"services": ",".join(self._names)}
+        if not self._public:
+            # astral-go sends `open` only when false, so an open binding keeps
+            # the node's default (`astral-go/api/services/client/advertise.go:42`).
+            params["open"] = False
+        qs = querystring.build(OP_ADVERTISE, _encode(_ADVERTISE, params))
         stream = await client.query(qs, timeout=timeout, **kw)
         try:
             answer = await stream.first(timeout=timeout)
@@ -829,14 +959,22 @@ class Services(ModuleClient):
     __slots__ = ()
 
     def advertise(
-        self, names: Sequence[str], handler: OfferingHandler, **kw: Any
+        self,
+        names: Sequence[str],
+        handler: OfferingHandler,
+        *,
+        open: bool = True,  # noqa: A002 -- astral-go's `AdvertiseOpen` names it so
+        **kw: Any,
     ) -> Binding:
         """`async with s.advertise(names, handler) as binding:` -- BD, held open.
 
         Binds `names` with this client's caller as the provider, for as long as
         the `async with` block runs, and answers every ask with
-        `handler(caller, service)`. The list is validated here, so a bad name is
-        refused before it spends one of the node's workers.
+        `handler(caller, service)`. `open=False` binds a private provider,
+        found only by callers holding a discovery permit for it; astral-go's
+        `Advertise` and `AdvertiseOpen` (`api/services/client/advertise.go`).
+        The list is validated here, so a bad name is refused before it spends
+        one of the node's workers.
         """
         joined = join_names(names)
         if not callable(handler):
@@ -844,15 +982,26 @@ class Services(ModuleClient):
                 f"{OP_ADVERTISE}: handler must be callable, got "
                 f"{type(handler).__name__}"
             )
-        return Binding(self, tuple(joined.split(",")), handler, kw)
+        if not isinstance(open, bool):
+            raise BadArgumentType(
+                f"{OP_ADVERTISE}: open must be a bool, got {type(open).__name__}"
+            )
+        return Binding(self, tuple(joined.split(",")), handler, open, kw)
 
     async def discover(
-        self, names: Sequence[str], *, reach: str | None = None, **kw: Any
+        self,
+        names: Sequence[str] | None = None,
+        *,
+        reach: str | None = None,
+        **kw: Any,
     ) -> list[Any]:
         """The initial attempt of one discovery. ST, ends at its `eos`.
 
-        Every event in arrival order -- `Update` and `Removed` -- and an
-        `InitialOutcome` last. `timeout` bounds the route and the whole read;
+        Every event in arrival order -- `NotGranted` first when the node sends
+        one, then `Update`, `TaggedUpdate` and `Removed` -- and an
+        `InitialOutcome` last. No `names`, `None` or empty, discovers every
+        service the node's providers advertise, as astral-go's `Discover` with
+        no names does. `timeout` bounds the route and the whole read;
         the node spends at most 5 s on the attempt. `reach` is `REACH_LOCAL`, the
         node's default when absent, or `REACH_SWARM`.
         """
@@ -873,7 +1022,9 @@ class Services(ModuleClient):
         """`async with s.discover_follow(names) as events:` -- ST+follow.
 
         The initial attempt's events, its `InitialOutcome`, then later views and
-        removals until the caller leaves the block. `Client.follow` supplies the
+        removals until the caller leaves the block. A follow names at least one
+        service: no names raises `BadArgument`, as astral-go's
+        `ErrFollowWithoutNames` refuses it before a query leaves. `Client.follow` supplies the
         pairing this mode needs -- `persistent=True` and `timeout=None` -- and a
         caller may override either.
         """
@@ -892,14 +1043,25 @@ class Services(ModuleClient):
 # --- query construction --------------------------------------------------
 
 
-def _discover_query(names: Sequence[str], *, follow: bool, reach: str | None) -> str:
+def _discover_query(
+    names: Sequence[str] | None, *, follow: bool, reach: str | None
+) -> str:
     """`services.discover?follow=…&services=…`, with `reach` only when named.
 
     `follow` is sent even when false, so the query string states the op shape
-    this call declares. `reach` is omitted when absent, which keeps the node's
-    default standing (design section 5.1 rule 5).
+    this call declares. `services` is omitted when no name is given, and a
+    follow without names is refused here, as astral-go's `discover` refuses it
+    (`astral-go/api/services/client/services.go:89`). `reach` is omitted when
+    absent, which keeps the node's default standing (design section 5.1 rule 5).
     """
-    params: dict[str, Any] = {"services": join_names(names), "follow": follow}
+    params: dict[str, Any] = {"follow": follow}
+    if names is not None and not isinstance(names, str) and len(names) == 0:
+        names = None
+    if names is None:
+        if follow:
+            raise BadArgument(f"{OP_DISCOVER}: follow requires service names")
+    else:
+        params["services"] = join_names(names)
     if reach is not None:
         if reach not in (REACH_LOCAL, REACH_SWARM):
             raise BadArgument(
@@ -921,10 +1083,14 @@ SERVICES_TYPES: Final[Sequence[type]] = (
     DiscoveryRule,
     DiscoveryScope,
     Incomplete,
+    NotGranted,
     OfferingKey,
     OperationsList,
+    PrivateEntry,
+    PrivateList,
     Removed,
     ServiceDiscoveryAction,
+    TaggedUpdate,
     Update,
 )
 """Every wire type this module declares, for a private-registry sweep."""

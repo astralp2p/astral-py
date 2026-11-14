@@ -18,10 +18,6 @@ those revisions and no older one, so a claim about an earlier astrald or
 astral-go has no place in this tree. astrald `e6d691c6` requires astral-go
 `1ec701ca` (`go.mod:7`).
 
-**One module is behind the pins: services** (design 11.12). astrald's provider
-visibility changes `services.discover` and `services.advertise`, and
-`astral.api.services` and its citations are not re-read at `e6d691c6`.
-
 **Every type is read at the pins.** `mod.objects.repository_info`'s `Kind`,
 `Children` and `Concurrent` were the one exception: they arrived in astrald
 `c520482e`, hours after the previous astrald pin `d5bb0bbd` was cut, so no

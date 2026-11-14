@@ -1864,7 +1864,7 @@ astral-go declares them with `ErrIntroduceSelf` (`api/user/module.go:20-21`,
 against `MockApphost` only. 11.8's and 11.9's live verifications stand as records of
 astrald `5b4dde12`.
 
-## 11.12 Section 11.11 — the pins reach the VFS evaluator (AMENDED, partly implemented)
+## 11.12 Section 11.11 — the pins reach the VFS evaluator (AMENDED, implemented)
 
 The pins move to astrald `e6d691c6` and astral-go `1ec701ca`. astrald pull request #463
 (`a2a44f33`) moved astrald onto astral-go `1ec701ca`, whose `RegisterRequest` has five fields
@@ -1890,12 +1890,28 @@ network origin, and it has no client here. An active contract also requires
 from a non-loopback TCP peer carries the network origin
 (`mod/apphost/src/http_query_handler.go:110-142`).
 
-**Not done at this pin: the services module.** astrald's provider visibility (`2d09f7ee`,
-before `a2a44f33`) changes `services.discover` and `services.advertise`: a discovery opens
-with `services.not_granted` when the caller lacks a permit for a named service, and a binding
-can be private. `astral.api.services` reads `services.update`, `services.removed`,
-`services.incomplete` and `eos` alone, so it raises `ProtocolError` on a `services.not_granted`
-(inferred from `api/services.py` `_view` and astrald `mod/services/src/op_discover.go` at the
-pin; not run against a node). The services citations in `astral.api.services` and
-`astral.api.tree` are not re-read at this pin, and `test_api_services.CitationTest` and
-`test_api_tree.CitationTest` fail on eight of them.
+**Amendment: `astral.api.services` follows provider visibility.** astrald `2d09f7ee`, before
+`a2a44f33`, makes permits decide what a discovery's caller sees instead of refusing the caller
+(`mod/services/src/op_discover.go:119-120`, `mod/services/src/visibility.go:14-55`). The module
+mirrors astral-go `1ec701ca`'s services client (`api/services/client/*.go`), which is the
+authority here:
+
+- `services.not_granted`, `services.tagged_update`, `mod.services.private_entry` and
+  `mod.services.private_list` are declared, each pinned against astral-go `1ec701ca`'s bytes,
+  ObjectID and blueprint.
+- The discovery reader yields `NotGranted` and `TaggedUpdate` as events, and a tagged update
+  without an update is a `ProtocolError`, as astral-go's `discoveryReader.read` returns
+  `ErrUnexpectedObject` (`api/services/client/services.go:171-200`). `Watcher.not_granted()`
+  is astral-go's `Watcher.NotGranted`, and the watcher applies a tagged update's update.
+- `discover()` with no names discovers every advertised service; a follow without names raises
+  `BadArgument`, astral-go's `ErrFollowWithoutNames` (`api/services/client/services.go:88-98`).
+- `advertise(open=False)` sends `open=false` and an open binding omits it
+  (`api/services/client/advertise.go:32-44`).
+
+astral-go's `DiscoverFor` and `DiscoverForTagged` send `for`, which the node accepts only over
+a link (`mod/services/src/op_discover.go:171-174`), and this module declares neither, as it
+declared no `DiscoverFor` before. astral-go's `Provider` retry wrapper has no counterpart here.
+A caller that is the node is no longer refused `not permitted to discover`: it receives a
+`services.not_granted` naming the service (inferred from `mod/services/src/visibility.go:40-42,
+88-102`; the Tier C test that states it skips without `ASTRAL_TEST_ENDPOINT`, and no run
+set it).
