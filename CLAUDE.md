@@ -11,12 +11,12 @@ amendments that supersede the sections they name. **Section 11.4 is deferred**:
 the wire core's `Any`/nil behaviour stays as it is.
 
 Authorities, in precedence order: the live node, astral-go
-(`../astral-go/main` @ `4a3e111c`, the merge of astral-go pull request #175,
-which adds `api/sys`), astrald (`a7c773d6`, the merge of astrald pull request
-#383, which adds `mod/sys`), astral-docs. The SDK supports the node at those
-revisions and no older one, so a claim about an earlier astrald or astral-go
-has no place in this tree. astrald `a7c773d6` requires astral-go `4a3e111c`
-(`go.mod:7`).
+(`../astral-go/main` @ `1ec701ca`, the merge of astral-go pull request #180,
+which adds `Vfs` and `Evaluator` to `mod.apphost.register_request`), astrald
+(`e6d691c6`, master at the bump), astral-docs. The SDK supports the node at
+those revisions and no older one, so a claim about an earlier astrald or
+astral-go has no place in this tree. astrald `e6d691c6` requires astral-go
+`1ec701ca` (`go.mod:7`).
 
 **Every type is read at the pins.** `mod.objects.repository_info`'s `Kind`,
 `Children` and `Concurrent` were the one exception: they arrived in astrald

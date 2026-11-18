@@ -2694,7 +2694,7 @@ class CitationTest(unittest.TestCase):
         (
             reference.ASTRALD,
             "mod/objects/src/module.go",
-            185,
+            197,
             "probe.ObjectID = r.ID()",
         ),
         (
@@ -2709,10 +2709,10 @@ class CitationTest(unittest.TestCase):
             170,
             "ctx = ctx.WithZone(msg.Zone)",
         ),
-        (reference.ASTRALD, "mod/objects/src/op_describe.go", 43, "ctx = ctx.LimitZone(*args.Zone)"),
-        (reference.ASTRALD, "mod/objects/src/op_find.go", 35, "ctx = ctx.LimitZone(*args.Zone)"),
+        (reference.ASTRALD, "mod/objects/src/op_describe.go", 42, "ctx = ctx.LimitZone(*args.Zone)"),
+        (reference.ASTRALD, "mod/objects/src/op_find.go", 34, "ctx = ctx.LimitZone(*args.Zone)"),
         (reference.ASTRALD, "mod/objects/src/op_search.go", 44, "ctx = ctx.LimitZone(*args.Zone)"),
-        (reference.ASTRALD, "mod/objects/src/op_read.go", 37, "ctx = ctx.LimitZone(*args.Zone)"),
+        (reference.ASTRALD, "mod/objects/src/op_read.go", 35, "ctx = ctx.LimitZone(*args.Zone)"),
         # The repository_info group fields, readable at the pins since the
         # astral-go pin moved onto 02ba1c1. They were the one type this tree
         # read past the pins, on a byte corpus rather than a citation.

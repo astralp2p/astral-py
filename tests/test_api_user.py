@@ -1445,7 +1445,7 @@ class ListSiblingsOpTest(UserCase):
     @bounded()
     async def test_a_zone_goes_to_the_op_argument_and_to_the_routing_zone(self):
         """One scope, two levers, as `Objects` does it. The op's own argument is
-        inert on astrald `a7c773d6` -- the context it builds is never used --
+        inert on astrald `e6d691c6` -- the context it builds is never used --
         and the routing zone is not, so sending only one of them is wrong
         whichever one it is."""
         api = await self.serving(
@@ -1629,7 +1629,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_sends_the_identity_alone(self):
-        """`start` is undeclared on astrald `a7c773d6`, and the node reads the
+        """`start` is undeclared on astrald `e6d691c6`, and the node reads the
         height out of its own tree."""
         query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
@@ -1639,7 +1639,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_accepts_no_start_keyword(self):
-        """`start` is undeclared on astrald `a7c773d6`, so naming one is a
+        """`start` is undeclared on astrald `e6d691c6`, so naming one is a
         `TypeError` and nothing reaches the node."""
         api = await self.serving({OP_SYNC_WITH: Accept(objects=[ACK_FRAME])})
         with self.assertRaises(TypeError):
@@ -2421,7 +2421,7 @@ class LiveUserTest(live_support.LiveCase):
     the probe. On a node that is not claimed every swarm read is refused, and
     the assertions there are the refusals rather than the answers: the
     apphost gate denies a query to the node that the state's list does not
-    name (`mod/apphost/src/gate.go:30` at astrald `a7c773d6`), which arrives as
+    name (`mod/apphost/src/gate.go:30` at astrald `e6d691c6`), which arrives as
     `Denied`, and a gate configured to admit the read leaves the refusal to
     astrald's swarm authorizers, which refuse without an active contract.
     """
@@ -2454,7 +2454,7 @@ class LiveUserTest(live_support.LiveCase):
     async def require_claimed(self, client: astral.Client) -> None:
         """Skip unless the node is claimed: the default gate names none of the
         reads below for a fresh or unclaimed node
-        (`mod/apphost/src/config.go:81-96` at astrald `a7c773d6`)."""
+        (`mod/apphost/src/config.go:88-103` at astrald `e6d691c6`)."""
         if await self.unclaimed(client):
             self.skipTest("the node is not claimed, and the default gate denies this op")
 
@@ -2715,14 +2715,14 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/op_bootstrap.go", 177): "mod.Auth.IsNodeClaim(ctx, caller, contract)",
         ("mod/user/src/op_bootstrap.go", 196): "mayClaim reports whether caller may claim",
         ("mod/user/src/op_bootstrap.go", 204): "}",
-        ("mod/apphost/src/config.go", 74): "Tokenless: []string{",
-        ("mod/apphost/src/config.go", 79): "},",
-        ("mod/apphost/src/config.go", 81): "Fresh: []string{",
-        ("mod/apphost/src/config.go", 85): "},",
-        ("mod/apphost/src/config.go", 89): '"user.derive_identity"',
-        ("mod/apphost/src/config.go", 90): '"user.bootstrap"',
-        ("mod/apphost/src/config.go", 91): '"user.join"',
-        ("mod/apphost/src/config.go", 97): "Claimed: []string{gateAny}",
+        ("mod/apphost/src/config.go", 81): "Tokenless: []string{",
+        ("mod/apphost/src/config.go", 86): "},",
+        ("mod/apphost/src/config.go", 88): "Fresh: []string{",
+        ("mod/apphost/src/config.go", 92): "},",
+        ("mod/apphost/src/config.go", 96): '"user.derive_identity"',
+        ("mod/apphost/src/config.go", 97): '"user.bootstrap"',
+        ("mod/apphost/src/config.go", 98): '"user.join"',
+        ("mod/apphost/src/config.go", 104): "Claimed: []string{gateAny}",
         ("mod/user/src/op_introduce.go", 38): "func (mod *Module) OpIntroduce(",
         ("mod/user/src/op_introduce.go", 42): "q.Origin() == astral.OriginNetwork",
         ("mod/user/src/op_introduce.go", 59): "nodeID.IsEqual(mod.node.Identity()) || nodeID.IsEqual(ac.Issuer)",

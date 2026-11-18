@@ -18,7 +18,7 @@ a per-op contract and is not discoverable from the wire):
 | `auth.set_authorizer` | RR | `ack` \\| `error_message` | **mutates** |
 | `auth.sign_contract` | WA | `mod.auth.signed_contract` \\| `error_message`, one per input | privileged, no state written |
 
-The four are the module's client surface. astrald `a7c773d6`'s
+The four are the module's client surface. astrald `e6d691c6`'s
 `mod/auth/src` declares an `Op` method for each of the four and no other, and
 astral-go's `api/auth/module.go` declares one op-name constant for each of the
 four.
@@ -60,9 +60,9 @@ one half at a time through `user.accept_membership`, not here.
 **`auth.sign_contract` signs only for a caller entitled to both parties.** The
 op accepts the query and answers one whose origin is neither local nor empty, a
 link's and MCP's included, with an `error_message` reading `origin not allowed:
-<origin>` (`astrald/mod/auth/src/op_sign_contract.go:24-33`,
+<origin>` (`astrald/mod/auth/src/op_sign_contract.go:23-32`,
 `astral-go/astral/errors.go` `NewErrOriginNotAllowed`). It authorizes each
-contract before any key is touched (`op_sign_contract.go:38`): the caller passes
+contract before any key is touched (`op_sign_contract.go:37`): the caller passes
 crypto's signer rule for the issuer, then for the subject
 (`astrald/mod/auth/src/sign_contract_guard.go` `authorizeParties`). The rule is
 `AuthorizeSigner`'s (`astrald/mod/crypto/src/sign_guard.go`): sign as itself, or
@@ -79,7 +79,7 @@ EOF, answers one
 `mod.auth.signed_contract` or `error_message` per input in input order, and
 **mirrors the input stream's terminator** -- an explicit `eos` is answered with a
 final `eos`, a stream ended by EOF is not (`astral/channel/batch.go` at astral-go
-`4a3e111c`). A body-input op whose reader omits an `eos` branch answers the same
+`1ec701ca`). A body-input op whose reader omits an `eos` branch answers the same
 terminator with an `error_message`
 (`astral-go/astral/channel/switch.go:110`), so the terminator is a per-op
 contract rather than a protocol rule.
@@ -113,12 +113,12 @@ promotes anonymous fields. The nesting is astral-go's rule; the flattening is
 Go's default showing through a gap.
 
 **`auth.Action` is a registered astral object at the pin.**
-`api/auth/action.go` at astral-go `4a3e111c` declares
+`api/auth/action.go` at astral-go `1ec701ca` declares
 `func (Action) ObjectType() string { return "mod.auth.action" }` (line 22) and
 registers it with `astral.MustAdd(&Action{})` (line 61).
 
 That changes what astral-go can derive. `specFromType` probes `tryObjectType`
-ahead of its container dispatch (`astral/blueprint_reflect.go` at `4a3e111c`), so
+ahead of its container dispatch (`astral/blueprint_reflect.go` at `1ec701ca`), so
 an embedded `auth.Action` field now yields a `RefSpec` naming
 `mod.auth.action` rather than failing.
 
@@ -135,7 +135,7 @@ would nest the two fields in JSON under a key no node sends.
 **`mod.auth.sudo_action` exists, and astral-go's `api/auth` declares it.**
 astral-go `5923624` declares `SudoAction` in `api/auth/sudo_action.go` and
 registers it with `astral.Add`; astrald `09d9df87` stopped declaring it. The
-pins (astral-go `4a3e111c`, astrald `a7c773d6`) carry both commits, so
+pins (astral-go `1ec701ca`, astrald `e6d691c6`) carry both commits, so
 `api/auth/sudo_action.go` is the one declaration and `mod/auth/sudo_action.go`
 does not exist there. A node answers `objects.new?type=mod.auth.sudo_action`
 with a ten-byte zero instance, verified on an isolated astrald built from
@@ -146,7 +146,7 @@ does not hold at the pin. The type is `{Action, AsID *identity}`, and
 astrald's authorizer for it is `Actor().IsEqual(AsID)`
 (`astrald/mod/auth/src/authorizers.go`), i.e. it grants nothing that is not
 already the caller. It is **not declared here**: no op sends one. astrald
-`a7c773d6` builds one only to ask its authorizer (`mod/apphost/src/guest.go`,
+`e6d691c6` builds one only to ask its authorizer (`mod/apphost/src/guest.go`,
 `mod/crypto/src/sign_guard.go`, `mod/shell/src/op_shell.go`).
 
 **`mod.crypto.signature` is declared by `astral.api.crypto`, not here.** Both
@@ -157,10 +157,13 @@ too; one carrying a signature raises `StreamCorrupted` naming the unregistered
 type until that module is imported. Importing `astral.api` imports both.
 
 **A contract's validity window is one field wide.** astrald's active-contract
-query is `starts_at <= now AND expires_at > now`
-(`astrald/mod/auth/src/db.go`), and `storeSignedContract` never assigns
+query is `starts_at <= now AND expires_at > now AND withdrawn_at IS NULL`
+(`astrald/mod/auth/src/db.go:16-21`), and `storeSignedContract` never assigns
 `starts_at`, so the lower bound is the Go zero time and always passes.
-`ExpiresAt` is the whole of the window, and `Contract.expired` reads it.
+`ExpiresAt` is the whole of the window the contract carries, and
+`Contract.expired` reads it. `withdrawn_at` is the node's own mark, set by
+`apphost.withdraw_relay` (`astrald/mod/auth/src/db.go:67-84`), and no object
+carries it.
 
 **The zero contract carries a timestamp astral-go cannot round-trip.**
 `astral.Time.WriteTo` writes `UnixNano()` and `ReadFrom` reads
@@ -338,7 +341,7 @@ class Contract:
     def expired(self) -> bool:
         """Whether `expires_at` has passed.
 
-        astrald's active-contract query is `expires_at > now`, so an expired
+        astrald's active-contract query requires `expires_at > now`, so an expired
         contract is inert rather than invalid: it stays in the index, verifies
         as before, and authorizes nothing.
         """

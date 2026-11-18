@@ -42,9 +42,9 @@ separator this op never sends.
 The row is right about its other two members and wrong only about this one:
 `services.discover?follow=true` sends one `eos` that ends the initial attempt
 and keeps the channel open for later views and removals
-(`astrald/mod/services/src/op_discover.go:34`,
-`astrald/mod/services/src/op_discover.go:36`, sent at
-`astrald/mod/services/src/op_discover.go:199`). ST+follow is therefore a real
+(`astrald/mod/services/src/op_discover.go:39`,
+`astrald/mod/services/src/op_discover.go:41`, sent at
+`astrald/mod/services/src/op_discover.go:260`). ST+follow is therefore a real
 mode with a real member, and `tree.get` is not in it.
 
 **A node with no value answers `nil`, not `mod.tree.err_no_value`.** astrald
@@ -106,7 +106,7 @@ Source citations name a single line each, and every one of them is read back by
 `tests/test_api_tree.py`. astrald and astral-go are moving targets, and a
 citation that has drifted by two lines costs a reader more than an absent one:
 it makes them distrust the exact ones. Line numbers are pinned to astral-go
-`4a3e111c` and astrald `a7c773d6`, the revisions `tests/reference.py` pins, and
+`1ec701ca` and astrald `e6d691c6`, the revisions `tests/reference.py` pins, and
 no citation names another revision.
 """
 
@@ -404,7 +404,7 @@ class Tree(ModuleClient):
         """Delete the node at a path. RR, one `ack`. **Mutates.**
 
         A node with subnodes cannot be deleted on its own: astrald answers `node
-        has subnodes` (`astrald/mod/tree/src/module.go:204`). `recursive=True`
+        has subnodes` (`astrald/mod/tree/src/module.go:224`). `recursive=True`
         descends the subtree depth-first and deletes from the leaves up
         (`astral-go/api/tree/client/server.go:163`), and it descends **through
         mounts**, where every step reaches the mounted implementation.

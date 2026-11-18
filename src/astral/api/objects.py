@@ -121,9 +121,9 @@ string, sends no zone the caller did not ask for, and sends the `eos`.
 Eight ops declare a `zone` query-string argument. astrald sets the op's context
 zone from `route_query_msg.Zone` (`mod/apphost/src/guest.go:170`), and then
 `describe`, `find`, `search` and `read` *narrow* it with `LimitZone` when the
-argument is present (`mod/objects/src/op_describe.go:43`,
-`mod/objects/src/op_find.go:35`, `mod/objects/src/op_search.go:44`,
-`mod/objects/src/op_read.go:37`) while `scan`, `delete`, `purge` and `load`
+argument is present (`mod/objects/src/op_describe.go:42`,
+`mod/objects/src/op_find.go:34`, `mod/objects/src/op_search.go:44`,
+`mod/objects/src/op_read.go:35`) while `scan`, `delete`, `purge` and `load`
 *replace* it with `WithZone` -- defaulting to `ZoneAll` when the argument is
 absent. So on those last four a routing zone the caller set is silently
 discarded. This module therefore takes one
@@ -418,7 +418,7 @@ class Probe:
     field rather than that the probe failed. Sourced: astral-go
     `api/objects/probe.go:17` at the pin, `ObjectID *astral.ObjectID`, whose
     comment at `probe.go:15-16` gives nil that meaning; astrald sets it on every
-    successful probe (`mod/objects/src/module.go:185`, `probe.ObjectID =
+    successful probe (`mod/objects/src/module.go:197`, `probe.ObjectID =
     r.ID()`, unconditional on the success path).
 
     The field is appended, so it is a compatibility break in both directions:

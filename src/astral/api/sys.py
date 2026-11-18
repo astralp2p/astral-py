@@ -10,8 +10,8 @@ client below.
 ## Where the citations point
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `a7c773d6` and astral-go `4a3e111c`**, the merges that brought
-`mod/sys` and `api/sys` (`tests/test_api_sys.py`, `CitationTest`). The protocol
+pins, astrald `e6d691c6` and astral-go `1ec701ca`**, which carry `mod/sys`
+and `api/sys` (`tests/test_api_sys.py`, `CitationTest`). The protocol
 text is astral-docs `protocols/sys/`.
 
 ## The appointment
@@ -47,7 +47,7 @@ manager is appointed or a user owned the node before; else fresh
 
 **The gate.** The default gate lists `sys.register_manager` on
 `gate.tokenless` and on `gate.states.fresh`
-(`mod/apphost/src/config.go:77,83`). So a fresh node admits the op to a
+(`mod/apphost/src/config.go:84,90`). So a fresh node admits the op to a
 session with a token or without, an unclaimed node's list does not name it and
 denies it, and a claimed node's `*` admits it and the op answers
 `node is not fresh`.
@@ -73,7 +73,7 @@ moved to `mod/sys` with its answers unchanged, so the captures stand for
 `sys.register_manager` by inference from the astrald diff; no node running the
 sys module was queried. The `mod.sys.*` vectors were produced by a Go program
 linked against astral-go branch `intern0/dev/sys-api`, which merged as
-`4a3e111c`; the test reads the two types' names and fields at that pin.
+`4a3e111c`, which the pin `1ec701ca` carries; the test reads the two types' names and fields at that pin.
 """
 
 from __future__ import annotations
@@ -154,7 +154,7 @@ class PolicyBinding:
     `policy` is one of `POLICY_NAMES`. `operation` is the op of the manager the
     node asks. `timeout` bounds one question as `policy.delegate`'s does: zero
     waits ten minutes (`api/policy/delegate.go:18-20` at astral-go
-    `4a3e111c`), and the node refuses a negative one or one above ten minutes
+    `1ec701ca`), and the node refuses a negative one or one above ten minutes
     (`validateManagerRequest`). The node stores the binding as a
     `policy.delegate` whose identity is the new manager
     (`bindManagerPolicies`, `mod/sys/src/op_register_manager.go:123-136`).
@@ -270,7 +270,7 @@ class Sys(ModuleClient):
 
         The default gate admits the op on a fresh node, to a session with a
         token or without, and denies it on an unclaimed node, which surfaces
-        as `Denied` (`mod/apphost/src/config.go:81-96`). Past
+        as `Denied` (`mod/apphost/src/config.go:88-103`). Past
         the gate the node accepts, then answers a network origin, an invalid
         permit, an unknown or repeated policy name, a binding with no
         operation, a timeout outside zero to ten minutes, a `user` policy on a

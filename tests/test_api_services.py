@@ -5,7 +5,8 @@ must agree:
 
 - **Tier A** pins the wire. Every v1 type round-trips bytes astral-go `3c849bf`
   wrote for it -- its own `WriteTo` and `ResolveObjectID`, run against the
-  astral-go checkout at that revision -- and `services.update` keeps the two
+  astral-go checkout at that revision; `GO_VISIBILITY_VECTORS` holds the four
+  types astral-go #176 added, written by astral-go `1ec701ca` -- and `services.update` keeps the two
   vectors the node itself produced: the zero value from
   `objects.new?type=services.update` and a populated update the node decoded and
   re-encoded through `objects.echo?strict=true` (R-13).
@@ -13,7 +14,8 @@ must agree:
   builds, the binding's ask/answer/change exchange, the discovery events and
   their initial outcome, and the watcher's offering set.
 - **Tier C** runs against a real node, read-only, as the node through
-  `ASTRAL_TEST_NODE_TOKEN`: the op surface, the two refusals the node meets, and every v1 type round-tripped through
+  `ASTRAL_TEST_NODE_TOKEN`: the op surface, the advertise refusal and the
+  not-granted notice the node meets, and every v1 type round-tripped through
   the node's own registry.
 """
 
@@ -43,11 +45,15 @@ from astral.api.services import (
     DiscoveryScope,
     Incomplete,
     InitialOutcome,
+    NotGranted,
     OfferingKey,
     OperationsList,
+    PrivateEntry,
+    PrivateList,
     Removed,
     ServiceDiscoveryAction,
     Services,
+    TaggedUpdate,
     Update,
     join_names,
     validate_name,
@@ -190,6 +196,60 @@ GO_VECTORS: tuple[tuple[object, str, str], ...] = (
     ),
 )
 
+# Bytes and ObjectIDs astral-go `1ec701ca` produced for the four visibility
+# types, from a Go program linked against it: each value built as the Go
+# struct literal it mirrors, then `WriteTo` and `ResolveObjectID`.
+GO_VISIBILITY_VECTORS: tuple[tuple[object, str, str], ...] = (
+    (
+        NotGranted(services=["bitcoin-wallet", "chat"]),
+        "00000002010e626974636f696e2d77616c6c6574010463686174",
+        "data1dg81tseictxtah8ba9mr45bm6j84dgs6mqujyhturt6zqrmcjn9uo",
+    ),
+    (
+        NotGranted(services=[]),
+        "00000000",
+        "data1b4gpg7x1ysosw4rgqp37je6u4xgdtku575m7uqkum679485kt34g9",
+    ),
+    (
+        TaggedUpdate(
+            open=False,
+            update=Update(available=True, name="chat", provider_id=G, info=None),
+        ),
+        "0001010463686174" "01" + G.key.hex() + "00",
+        "data1rpt9at3wn8yofc4zk8o8udfnkodpmdnmjgiqmcdf7xbtnhhwihctc",
+    ),
+    (
+        TaggedUpdate(open=False, update=None),
+        "0000",
+        "data1b5ymcyjmtf9r4se7saww6wgdygwp73gw43wxthnnbowzzgt9rs6en",
+    ),
+    (
+        PrivateEntry(service="chat", provider_id=G),
+        "0463686174" "01" + G.key.hex(),
+        "data1rpmtzswws84pd8mnwfuucuu4wqbgmphpigrrrrbqjk5k8xcbg4jg6",
+    ),
+    (
+        PrivateEntry(service="chat", provider_id=None),
+        "046368617400",
+        "data1nm1pwsytrwyjc96xu5e9oa5b87px7j1w3eeepca69ewmqyhdd7tz3",
+    ),
+    (
+        PrivateList(
+            entries=[
+                PrivateEntry(service="chat", provider_id=G),
+                PrivateEntry(service="files", provider_id=None),
+            ]
+        ),
+        "00000002010463686174" "01" + G.key.hex() + "010566696c657300",
+        "data1frt9b1n5ewoenxp6yked9omk9sgqk9m1szeu8dskcadx8d4dqawcz",
+    ),
+    (
+        PrivateList(entries=[]),
+        "00000000",
+        "data1nrgu4fe6mq9qja94kafy34r7443qewzk1mgpergk8ggn8c5ys6s3w",
+    ),
+)
+
 PROVIDER = FURRY_BOLT
 CHAT = Update(available=True, name="chat", provider_id=PROVIDER, info=OPS_INFO)
 FILES = Update(available=True, name="files", provider_id=PROVIDER, info=None)
@@ -220,29 +280,30 @@ class GoWireTest(unittest.TestCase):
     """Every v1 type against astral-go's own encoder."""
 
     def test_every_type_encodes_to_the_go_bytes(self):
-        for value, payload, _ in GO_VECTORS:
+        for value, payload, _ in GO_VECTORS + GO_VISIBILITY_VECTORS:
             with self.subTest(type=value.ASTRAL_TYPE):  # type: ignore[attr-defined]
                 self.assertEqual(payload_bytes(value).hex(), payload)
 
     def test_every_type_decodes_the_go_bytes(self):
-        for value, payload, _ in GO_VECTORS:
+        for value, payload, _ in GO_VECTORS + GO_VISIBILITY_VECTORS:
             with self.subTest(type=value.ASTRAL_TYPE):  # type: ignore[attr-defined]
                 got = type(value).read_payload(object_reader(bytes.fromhex(payload)))
                 self.assertEqual(got, value)
 
     def test_every_object_id_is_the_go_object_id(self):
-        for value, _, oid in GO_VECTORS:
+        for value, _, oid in GO_VECTORS + GO_VISIBILITY_VECTORS:
             with self.subTest(type=value.ASTRAL_TYPE):  # type: ignore[attr-defined]
                 self.assertEqual(str(object_id(value)), oid)
 
     def test_the_vectors_cover_every_declared_type(self):
         self.assertEqual(
-            {type(v) for v, _, _ in GO_VECTORS}, set(SERVICES_TYPES)
+            {type(v) for v, _, _ in GO_VECTORS + GO_VISIBILITY_VECTORS},
+            set(SERVICES_TYPES),
         )
 
     def test_the_type_names_are_astral_go_s(self):
-        """Eight carry no `mod.` prefix and the three authorization types do
-        (design section 5.1 rule 6)."""
+        """Ten carry no `mod.` prefix; the three authorization types and the
+        two private-list types do (design section 5.1 rule 6)."""
         self.assertEqual(
             {t.ASTRAL_TYPE for t in SERVICES_TYPES},  # type: ignore[attr-defined]
             {
@@ -254,6 +315,10 @@ class GoWireTest(unittest.TestCase):
                 "services.offering_key",
                 "services.removed",
                 "services.operations_list",
+                "services.not_granted",
+                "services.tagged_update",
+                "mod.services.private_entry",
+                "mod.services.private_list",
                 "mod.services.service_discovery_action",
                 "mod.services.discovery_scope",
                 "mod.services.discovery_rule",
@@ -286,6 +351,22 @@ class GoWireTest(unittest.TestCase):
             [("Offerings", Slice("services.offering_key"))],
         )
         self.assertEqual(
+            [(f.wire_name, f.spec) for f in NotGranted.FIELDS],
+            [("Services", Slice("string8"))],
+        )
+        self.assertEqual(
+            [(f.wire_name, f.spec) for f in TaggedUpdate.FIELDS],
+            [("Open", Primitive("bool")), ("Update", Ptr("services.update"))],
+        )
+        self.assertEqual(
+            [(f.wire_name, f.spec) for f in PrivateEntry.FIELDS],
+            [("Service", Primitive("string8")), ("ProviderID", Ptr("identity"))],
+        )
+        self.assertEqual(
+            [(f.wire_name, f.spec) for f in PrivateList.FIELDS],
+            [("Entries", Slice("mod.services.private_entry"))],
+        )
+        self.assertEqual(
             [(f.wire_name, f.spec) for f in ServiceDiscoveryAction.FIELDS],
             [
                 ("Nonce", Primitive("nonce64")),
@@ -294,6 +375,66 @@ class GoWireTest(unittest.TestCase):
                 ("NodeID", Ptr("identity")),
             ],
         )
+
+
+# `astral.BlueprintOf` of the four visibility types at astral-go `1ec701ca`,
+# `astral.blueprint` payloads in hex.
+GO_VISIBILITY_BLUEPRINTS = {
+    NotGranted: (
+        "001473657276696365732e6e6f745f6772616e7465640000000101000853657276696365"
+        "731b61737472616c2e626c75657072696e742e736c6963655f737065630007737472696e"
+        "67380000"
+    ),
+    TaggedUpdate: (
+        "001673657276696365732e7461676765645f757064617465000000020100044f70656e1f"
+        "61737472616c2e626c75657072696e742e7072696d69746976655f737065630004626f6f"
+        "6c0100065570646174651961737472616c2e626c75657072696e742e7074725f73706563"
+        "000f73657276696365732e7570646174650000"
+    ),
+    PrivateEntry: (
+        "001a6d6f642e73657276696365732e707269766174655f656e7472790000000201000753"
+        "6572766963651f61737472616c2e626c75657072696e742e7072696d69746976655f7370"
+        "65630007737472696e673801000a50726f766964657249441961737472616c2e626c7565"
+        "7072696e742e7074725f7370656300086964656e746974790000"
+    ),
+    PrivateList: (
+        "00196d6f642e73657276696365732e707269766174655f6c69737400000001010007456e"
+        "74726965731b61737472616c2e626c75657072696e742e736c6963655f73706563001a6d"
+        "6f642e73657276696365732e707269766174655f656e7472790000"
+    ),
+}
+
+
+class VisibilityTypesTest(unittest.TestCase):
+    """The four types astral-go #176 added, against astral-go `1ec701ca`."""
+
+    def test_every_field_declaration_matches_the_go_blueprint(self):
+        from astral.blueprint import spec_of
+        from astral.codec import decode
+
+        name = b"astral.blueprint"
+        for cls, payload in GO_VISIBILITY_BLUEPRINTS.items():
+            with self.subTest(type=cls.ASTRAL_TYPE):  # type: ignore[attr-defined]
+                go = decode(bytes([len(name)]) + name + bytes.fromhex(payload))
+                self.assertEqual(str(go.type), cls.ASTRAL_TYPE)  # type: ignore[attr-defined]
+                self.assertEqual(
+                    [(str(f.name), spec_of(f.spec)) for f in go.fields],
+                    [(f.wire_name, f.spec) for f in cls.FIELDS],  # type: ignore[attr-defined]
+                )
+
+    def test_a_private_entry_covers_as_astral_go_s_does(self):
+        """`PrivateEntry.Covers`: the service must match; an absent or zero
+        provider covers every provider."""
+        anyone = Identity(bytes(33))
+        self.assertTrue(PrivateEntry(service="chat", provider_id=G).covers(G, "chat"))
+        self.assertFalse(PrivateEntry(service="chat", provider_id=G).covers(FURRY_BOLT, "chat"))
+        self.assertFalse(PrivateEntry(service="chat", provider_id=G).covers(G, "files"))
+        self.assertTrue(PrivateEntry(service="chat", provider_id=None).covers(FURRY_BOLT, "chat"))
+        self.assertTrue(PrivateEntry(service="chat", provider_id=anyone).covers(G, "chat"))
+        listed = PrivateList(entries=[None, PrivateEntry(service="chat", provider_id=G)])
+        self.assertTrue(listed.covers(G, "chat"))
+        self.assertFalse(listed.covers(G, "files"))
+        self.assertFalse(PrivateList(entries=[]).covers(G, "chat"))
 
 
 class UpdateWireTest(unittest.TestCase):
@@ -456,6 +597,19 @@ class QueryStringTest(unittest.TestCase):
         self.assertEqual(op, OP_DISCOVER)
         self.assertEqual(params, {"follow": "false", "reach": "local", "services": "a b,c"})
 
+    def test_no_names_omit_services_and_cannot_follow(self):
+        """astral-go's `discover`: no names discovers every advertised service,
+        and a follow without names is refused before a query leaves."""
+        q = services_module._discover_query
+        for names in (None, [], ()):
+            with self.subTest(names=names):
+                self.assertEqual(
+                    q(names, follow=False, reach=None), "services.discover?follow=false"
+                )
+                with self.assertRaises(BadArgument) as caught:
+                    q(names, follow=True, reach=None)
+                self.assertIn("follow requires service names", str(caught.exception))
+
     def test_an_unknown_reach_is_refused(self):
         with self.assertRaises(BadArgument):
             services_module._discover_query(["chat"], follow=False, reach="galaxy")
@@ -466,6 +620,7 @@ class QueryStringTest(unittest.TestCase):
         self.assertEqual(services_module._DISCOVER["services"], Primitive("string8"))
         self.assertEqual(services_module._DISCOVER["reach"], Primitive("string8"))
         self.assertEqual(services_module._ADVERTISE["services"], Primitive("string8"))
+        self.assertEqual(services_module._ADVERTISE["open"], Primitive("bool"))
 
 
 # --- Tier B: the ops, against a mock apphost -----------------------------
@@ -751,7 +906,28 @@ class AdvertiseOpTest(ServicesCase):
             with self.assertRaises(BadArgumentType):
                 s.advertise(["chat"], CHAT)  # type: ignore[arg-type]
             s.advertise(["chat"], offer(CHAT))
+            for value in (0, "false", None):
+                with self.subTest(open=value):
+                    with self.assertRaises(BadArgumentType):
+                        s.advertise(["chat"], offer(CHAT), open=value)  # type: ignore[arg-type]
         self.assertEqual(mock.queries, [])
+
+    @bounded()
+    async def test_a_private_binding_sends_open_false_and_an_open_one_omits_it(self):
+        """astral-go's `AdvertiseOpen`: `open` reaches the node only when false,
+        so an open binding keeps the node's default."""
+        for open_, query in (
+            (True, "services.advertise?services=chat"),
+            (False, "services.advertise?open=false&services=chat"),
+        ):
+            with self.subTest(open=open_):
+                route = AdvertisingNode()
+                async with MockApphost(routes={OP_ADVERTISE: route}) as mock:
+                    s = await self.services(mock)
+                    async with s.advertise(["chat"], offer(CHAT), open=open_) as binding:
+                        self.assertIs(binding.open, open_)
+                    await self.settle(s)
+                self.assertEqual(self.sent(mock), query)
 
     @bounded()
     async def test_closing_is_idempotent(self):
@@ -820,12 +996,14 @@ class DiscoverOpTest(ServicesCase):
 
     @bounded()
     async def test_a_refusal_is_a_remote_error(self):
-        route = Accept(objects=[frame_error('not permitted to discover "chat"')])
+        route = Accept(objects=[frame_error("reach=swarm is accepted only from a local app")])
         async with MockApphost(routes={OP_DISCOVER: route}) as mock:
             s = await self.services(mock)
             with self.assertRaises(RemoteError) as caught:
                 await s.discover(["chat"])
-        self.assertEqual(caught.exception.message, 'not permitted to discover "chat"')
+        self.assertEqual(
+            caught.exception.message, "reach=swarm is accepted only from a local app"
+        )
 
     @bounded()
     async def test_a_wrong_object_is_a_protocol_error(self):
@@ -864,10 +1042,51 @@ class DiscoverOpTest(ServicesCase):
         async with MockApphost(routes={OP_DISCOVER: Accept(eos=True)}) as mock:
             s = await self.services(mock)
             with self.assertRaises(BadArgument):
-                await s.discover([])
+                await s.discover(["chat", "chat"])
             with self.assertRaises(BadArgument):
                 await s.discover(["chat"], reach="everywhere")
+            with self.assertRaises(BadArgument):
+                s.discover_follow([])
+            with self.assertRaises(BadArgument):
+                s.watch([])
         self.assertEqual(mock.queries, [])
+
+    @bounded()
+    async def test_no_names_discover_every_advertised_service(self):
+        route = Accept(objects=[obj_frame(CHAT)], eos=True)
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
+            s = await self.services(mock)
+            got = await s.discover()
+        self.assertEqual(got, [CHAT, InitialOutcome(complete=True)])
+        self.assertEqual(self.sent(mock), "services.discover?follow=false")
+
+    @bounded()
+    async def test_not_granted_is_the_first_event(self):
+        """The node opens the stream with it when the caller lacks a permit
+        for a named service; astral-go's reader makes it an event."""
+        ng = NotGranted(services=["bitcoin-wallet"])
+        route = Accept(objects=[obj_frame(ng), obj_frame(CHAT)], eos=True)
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
+            s = await self.services(mock)
+            got = await s.discover(["bitcoin-wallet", "chat"])
+        self.assertEqual(got, [ng, CHAT, InitialOutcome(complete=True)])
+
+    @bounded()
+    async def test_a_tagged_update_is_an_event_and_one_without_an_update_is_not(self):
+        tagged = TaggedUpdate(open=False, update=CHAT)
+        route = Accept(objects=[obj_frame(tagged)], eos=True)
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
+            s = await self.services(mock)
+            self.assertEqual(
+                await s.discover(["chat"]), [tagged, InitialOutcome(complete=True)]
+            )
+        route = Accept(objects=[obj_frame(TaggedUpdate(open=True, update=None))], eos=True)
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
+            s = await self.services(mock)
+            with self.assertRaises(ProtocolError) as caught:
+                await s.discover(["chat"])
+            self.assertIn("services.tagged_update", str(caught.exception))
+            await self.settle(s)
 
 
 class DiscoverFollowOpTest(ServicesCase):
@@ -962,6 +1181,26 @@ class WatcherTest(ServicesCase):
         self.assertEqual(parse(self.sent(mock))[1]["reach"], "local")
 
     @bounded()
+    async def test_it_keeps_not_granted_and_applies_tagged_updates(self):
+        """astral-go's `Watcher.apply`: `NotGranted` sets the ungranted names,
+        and a tagged update counts as its update."""
+        ng = NotGranted(services=["files"])
+        route = Accept(
+            objects=[obj_frame(ng), obj_frame(TaggedUpdate(open=True, update=CHAT))],
+            eos=True,
+            live=[obj_frame(TaggedUpdate(open=True, update=CHAT_GONE))],
+            hold=True,
+        )
+        async with MockApphost(routes={OP_DISCOVER: route}) as mock:
+            s = await self.services(mock)
+            async with s.watch(["chat", "files"]) as w:
+                self.assertEqual(await w.initial(), InitialOutcome(complete=True))
+                self.assertEqual(w.not_granted(), ("files",))
+                while w.offerings() != []:
+                    await w.changed()
+            await self.settle(s)
+
+    @bounded()
     async def test_the_end_of_the_stream_is_its_terminal_error(self):
         route = Accept(objects=[obj_frame(CHAT)], eos=True)
         async with MockApphost(routes={OP_DISCOVER: route}) as mock:
@@ -975,7 +1214,7 @@ class WatcherTest(ServicesCase):
 
     @bounded()
     async def test_a_refusal_fails_the_initial_outcome(self):
-        route = Accept(objects=[frame_error('not permitted to discover "chat"')])
+        route = Accept(objects=[frame_error("reach=swarm is accepted only from a local app")])
         async with MockApphost(routes={OP_DISCOVER: route}) as mock:
             s = await self.services(mock)
             async with s.watch(["chat"]) as w:
@@ -1019,22 +1258,34 @@ class CitationTest(unittest.TestCase):
     """
 
     ASTRALD_LINES = (
-        ("mod/services/src/op_advertise.go", 28, "astral.OriginNetwork"),
-        ("mod/services/src/op_advertise.go", 34, "auth.ServeAppsAction"),
-        ("mod/services/src/op_advertise.go", 42, "id.IsEqual(mod.node.Identity())"),
-        ("mod/services/src/op_advertise.go", 49, "astral.Err(err)"),
-        ("mod/services/src/op_advertise.go", 55, "astral.Err(err)"),
-        ("mod/services/src/op_advertise.go", 65, "ch.Switch("),
-        ("mod/services/src/op_discover.go", 29, "reach=swarm is accepted only from a local app"),
-        ("mod/services/src/op_discover.go", 34, "An eos ends the initial attempt"),
-        ("mod/services/src/op_discover.go", 36, "with follow it carries later views"),
-        ("mod/services/src/op_discover.go", 159, 'not permitted to discover %q'),
-        ("mod/services/src/coordinator/coordinator.go", 21, "service already advertised by this provider"),
-        ("mod/services/src/coordinator/coordinator.go", 36, "InitialBudget: 5 * time.Second, RequestTimeout: 10 * time.Second"),
-        ("mod/services/src/coordinator/source_messages.go", 30, "u.ProviderID = src.provider"),
-        ("mod/services/src/coordinator/source_messages.go", 45, "string(a.Update.Name) != req.service"),
-        ("mod/services/src/coordinator/source_messages.go", 47, "!a.Update.ProviderID.IsEqual(src.provider)"),
-        ("mod/services/src/coordinator/source_messages.go", 85, "if !ch.Valid() {"),
+        ("mod/services/src/op_advertise.go", 13, "Open     *bool // nil is open"),
+        ("mod/services/src/op_advertise.go", 29, "astral.OriginNetwork"),
+        ("mod/services/src/op_advertise.go", 35, "auth.ServeAppsAction"),
+        ("mod/services/src/op_advertise.go", 43, "id.IsEqual(mod.node.Identity())"),
+        ("mod/services/src/op_advertise.go", 50, "astral.Err(err)"),
+        ("mod/services/src/op_advertise.go", 57, "astral.Err(err)"),
+        ("mod/services/src/op_advertise.go", 54, "open := args.Open == nil || *args.Open"),
+        ("mod/services/src/op_advertise.go", 67, "ch.Switch("),
+        ("mod/services/src/op_discover.go", 32, "reach=swarm is accepted only from a local app"),
+        ("mod/services/src/op_discover.go", 34, 'errFollowWithoutNames = errors.New("follow requires services")'),
+        ("mod/services/src/op_discover.go", 39, "An eos ends the initial attempt"),
+        ("mod/services/src/op_discover.go", 41, "with follow it carries later views"),
+        ("mod/services/src/op_discover.go", 59, "if len(d.notGranted) > 0 {"),
+        ("mod/services/src/op_discover.go", 120, "Permits do not refuse a caller"),
+        ("mod/services/src/op_discover.go", 129, "} else if args.Follow {"),
+        ("mod/services/src/op_discover.go", 140, "if args.Tagged {"),
+        ("mod/services/src/op_discover.go", 157, "if len(names) == 0 {"),
+        ("mod/services/src/op_discover.go", 172, "if q.Origin() != astral.OriginNetwork {"),
+        ("mod/services/src/visibility.go", 14, "callerView decides which offerings a discovery's caller sees"),
+        ("mod/services/src/visibility.go", 40, "caller.IsEqual(mod.node.Identity())"),
+        ("mod/services/src/visibility.go", 54, "return (open && v.swarm) || v.permitted(ctx, service, node)"),
+        ("mod/services/src/visibility.go", 88, "notGranted lists the names the caller holds no discovery permit for"),
+        ("mod/services/src/coordinator/coordinator.go", 29, "service already advertised by this provider"),
+        ("mod/services/src/coordinator/coordinator.go", 45, "InitialBudget: 5 * time.Second, RequestTimeout: 10 * time.Second"),
+        ("mod/services/src/coordinator/source_messages.go", 32, "u.ProviderID = b.provider"),
+        ("mod/services/src/coordinator/source_messages.go", 47, "string(a.Update.Name) != req.service"),
+        ("mod/services/src/coordinator/source_messages.go", 49, "!a.Update.ProviderID.IsEqual(b.provider)"),
+        ("mod/services/src/coordinator/source_messages.go", 90, "if !ch.Valid() {"),
     )
 
     ASTRAL_GO_LINES = (
@@ -1044,8 +1295,19 @@ class CitationTest(unittest.TestCase):
         ("api/services/names.go", 13, "maxNameLen = 255"),
         ("api/services/reach.go", 11, 'ReachLocal Reach = "local"'),
         ("api/services/reach.go", 14, 'ReachSwarm Reach = "swarm"'),
-        ("api/services/client/advertise.go", 81, "if err == nil && u != nil {"),
+        ("api/services/client/advertise.go", 42, "if !open {"),
+        ("api/services/client/advertise.go", 93, "if err == nil && u != nil {"),
         ("api/services/client/services.go", 17, 'ErrStreamEnded = errors.New("discovery stream ended")'),
+        ("api/services/client/services.go", 42, "type Event struct {"),
+        ("api/services/client/services.go", 89, "if len(names) == 0 && follow {"),
+        ("api/services/client/services.go", 176, "if obj.Update == nil {"),
+        ("api/services/client/services.go", 181, "case *services.NotGranted:"),
+        ("api/services/not_granted.go", 9, "NotGranted opens a discovery stream"),
+        ("api/services/tagged_update.go", 9, "TaggedUpdate is an offering a swarm member sends"),
+        ("api/services/private_list.go", 10, 'PrivateListPath = "/mod/services/private"'),
+        ("api/services/private_list.go", 12, "PrivateEntry covers the bindings of ProviderID"),
+        ("api/services/private_list.go", 40, "PrivateList is the node's list of providers"),
+        ("lib/query/field_editor.go", 99, "if f.Kind() == reflect.Ptr {"),
         ("lib/query/field_editor.go", 143, "case reflect.Bool:"),
     )
 
@@ -1073,7 +1335,7 @@ class CitationTest(unittest.TestCase):
         self.assertEqual(
             set(re.findall(r"astrald/(mod/[\w/]+\.go:\d+)", prose)),
             {f"{p}:{n}" for p, n, _ in self.ASTRALD_LINES}
-            - {"mod/services/src/coordinator/coordinator.go:21"},
+            - {"mod/services/src/coordinator/coordinator.go:29"},
         )
         self.assertEqual(
             set(re.findall(r"astral-go/((?:api|lib)/[\w/]+\.go:\d+)", prose)),
@@ -1085,7 +1347,7 @@ class CitationTest(unittest.TestCase):
         astral-go must agree on it."""
         try:
             line = reference.cited_line(
-                reference.ASTRALD, "mod/services/src/coordinator/coordinator.go", 21
+                reference.ASTRALD, "mod/services/src/coordinator/coordinator.go", 29
             )
         except reference.Unavailable as exc:  # pragma: no cover
             self.skipTest(str(exc))
@@ -1154,14 +1416,13 @@ class LiveServicesTest(live_support.LiveCase):
 
     @bounded(30.0)
     async def test_the_node_holds_no_discovery_permit(self):
-        """Discovery is granted per service and the node identity holds none,
-        so a caller that is the node is refused before any provider is asked."""
+        """Permits refuse no caller; the node identity holds no discovery
+        permit, so the stream opens with `services.not_granted` naming the
+        service, and no provider of it is advertised here."""
         async with await self.client() as client:
-            with self.assertRaises(RemoteError) as caught:
-                await client.services.discover(["astral-py-live-tier"], timeout=20.0)
-            self.assertEqual(
-                caught.exception.message, 'not permitted to discover "astral-py-live-tier"'
-            )
+            got = await client.services.discover(["astral-py-live-tier"], timeout=20.0)
+            self.assertEqual(got[0], NotGranted(services=["astral-py-live-tier"]))
+            self.assertIsInstance(got[-1], InitialOutcome)
             self.assertEqual(client.live_streams, 0)
         await self.assert_no_open_sockets()
 
