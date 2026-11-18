@@ -47,7 +47,7 @@ Status mapping is exhaustive and is the HTTP half of design section 3.4's table:
 | 200 | -- |
 | 400 | `QueryRejected(2)` -- the node's "invalid query" code |
 | 401 | `AuthFailed` |
-| 403 | `Denied` -- the per-object read authorization on `/.objects/`, and the apphost gate's state list refusing a query to the node (`http_query_handler.go:80-87` at astrald `e6d691c6`) |
+| 403 | `Denied` -- the per-object read authorization on `/.objects/`, and the apphost gate's state list refusing a query to the node (`http_query_handler.go:80-87` at astrald `6974d9e7`) |
 | 404 | `RouteNotFound` |
 | 405 | `QueryRejected(1)` -- astrald's mapping of `ErrRejected` |
 | 408, 504 | `QueryTimeout` |
@@ -109,7 +109,7 @@ __all__ = [
 ]
 
 DEFAULT_HTTP_PORT: Final = 8624
-"""astrald's default `bind_http`, `tcp:127.0.0.1:8624` (sourced: `mod/apphost/src/config.go:73` at astrald `e6d691c6`)."""
+"""astrald's default `bind_http`, `tcp:127.0.0.1:8624` (sourced: `mod/apphost/src/config.go:67` at astrald `6974d9e7`)."""
 
 DEFAULT_HTTPS_PORT: Final = 443
 """The node serves no TLS. `https:` and `wss:` reach it through a proxy, where

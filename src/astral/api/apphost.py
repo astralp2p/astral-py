@@ -61,7 +61,7 @@ a property of astrald rather than an omission here:
 ## Authorization
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `e6d691c6` and astral-go `1ec701ca`.** An identity argument travels
+pins, astrald `6974d9e7` and astral-go `1ec701ca`.** An identity argument travels
 under the key `identity` and `apphost.cancel`'s nonce under `query_id`.
 
 **Every op accepts the query before it refuses one.** A refused caller reads an
@@ -86,8 +86,9 @@ The defaults are `.spec`, `apphost.register`, `sys.register_manager` and
 `user.info` without a token; `.spec`, `sys.register_manager` and `user.info`
 on a fresh node; `.spec`, `user.info`, `user.derive_identity`,
 `user.bootstrap`, `user.join`, `apphost.register`, `apphost.bind`,
-`apphost.register_handler` and `apphost.cancel` on an unclaimed node; and `*`
-on a claimed node (`mod/apphost/src/config.go:80-105`). `user.StateFresh`,
+`apphost.register_handler`, `apphost.cancel` and `nodes.resolve_endpoints` on
+an unclaimed node; and `*` on a claimed node
+(`mod/apphost/src/config.go:85-111`). `user.StateFresh`,
 `StateUnclaimed` and `StateClaimed` are the states
 (`astral.api.user.STATE_FRESH`). The gate keys replaced `allow_anonymous` and
 `anonymous_allowlist`; the node no longer names those keys, so an
@@ -122,7 +123,7 @@ it asks the authority (`authorize_admin_manage_apps.go:20-22`) and takes the
 session's authenticated identity rather than `q.Caller()`. The token and grant
 ops do not use it.
 
-**The census, re-derived at `e6d691c6`.** Eighteen `op_*.go` files. Sixteen
+**The census, re-derived at `6974d9e7`.** Eighteen `op_*.go` files. Sixteen
 refuse a network origin; the two that do not are `whoami` and
 `set_app_register_policy`, whose file also serves
 `apphost.set_grant_request_policy`. Seven ask
@@ -132,7 +133,7 @@ refuse a network origin; the two that do not are `whoami` and
 or a mailbox on this node and has no client here
 (`op_withdraw_relay.go:17-25,32-38`). `set_app_register_policy`
 asks `mod.auth.configure_node_state_action` through `maySetPolicies`, which the
-manager holds through mod/sys (`op_set_app_register_policy.go:153-155`).
+manager holds through mod/sys (`op_set_app_register_policy.go:112-114`).
 `sys.register_manager` is served by mod/sys, not apphost.
 One asks `mod.auth.serve_apps_action`: `register_handler`
 (`op_register_handler.go:33`). One asks `mod.user.see_swarm_action`: `hosts`
@@ -148,19 +149,19 @@ through `mayManageApps`. The other four -- `list_held_objects`, `register`,
 **The app register policy decides every `apphost.register`.** A stored
 delegate decides first; without one the node applies the `policies.app_register`
 value of `apphost.yaml`, which is `accept_all`, `reject_all` or a delegate, and
-whose code default is `reject_all` (`register_policy.go:41-60`,
-`mod/apphost/src/config.go:43-47,107-109`). `accept_all` admits every
+whose code default is `reject_all` (`register_policy.go:36-55`,
+`mod/apphost/src/config.go:43-48,113-116`). `accept_all` admits every
 registration with the permits it asked for; `reject_all` refuses every one
 (`mod/apphost/register_policy.go:27-41`). **So a node on the defaults answers
 every `apphost.register` with `registration declined`** until a delegate or the
 config admits it. `apphost.set_app_register_policy` stores a delegate, an op of
 another identity, or with no delegate named clears it, which restores the
-config value (`op_set_app_register_policy.go:121-123,132-134`);
+config value (`op_set_app_register_policy.go:80-82,91-93`);
 `set_app_register_policy()` below is its client. It accepts, then answers
 `not permitted` to a caller that does not hold
 `mod.auth.configure_node_state_action`, and it refuses no origin, so a network
-caller holding the permit reaches it (`op_set_app_register_policy.go:45-50`;
-the action is `maySetPolicies`'s, `op_set_app_register_policy.go:153-155`).
+caller holding the permit reaches it (`op_set_app_register_policy.go:31-36`;
+the action is `maySetPolicies`'s, `op_set_app_register_policy.go:112-114`).
 The manager holds that
 action in every node state (`astral.api.sys`). The node stores the
 delegate as a `policy.delegate` (`astral.api.policy`), asks it with a
@@ -204,10 +205,13 @@ duration with `negative duration` (`op_grant.go:50-57`,
 `op_request_grant.go:90-95`). `list_grants` answers one `mod.apphost.grant` per
 unexpired grant, then `eos` (`op_list_grants.go:15-17,50-56`). `revoke` reads
 a zero `id` as absent, because grant IDs start at 1 (`op_revoke.go:49-57`).
-The grant request policy asks a stored delegate; else it accepts all when the
-mode is `accept_all`; else it refuses all, also when no mode is stored
-(`register_policy.go:84-102`);
-`apphost.set_grant_request_policy` sets it and has no client here. The register
+The grant request policy decides as the app register policy does: a stored
+delegate first; without one the `policies.grant_request` value of
+`apphost.yaml`, `accept_all`, `reject_all` or a delegate, whose code default is
+`reject_all` (`register_policy.go:86-105`,
+`mod/apphost/src/config.go:47,115`). `apphost.set_grant_request_policy`
+stores or clears the delegate, as `apphost.set_app_register_policy` does
+(`op_set_app_register_policy.go:45-53`), and has no client here. The register
 grant request opens with `mod.auth.serve_apps_action` and
 `mod.auth.use_blueprints_action` (`register_grant_request.go:17-20`), the op
 answers a network origin with `origin not allowed: network`
@@ -507,7 +511,7 @@ class AppRegisterDecision:
 # channel. Each is astral-go's `api/apphost` type at `1ec701ca`, whose field
 # order is the wire order, and each field list is `astral.BlueprintOf`'s answer
 # there, which is what the node's `objects.get_blueprint` sends
-# (`mod/objects/src/module.go:238-256` at astrald `e6d691c6`).
+# (`mod/objects/src/module.go:238-256` at astrald `6974d9e7`).
 
 
 @record("mod.apphost.grant")
@@ -715,7 +719,7 @@ class Apphost(ModuleClient):
         caller after the session's token (`mod/apphost/src/guest.go:153-157`).
         A session without a token is denied this op, and under the default
         gate so is every session on a node that is not claimed: no default
-        list but the claimed one names it (`mod/apphost/src/config.go:80-105`).
+        list but the claimed one names it (`mod/apphost/src/config.go:85-111`).
         """
         return self._expect(await self._c.call_one(OP_WHOAMI, **kw), Identity, OP_WHOAMI)
 
@@ -866,8 +870,11 @@ class Apphost(ModuleClient):
         session holds (`api/apphost/client/request_grant.go:10-18`). A refusal
         is a `RemoteError` reading `ERR_GRANT_DECLINED`, and an invalid permit
         one reading `invalid permit: <action>: <detail>`
-        (`request_grant.go:20-21`). `apphost.set_grant_request_policy` sets
-        the policy and has no client here.
+        (`request_grant.go:20-21`). Without a stored delegate the node applies
+        `policies.grant_request` of `apphost.yaml`, `reject_all` by default, so
+        a node on the defaults declines every request.
+        `apphost.set_grant_request_policy` stores or clears the delegate and
+        has no client here.
 
         Each entry of `permits` is a `Permit` or an action name, as for
         `grant()`, and an empty list raises `BadArgument` before a query
@@ -1002,7 +1009,7 @@ class Apphost(ModuleClient):
         (`op_register.go:20,202,141`). The default gate admits it on an
         unclaimed or claimed node, to a session with a token or without, and
         denies it on a fresh one, where `sys.register_manager` is the first
-        app (`mod/apphost/src/config.go:80-105`).
+        app (`mod/apphost/src/config.go:85-111`).
 
         `grant_permits` are the permits to hold as node-local grants and
         `contract_permits` those to hold in a signed node-to-app contract; each
@@ -1030,7 +1037,7 @@ class Apphost(ModuleClient):
         The node accepts the query before its register policy decides, so a
         refusal is an `error_message` reading `ERR_REGISTRATION_DECLINED` and
         arrives as `RemoteError` (`register.go:37-39`). The policy's code
-        default refuses every registration (`register_policy.go:41-60`), so on
+        default refuses every registration (`register_policy.go:36-55`), so on
         a node with no delegate and no `policies.app_register` value this is
         the answer.
         """
@@ -1067,16 +1074,16 @@ class Apphost(ModuleClient):
         `apphost.yaml`, `reject_all` by default; one without the other is
         refused here, as the node refuses it. `timeout` bounds one question in
         Go's duration syntax; omitted, the node waits ten minutes
-        (`op_set_app_register_policy.go:15-25`).
+        (`op_set_app_register_policy.go:14-24`).
 
         Accepts, then answers `not permitted` to a caller that does not hold
         `mod.auth.configure_node_state_action`, and refuses no origin
-        (`op_set_app_register_policy.go:45-50`; `maySetPolicies`,
-        `op_set_app_register_policy.go:153-155`). The manager holds the action in
+        (`op_set_app_register_policy.go:31-36`; `maySetPolicies`,
+        `op_set_app_register_policy.go:112-114`). The manager holds the action in
         every node state (`astral.api.sys`). A
         delegate the node cannot resolve, the node itself, or a `timeout` above
         ten minutes is an `error_message` too; every one arrives as
-        `RemoteError` (`op_set_app_register_policy.go:58-64,131-146`).
+        `RemoteError` (`op_set_app_register_policy.go:66-72,90-105`).
 
         astral-go `1ec701ca` has no client for this op.
         """

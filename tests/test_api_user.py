@@ -1445,7 +1445,7 @@ class ListSiblingsOpTest(UserCase):
     @bounded()
     async def test_a_zone_goes_to_the_op_argument_and_to_the_routing_zone(self):
         """One scope, two levers, as `Objects` does it. The op's own argument is
-        inert on astrald `e6d691c6` -- the context it builds is never used --
+        inert on astrald `6974d9e7` -- the context it builds is never used --
         and the routing zone is not, so sending only one of them is wrong
         whichever one it is."""
         api = await self.serving(
@@ -1629,7 +1629,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_sends_the_identity_alone(self):
-        """`start` is undeclared on astrald `e6d691c6`, and the node reads the
+        """`start` is undeclared on astrald `6974d9e7`, and the node reads the
         height out of its own tree."""
         query = f"{OP_SYNC_WITH}?identity={FURRY_BOLT.text()}"
         api = await self.serving({query: Accept(objects=[ACK_FRAME])})
@@ -1639,7 +1639,7 @@ class SyncWithOpTest(UserCase):
 
     @bounded()
     async def test_it_accepts_no_start_keyword(self):
-        """`start` is undeclared on astrald `e6d691c6`, so naming one is a
+        """`start` is undeclared on astrald `6974d9e7`, so naming one is a
         `TypeError` and nothing reaches the node."""
         api = await self.serving({OP_SYNC_WITH: Accept(objects=[ACK_FRAME])})
         with self.assertRaises(TypeError):
@@ -2307,9 +2307,9 @@ class SwarmPolicyOpTest(UserCase):
                 )
 
     @bounded()
-    async def test_no_delegate_restores_the_bundled_policy(self):
+    async def test_no_delegate_restores_the_config_value(self):
         """Both names empty is the op's restore: the node clears the stored
-        delegate and answers `ack`."""
+        delegate, which restores the config value, and answers `ack`."""
         api = await self.serving(
             {OP_SET_SWARM_JOIN_POLICY: Accept(objects=[ACK_FRAME])}
         )
@@ -2421,7 +2421,7 @@ class LiveUserTest(live_support.LiveCase):
     the probe. On a node that is not claimed every swarm read is refused, and
     the assertions there are the refusals rather than the answers: the
     apphost gate denies a query to the node that the state's list does not
-    name (`mod/apphost/src/gate.go:30` at astrald `e6d691c6`), which arrives as
+    name (`mod/apphost/src/gate.go:30` at astrald `6974d9e7`), which arrives as
     `Denied`, and a gate configured to admit the read leaves the refusal to
     astrald's swarm authorizers, which refuse without an active contract.
     """
@@ -2454,7 +2454,7 @@ class LiveUserTest(live_support.LiveCase):
     async def require_claimed(self, client: astral.Client) -> None:
         """Skip unless the node is claimed: the default gate names none of the
         reads below for a fresh or unclaimed node
-        (`mod/apphost/src/config.go:88-103` at astrald `e6d691c6`)."""
+        (`mod/apphost/src/config.go:93-109` at astrald `6974d9e7`)."""
         if await self.unclaimed(client):
             self.skipTest("the node is not claimed, and the default gate denies this op")
 
@@ -2663,21 +2663,27 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/op_accept_contract.go", 70): "}",
         ("mod/user/src/op_set_swarm_policy.go", 39): "OpSetContractAcceptPolicy",
         ("mod/user/src/op_set_swarm_policy.go", 43): "}",
-        ("mod/user/src/op_set_swarm_policy.go", 15): "Identity and Operation name the delegate",
-        ("mod/user/src/op_set_swarm_policy.go", 17): "accept-all for contract accept",
         ("mod/user/src/op_set_swarm_policy.go", 61): "if !mod.maySetPolicies(ctx, q.Caller())",
         ("mod/user/src/op_set_swarm_policy.go", 63): "}",
         ("mod/user/src/op_set_swarm_policy.go", 65): 'args.Identity == "" && args.Operation == ""',
         ("mod/user/src/op_set_swarm_policy.go", 71): "}",
-        ("mod/user/src/swarm_policy.go", 17): "An unset SwarmJoin or",
-        ("mod/user/src/swarm_policy.go", 19): "ContractAccept selects the bundled policy",
-        ("mod/user/src/swarm_policy.go", 34): "func (mod *Module) GetSwarmJoinPolicy()",
-        ("mod/user/src/swarm_policy.go", 50): "return usermod.RejectAllJoins",
-        ("mod/user/src/swarm_policy.go", 56): "func (mod *Module) GetSwarmInvitePolicy()",
-        ("mod/user/src/swarm_policy.go", 72): "return usermod.RejectAllInvites",
-        ("mod/user/src/config.go", 32): "var defaultFileConfig = FileConfig{",
-        ("mod/user/src/config.go", 35): "SwarmInvite: policyconf.Setting{Mode: policyconf.RejectAll}",
-        ("mod/user/src/config.go", 37): "}",
+        ("mod/user/src/swarm_policy.go", 33): "func (mod *Module) GetSwarmJoinPolicy()",
+        ("mod/user/src/swarm_policy.go", 49): "return usermod.RejectAllJoins",
+        ("mod/user/src/swarm_policy.go", 55): "func (mod *Module) GetSwarmInvitePolicy()",
+        ("mod/user/src/swarm_policy.go", 71): "return usermod.RejectAllInvites",
+        ("mod/user/src/swarm_policy.go", 97): "func (mod *Module) GetContractAcceptPolicy()",
+        ("mod/user/src/swarm_policy.go", 102): "setting := mod.file.Policies.ContractAccept",
+        ("mod/user/src/swarm_policy.go", 115): "return usermod.RejectAllContracts",
+        ("mod/user/src/config.go", 33): "var defaultFileConfig = FileConfig{",
+        ("mod/user/src/config.go", 36): "SwarmInvite:    policyconf.Setting{Mode: policyconf.RejectAll}",
+        ("mod/user/src/config.go", 37): "ContractAccept: policyconf.Setting{Mode: policyconf.RejectAll}",
+        ("mod/user/src/config.go", 39): "}",
+        ("mod/user/src/op_accept_membership.go", 99): "subjectSig, err := mod.Auth.SignSubject(ctx, signed)",
+        ("mod/user/src/op_accept_membership.go", 104): "why claim before the signature is sent",
+        ("mod/user/src/op_accept_membership.go", 108): "err = mod.claim(ctx, signed)",
+        ("mod/user/src/op_accept_membership.go", 111): "return ch.Send(user.ErrAlreadyClaimed)",
+        ("mod/user/src/op_accept_membership.go", 116): "err = mod.Auth.IndexContract(ctx, signed)",
+        ("mod/user/src/op_accept_membership.go", 121): "return ch.Send(subjectSig)",
         ("mod/user/src/op_info.go", 29): "info := &user.Info{",
         ("mod/user/src/op_info.go", 34): "ac := mod.ActiveContract()",
         ("mod/user/src/op_info.go", 37): "}",
@@ -2715,14 +2721,14 @@ class CitationTest(unittest.TestCase):
         ("mod/user/src/op_bootstrap.go", 177): "mod.Auth.IsNodeClaim(ctx, caller, contract)",
         ("mod/user/src/op_bootstrap.go", 196): "mayClaim reports whether caller may claim",
         ("mod/user/src/op_bootstrap.go", 204): "}",
-        ("mod/apphost/src/config.go", 81): "Tokenless: []string{",
-        ("mod/apphost/src/config.go", 86): "},",
-        ("mod/apphost/src/config.go", 88): "Fresh: []string{",
-        ("mod/apphost/src/config.go", 92): "},",
-        ("mod/apphost/src/config.go", 96): '"user.derive_identity"',
-        ("mod/apphost/src/config.go", 97): '"user.bootstrap"',
-        ("mod/apphost/src/config.go", 98): '"user.join"',
-        ("mod/apphost/src/config.go", 104): "Claimed: []string{gateAny}",
+        ("mod/apphost/src/config.go", 86): "Tokenless: []string{",
+        ("mod/apphost/src/config.go", 91): "},",
+        ("mod/apphost/src/config.go", 93): "Fresh: []string{",
+        ("mod/apphost/src/config.go", 97): "},",
+        ("mod/apphost/src/config.go", 101): '"user.derive_identity"',
+        ("mod/apphost/src/config.go", 102): '"user.bootstrap"',
+        ("mod/apphost/src/config.go", 103): '"user.join"',
+        ("mod/apphost/src/config.go", 110): "Claimed: []string{gateAny}",
         ("mod/user/src/op_introduce.go", 38): "func (mod *Module) OpIntroduce(",
         ("mod/user/src/op_introduce.go", 42): "q.Origin() == astral.OriginNetwork",
         ("mod/user/src/op_introduce.go", 59): "nodeID.IsEqual(mod.node.Identity()) || nodeID.IsEqual(ac.Issuer)",

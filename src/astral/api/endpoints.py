@@ -105,7 +105,7 @@ fields, because a `@record` owns its schema. `nat.endpoint` is a third of the
 same shape -- `IP` ref, `Port` uint16, `Network()` of `kcp` -- and Tier 3 can
 reuse `IPEndpoint` rather than restate it.
 
-Source citations are pinned to astral-go `1ec701ca` and astrald `e6d691c6`. The
+Source citations are pinned to astral-go `1ec701ca` and astrald `6974d9e7`. The
 tor paragraphs above name the astral-go commits that made the changes they
 describe, and all three are in `main` at that pin, so every citation here
 resolves at one of the two pinned revisions.
@@ -142,17 +142,17 @@ MAX_PORT: Final = 0xFFFF
 TCP_NETWORK: Final = "tcp"
 TCP_ALIAS: Final = "inet"
 """astrald's TCP module parses and unpacks `inet` as well as `tcp`
-(`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `e6d691c6`). The
+(`mod/tcp/src/parse.go` `Module.Parse`, line 11 at astrald `6974d9e7`). The
 endpoint's own `Network()` is `tcp` and never `inet`."""
 
 KCP_NETWORK: Final = "kcp"
 TOR_NETWORK: Final = "tor"
 GATEWAY_NETWORK: Final = "gw"
-"""`mod/gateway/src/module.go` `NetworkName`, line 27 at astrald `e6d691c6`.
+"""`mod/gateway/src/module.go` `NetworkName`, line 27 at astrald `6974d9e7`.
 The module is `gateway` and its network is `gw`."""
 
 TOR_DEFAULT_PORT: Final = 1791
-"""`mod/tor/src/module.go` `defaultListenPort`, line 16 at astrald `e6d691c6`.
+"""`mod/tor/src/module.go` `defaultListenPort`, line 16 at astrald `6974d9e7`.
 astrald's tor parser supplies it for an address with no port; astral-go's
 `UnmarshalText` requires one. `TorEndpoint.parse` accepts both."""
 
@@ -549,7 +549,7 @@ class TorEndpoint(Endpoint):
 
         `unknown` is the zero value, which is astral-go's `UnmarshalText`. A
         missing port defaults to 1791, which is astrald's parser
-        (`mod/tor/src/parse.go` `Parse`, astrald `e6d691c6`) and is accepted
+        (`mod/tor/src/parse.go` `Parse`, astrald `6974d9e7`) and is accepted
         here so a string the node reads is a string this SDK reads. A port
         outside `uint16` raises rather than truncating.
         """
@@ -609,7 +609,7 @@ class GatewayEndpoint(Endpoint):
     through the directory, it refuses an endpoint whose gateway is its target,
     and it refuses one where either half resolves to the zero identity, which is
     what `""` and `anyone` resolve to (`mod/gateway/src/parser.go`
-    `Module.Parse`, astrald `e6d691c6`).
+    `Module.Parse`, astrald `6974d9e7`).
     All three need a node. A wire type has none, so `parse` is astral-go's
     `ParseEndpoint`: two identities, parsed locally, no resolution and no
     equality rule.
