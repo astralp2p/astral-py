@@ -16,8 +16,8 @@ All four generate or derive and store nothing, on the node's side and on this
 one. No action gates any of the four (the comment above each `Op` method in
 `astrald/mod/bip137sig/src/op_*.go`). The apphost gate decides who reaches
 them: none is on the default tokenless list, the fresh list or the unclaimed
-list, and the claimed list is `*` (`astrald/mod/apphost/src/config.go:80-105`
-at `e6d691c6`), so under the defaults a session with a token reaches them on a
+list, and the claimed list is `*` (`astrald/mod/apphost/src/config.go:85-111`
+at `6974d9e7`), so under the defaults a session with a token reaches them on a
 claimed node, and a session without one, or any session on a node that is not
 claimed, is denied.
 

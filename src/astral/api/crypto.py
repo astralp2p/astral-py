@@ -4,7 +4,7 @@ Tier 1. Six ops -- five of astrald's six `crypto.*` ops plus `secp256k1.new`,
 which design sections 0.1 and 5.2 fold in here rather than giving it a module
 of its own -- and four pure local helpers that need no node at all.
 
-**`crypto.register_signer` has no client here.** astrald `e6d691c6` serves it:
+**`crypto.register_signer` has no client here.** astrald `6974d9e7` serves it:
 an app holding the op's channel open is the signer of the keys it names, the
 node sends it signing requests on that channel and the app answers each
 (`mod/crypto/src/op_register_signer.go:21-24`). The op, its six
@@ -43,7 +43,7 @@ on the channel body (`mod/crypto/src/op_verify_hash_signature.go`,
 `op_verify_text_signature.go`), so an implementation that never streams one
 gets an accepted query, no answer, EOF -- and, if it reports that as success,
 **silently never verifies**. Every shape below was read out of astrald's
-`mod/crypto/src` at `e6d691c6`, never out of a sibling SDK.
+`mod/crypto/src` at `6974d9e7`, never out of a sibling SDK.
 
 **One rule decides where each value travels**, and it is stated once here so no
 method has to argue it again:
@@ -80,7 +80,7 @@ no node secret and asks no authorizer (`mod/crypto/src/op_public_key.go`, the
 comment above `OpPublicKey`). apphost's gate confines a session without a
 token, IPC and WebSocket alike, to `gate.tokenless`
 (`mod/apphost/src/gate.go:24-26`), and no default gate list but the claimed
-node's `*` names any `crypto.*` op (`mod/apphost/src/config.go:80-105`), so such
+node's `*` names any `crypto.*` op (`mod/apphost/src/config.go:85-111`), so such
 a session is denied before the op runs, and so is a session with a token on a
 node that is not claimed.
 
@@ -92,7 +92,7 @@ form.
 
 **A caller signs as itself, and the node's own identity cannot sign at all.**
 Every signature passes `AuthorizeSigner`
-(`mod/crypto/src/sign_guard.go` at `e6d691c6`): the key must be the caller's
+(`mod/crypto/src/sign_guard.go` at `6974d9e7`): the key must be the caller's
 own identity, or one the caller holds a `mod.auth.sudo_action` for, and the
 node's own key is refused on the self branch. A session holding a token that
 names the node speaks as the node (`mod/apphost/src/guest.go:153-157`), so it
@@ -142,7 +142,7 @@ Reached as `client.crypto`, the `functools.cached_property` design section 5.1
 asks for, or as `Crypto(client)`, which constructs the same object and is what
 the tests here use.
 
-Source citations are pinned to astrald `e6d691c6` and astral-go `1ec701ca`, the
+Source citations are pinned to astrald `6974d9e7` and astral-go `1ec701ca`, the
 revisions `tests/reference.py` names. The SDK supports the node at those
 revisions and no older one, so every citation here resolves at a pin.
 `tests/test_api_crypto.py` reads those directories rather than trusting this

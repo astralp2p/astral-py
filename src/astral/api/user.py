@@ -123,14 +123,14 @@ and a name that does not resolve with `unknown identity`
 Every one of those arguments is mandatory here and an empty name is refused
 client-side.
 
-**`user.list_siblings`'s `zone` is inert on astrald `e6d691c6`.** It builds a
+**`user.list_siblings`'s `zone` is inert on astrald `6974d9e7`.** It builds a
 context the op then never uses -- `mod.getSiblings()` takes none
 (`astrald/mod/user/src/op_list_siblings.go:27`). It is still sent when the caller
 names one, because a declared argument is the op's own statement of its
 interface, and the value is forwarded to the routing zone too, where it is not
 inert. Defect filed against astrald.
 
-**`user.sync_with` declares no `start` on astrald `e6d691c6`.** Its argument
+**`user.sync_with` declares no `start` on astrald `6974d9e7`.** Its argument
 struct is an identity and an output format and nothing else, and the argument
 binder skips a key the op does not declare (`lib/query/editor.go`
 `Editor.SetMany` at astral-go `1ec701ca`), so a `start` sent there is accepted and
@@ -204,7 +204,7 @@ substitutes the module's user identity for an absent `user` and answers
 `user id missing: pass -user <identity>; the node has no active contract to
 default from` when that identity is zero; a named `user` that resolves to the
 zero identity answers `user id missing`
-(`mod/user/src/op_new_node_contract.go:48-53` at `e6d691c6`). Verified on an
+(`mod/user/src/op_new_node_contract.go:48-53` at `6974d9e7`). Verified on an
 unclaimed node built from `5f17900d`: both texts, the second for
 `user=anyone`, and the same query with a real `user` named answers the
 contract.
@@ -235,17 +235,20 @@ answer that does not allow, or no answer, declines
 `mod.user.contract_accept_request` after the contract validates, and a decline
 answers `contract declined` (`ERR_CONTRACT_DECLINED`,
 `mod/user/src/op_accept_contract.go:57-70`); its two types are declared below.
-A stored delegate decides first. Without one, the join and invite policies
-apply the `policies.swarm_join` and `policies.swarm_invite` values of
-`user.yaml`, `accept_all`, `reject_all` or a delegate, and both values default
-to `reject_all` (`mod/user/src/swarm_policy.go:34-50,56-72`,
-`mod/user/src/config.go:32-37`); the contract accept policy without a delegate
-accepts every valid contract (`mod/user/src/swarm_policy.go:17-19`).
+Each of the three decides in one order: a stored delegate, then its config
+value, then the code default `reject_all`. Without a delegate the join, invite
+and contract accept policies apply the `policies.swarm_join`,
+`policies.swarm_invite` and `policies.contract_accept` values of `user.yaml`,
+each `accept_all`, `reject_all` or a delegate, and each defaults to
+`reject_all` (`mod/user/src/swarm_policy.go:33-49,55-71,97-115`,
+`mod/user/src/config.go:33-39`). **So a node on the defaults declines every
+join request, every invitation and every contract `user.accept_contract` is
+given** until a delegate or its config value admits it.
 `user.set_swarm_join_policy`, `user.set_swarm_invite_policy` and
 `user.set_contract_accept_policy` delegate one of them to an op of another
 identity: `identity` and `operation` name it, `timeout` bounds one question,
-and both names empty clear the stored delegate
-(`mod/user/src/op_set_swarm_policy.go:15-17,65-71`). The node stores each
+and both names empty clear the stored delegate, which restores the config
+value (`mod/user/src/op_set_swarm_policy.go:65-71`). The node stores each
 delegate as a `policy.delegate` (`astral.api.policy`), puts the request to it
 as itself and reads one object back (`api/policy/ask.go`). The setters admit
 a caller holding `mod.auth.configure_node_state_action`, not
@@ -301,9 +304,9 @@ admits.** It accepts, then answers a query of any origin other than local with
 manager `sys.register_manager` appointed with `not permitted`, in that
 order (`mod/user/src/op_bootstrap.go:47-62,196-204`). The apphost gate decides
 first which sessions reach the op at all: on an unclaimed node the default
-state list names `user.bootstrap` (`mod/apphost/src/config.go:97`), a fresh
-node's does not (`mod/apphost/src/config.go:88-92`), and the default tokenless
-list does not name it (`mod/apphost/src/config.go:81-86`), so a token-less
+state list names `user.bootstrap` (`mod/apphost/src/config.go:102`), a fresh
+node's does not (`mod/apphost/src/config.go:93-97`), and the default tokenless
+list does not name it (`mod/apphost/src/config.go:86-91`), so a token-less
 session is denied the op in every state (`mod/apphost/src/gate.go:24-26`).
 The manager reaches it with its App token and the node with the node's token. An app that authenticates with its
 own token and is not the manager is its own caller and is answered
@@ -318,7 +321,7 @@ inferred from the sources above.
 
 Reached as `client.user`, a `functools.cached_property` on `Client` built on
 first use (design section 5.1). Every source citation resolves at astrald
-`e6d691c6` and astral-go `1ec701ca`, the revisions `tests/reference.py` pins;
+`6974d9e7` and astral-go `1ec701ca`, the revisions `tests/reference.py` pins;
 `tests/test_api_user.py` reads every `path:line` back there and fails when it
 stops landing.
 """
@@ -955,7 +958,7 @@ class User(ModuleClient):
         authorized implicitly. **`state` is the setup probe**: `no active
         contract` is not an answer this op gives at the pin. `user.info` is on
         the gate's default tokenless list and on every default state list
-        (`mod/apphost/src/config.go:81-104`), so a session without a token
+        (`mod/apphost/src/config.go:86-110`), so a session without a token
         reaches it in every state.
 
         Verified on an isolated astrald built from `5b4dde12`: a token-less
@@ -1039,7 +1042,7 @@ class User(ModuleClient):
 
         `zone` is sent as the op's argument **and** as the routing zone, the
         way `Objects` sends its one scope to both levers. The op's own
-        argument is inert on astrald `e6d691c6` -- the context built from it is
+        argument is inert on astrald `6974d9e7` -- the context built from it is
         never used (`mod/user/src/op_list_siblings.go:27`) -- and the routing
         zone is not.
 
@@ -1365,9 +1368,15 @@ class User(ModuleClient):
         `node already claimed` (`ERR_ALREADY_CLAIMED`) when the node already
         has an active contract.
 
-        An `error_message` **after** the signature means the node signed and
-        then failed to index, store or activate: the ceremony did not complete,
-        the exception is raised, and the countersignature is discarded with it.
+        The node commits before it countersigns: it stores the signed contract
+        and makes it active, then indexes it, and sends the countersignature
+        last (`mod/user/src/op_accept_membership.go:99-121`). Of concurrent
+        invitations that all pass the checks, one commits and every other is
+        answered `node already claimed` without a signature
+        (`mod/user/src/op_accept_membership.go:104-111`). An index failure
+        after the commit answers an `error_message` in place of the signature,
+        so a `RemoteError` here does not by itself mean the node is unclaimed:
+        `user.info` reads its state.
         """
         if not isinstance(contract, Contract):
             raise BadArgumentType(
@@ -1523,7 +1532,7 @@ class User(ModuleClient):
         query whose origin is not local, and words the node refuses or a node
         without the `bip137sig` module are an `error_message`; each arrives as
         `RemoteError`. `user.derive_identity` is on the gate's default list
-        for an unclaimed node (`mod/apphost/src/config.go:96`) and on neither
+        for an unclaimed node (`mod/apphost/src/config.go:101`) and on neither
         the fresh list nor the tokenless one, so a session with a token reaches
         it while the node is unclaimed and a session without one never does
         (`mod/apphost/src/gate.go:24-30`). Verified on an isolated astrald built
@@ -1577,7 +1586,7 @@ class User(ModuleClient):
         refusal, such as `ERR_REQUEST_DECLINED`, arrives as its own text. Each
         is a `RemoteError`. The caller rule is `user.bootstrap`'s `mayClaim`
         (`mod/user/src/op_join.go:26-27`). `user.join` is on the gate's default
-        list for an unclaimed node (`mod/apphost/src/config.go:98`) and not on
+        list for an unclaimed node (`mod/apphost/src/config.go:103`) and not on
         the default tokenless list, so the manager reaches it with its App
         token while the node is unclaimed and a token-less session does not.
 
@@ -1650,8 +1659,9 @@ class User(ModuleClient):
         one `ack`. **Mutates.**
 
         `set_swarm_join_policy`'s arguments and answers, for the policy
-        `user.accept_contract` asks (`mod/user/src/op_set_swarm_policy.go:39-43`).
-        With no delegate stored the policy accepts every valid contract.
+        `user.accept_contract` asks (`mod/user/src/op_set_swarm_policy.go:39-43`),
+        whose config value is `policies.contract_accept`, `reject_all` by
+        default (`mod/user/src/swarm_policy.go:97-115`).
         """
         qs = setter_query(OP_SET_CONTRACT_ACCEPT_POLICY, identity, operation, timeout)
         self._expect(

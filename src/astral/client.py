@@ -216,8 +216,8 @@ def resolve_token(token: str | None = None) -> str | None:
     the node and to the ops `gate.tokenless` lists -- by default
     `.spec`, `apphost.register`, `sys.register_manager` and `user.info`, each
     further limited to the ops the node state's list names
-    (`mod/apphost/src/gate.go:20-31` and `mod/apphost/src/config.go:81-86` at
-    astrald `e6d691c6`) -- and refuses it every registration,
+    (`mod/apphost/src/gate.go:20-31` and `mod/apphost/src/config.go:86-91` at
+    astrald `6974d9e7`) -- and refuses it every registration,
     even on the zero identity.
     """
     if token:

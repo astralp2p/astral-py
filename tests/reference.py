@@ -43,20 +43,40 @@ ASTRALD: Final = "astrald"
 ASTRAL_GO: Final = "astral-go"
 
 PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
-    # The revisions the modules were read against: astrald `e6d691c6`, master
-    # at the bump (the merge of astrald pull request #466), and astral-go
-    # `1ec701ca`, the merge of astral-go pull request #180 (`Vfs` and
-    # `Evaluator` on `mod.apphost.register_request`), which astrald
-    # `e6d691c6` requires. Every `path:line` citation in `astral/api/*.py`
-    # resolves at one of these two and none names another revision. Bumping
-    # one means re-reading the citations that name it. The record of each
-    # earlier bump is this comment's history in `git log -p tests/reference.py`.
+    # The revisions the modules were read against: astrald `6974d9e7`, the
+    # merge of astrald pull request #476 (all five admission policies take a
+    # config value; no grant request mode), and astral-go `1ec701ca`, the
+    # merge of astral-go pull request #180 (`Vfs` and `Evaluator` on
+    # `mod.apphost.register_request`), which astrald `6974d9e7` requires
+    # (`go.mod:7`). Every `path:line` citation in `astral/api/*.py` resolves
+    # at one of these two and none names another revision. Bumping one means
+    # re-reading the citations that name it. The record of each earlier bump
+    # is this comment's history in `git log -p tests/reference.py`.
     #
-    # Bumped from astrald `a7c773d6` / astral-go `4a3e111c`. Every cited line
+    # Bumped from astrald `e6d691c6`; astral-go stays at `1ec701ca`. The cited
+    # files the range changed were re-read: `mod/apphost/src/config.go`,
+    # `op_set_app_register_policy.go` and `register_policy.go`,
+    # `mod/sys/src/authorizers.go`, and `mod/user/src/config.go`,
+    # `op_accept_membership.go` and `swarm_policy.go`. Every cited line whose
+    # text did not change was moved to its new number; in apphost's
+    # `config.go` the gate lines move by five and the lines after the
+    # unclaimed list by six or seven. Claims rewritten: each of
+    # the five policies decides by a stored delegate, then its config value,
+    # then the code default `reject_all`, so the grant request policy reads
+    # `policies.grant_request` and has no mode, and the contract accept policy
+    # reads `policies.contract_accept` and no longer accepts every valid
+    # contract by default; both apphost setters share `opSetPolicyArgs` and
+    # refuse `mode`; the unclaimed gate list adds `nodes.resolve_endpoints`;
+    # the manager also holds `mod.vfs.manage_action` and `mod.vfs.read_action`;
+    # `user.accept_membership` commits the contract before it sends the
+    # countersignature, and a concurrent loser reads `node already claimed`
+    # (design 11.13).
+    #
+    # Earlier: bumped from astrald `a7c773d6` / astral-go `4a3e111c`. Every cited line
     # whose text did not change was moved to its new number; `defaultConfig`
     # became a function, so every gate line moved by seven. Claims rewritten:
     # `mod.apphost.register_request` declares `Vfs` and `Evaluator`; the grant
-    # request policy refuses all when no mode is stored; the apphost census
+    # request policy refuses all on a node nobody configured; the apphost census
     # counts eighteen files with `withdraw_relay`; an active contract requires
     # `withdrawn_at IS NULL`; a register decision naming `mod.auth.sudo_action`
     # in its contract permits is refused; `astral.api.services` mirrors
@@ -80,7 +100,7 @@ PINS: Final[dict[str, tuple[pathlib.Path, str]]] = {
     # the pins, are `path:line` and `test_api_sys.CitationTest` reads them.
     # Surface added: `user.introduce`, `user.contract` and
     # `ERR_INTRODUCE_SELF`, with `User.introduce` and `User.contract`.
-    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "e6d691c6"),
+    ASTRALD: (pathlib.Path("/home/intern0/work/astralp2p/astrald/master"), "6974d9e7"),
     ASTRAL_GO: (pathlib.Path("/home/intern0/work/astralp2p/astral-go/main"), "1ec701ca"),
 }
 

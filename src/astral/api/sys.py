@@ -10,7 +10,7 @@ client below.
 ## Where the citations point
 
 **Every `path:line` in this module is read at the revisions `tests/reference.py`
-pins, astrald `e6d691c6` and astral-go `1ec701ca`**, which carry `mod/sys`
+pins, astrald `6974d9e7` and astral-go `1ec701ca`**, which carry `mod/sys`
 and `api/sys` (`tests/test_api_sys.py`, `CitationTest`). The protocol
 text is astral-docs `protocols/sys/`.
 
@@ -47,20 +47,24 @@ manager is appointed or a user owned the node before; else fresh
 
 **The gate.** The default gate lists `sys.register_manager` on
 `gate.tokenless` and on `gate.states.fresh`
-(`mod/apphost/src/config.go:84,90`). So a fresh node admits the op to a
+(`mod/apphost/src/config.go:89,95`). So a fresh node admits the op to a
 session with a token or without, an unclaimed node's list does not name it and
 denies it, and a claimed node's `*` admits it and the op answers
 `node is not fresh`.
 
 **The manager holds `mod.auth.configure_node_state_action` in every node state,
-claimed included** (`mod/sys/src/authorizers.go:15-18`,
-`AuthorizeConfigureNodeState`). That action is what every policy setter
+claimed included** (`mod/sys/src/authorizers.go:16-18,39-42`,
+`AuthorizeConfigureNodeState` and `isManager`). That action is what every policy setter
 requires -- `apphost.set_app_register_policy`,
 `apphost.set_grant_request_policy`, `user.set_swarm_join_policy`,
 `user.set_swarm_invite_policy` and `user.set_contract_accept_policy`
-(`maySetPolicies`, `mod/apphost/src/op_set_app_register_policy.go:153-155`
+(`maySetPolicies`, `mod/apphost/src/op_set_app_register_policy.go:112-114`
 and `mod/user/src/op_set_swarm_policy.go:106-108`) -- so the manager sets
-every policy's delegate through it. The manager may claim the node with
+every policy's delegate through it. It also holds `mod.vfs.manage_action` and
+`mod.vfs.read_action` over every VFS of the node, in every node state, and no
+`mod.vfs.write_action` (`mod/sys/src/authorizers.go:20-36`,
+`AuthorizeVFSManage` and `AuthorizeVFSRead`; astral-go
+`api/vfs/actions.go:16,54`). The manager may claim the node with
 `user.bootstrap` or `user.join` (`mayClaim`,
 `mod/user/src/op_bootstrap.go:198-204`).
 
@@ -270,7 +274,7 @@ class Sys(ModuleClient):
 
         The default gate admits the op on a fresh node, to a session with a
         token or without, and denies it on an unclaimed node, which surfaces
-        as `Denied` (`mod/apphost/src/config.go:88-103`). Past
+        as `Denied` (`mod/apphost/src/config.go:93-109`). Past
         the gate the node accepts, then answers a network origin, an invalid
         permit, an unknown or repeated policy name, a binding with no
         operation, a timeout outside zero to ten minutes, a `user` policy on a

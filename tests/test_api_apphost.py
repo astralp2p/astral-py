@@ -409,7 +409,7 @@ GRANT_GO_VECTORS: dict[str, tuple[object, str, str, str, str]] = {
 # `astral.BlueprintOf` at astral-go `08ead7ce`, and at `1ec701ca` for
 # `mod.apphost.register_request`, the function the node's
 # `objects.get_blueprint` answers with (`mod/objects/src/module.go:238-256` at
-# astrald `e6d691c6`), decoded.
+# astrald `6974d9e7`), decoded.
 GRANT_BLUEPRINTS = {
     "mod.apphost.grant": [
         ("ID", Primitive("uint64")),
@@ -858,21 +858,38 @@ class GrantTypesTest(unittest.TestCase):
              "refuseRemovedArgs returns an error"),
             (reference.ASTRALD, "mod/apphost/src/validate_permits.go", 31,
              "func refuseRemovedArgs"),
-            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 84,
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 79,
              "GetGrantRequestPolicy returns the policy apphost.request_grant applies"),
-            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 95,
-             "mod.policy.GrantRequest.Get(); !d.IsZero()"),
-            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 96,
-             "return mod.GrantRequestPolicyDelegated(d)"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 80,
+             "else the policies.grant_request config value, whose"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 81,
+             "code default is reject_all"),
             (reference.ASTRALD, "mod/apphost/src/register_policy.go", 86,
-             "else RefuseAllGrants, also when no mode is stored"),
-            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 98,
-             "m.String() == apphostmod.GrantRequestAcceptAll"),
-            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 99,
-             "return apphostmod.AcceptAllGrants"),
+             "func (mod *Module) GetGrantRequestPolicy()"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 87,
+             "mod.policy.GrantRequest.Get(); !d.IsZero()"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 88,
+             "return mod.GrantRequestPolicyDelegated(d)"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 91,
+             "setting := mod.config.Policies.GrantRequest"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 93,
+             "case setting.Delegate != nil:"),
             (reference.ASTRALD, "mod/apphost/src/register_policy.go", 101,
+             "case setting.Accepts():"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 102,
+             "return apphostmod.AcceptAllGrants"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 104,
              "return apphostmod.RefuseAllGrants"),
-            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 102, "}"),
+            (reference.ASTRALD, "mod/apphost/src/register_policy.go", 105, "}"),
+            (reference.ASTRALD, "mod/apphost/src/config.go", 47,
+             'GrantRequest policyconf.Setting `yaml:"grant_request,omitempty"`'),
+            (reference.ASTRALD, "mod/apphost/src/config.go", 115,
+             "GrantRequest: policyconf.Setting{Mode: policyconf.RejectAll}"),
+            (reference.ASTRALD, "mod/apphost/src/op_set_app_register_policy.go", 45,
+             "func (mod *Module) OpSetGrantRequestPolicy("),
+            (reference.ASTRALD, "mod/apphost/src/op_set_app_register_policy.go", 52,
+             "mod.setPolicyDelegate(ctx, q, ch, args, &mod.policy.GrantRequest)"),
+            (reference.ASTRALD, "mod/apphost/src/op_set_app_register_policy.go", 53, "}"),
             (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 15,
              "OpListGrants lists the node-local grants"),
             (reference.ASTRALD, "mod/apphost/src/op_list_grants.go", 16,
@@ -1688,7 +1705,7 @@ class GateCitationTest(unittest.TestCase):
 
     def test_every_anchor_lands_on_its_claim(self):
         cites = (
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 45, "q.AcceptRaw()"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 31, "q.AcceptRaw()"),
             (reference.ASTRALD, "mod/user/src/op_bootstrap.go", 196,
              "mayClaim reports whether caller may claim this node"),
             (reference.ASTRALD, "mod/user/src/op_bootstrap.go", 204, "}"),
@@ -1783,7 +1800,7 @@ class SetAppRegisterPolicyTest(ApphostCase):
     async def test_an_unauthorized_caller_is_a_remote_error(self):
         """The op accepts, then answers a caller that does not hold
         `mod.auth.configure_node_state_action` with `not permitted`
-        (`op_set_app_register_policy.go:45-50`)."""
+        (`op_set_app_register_policy.go:31-36`)."""
         async with MockApphost(
             routes={
                 OP_SET_APP_REGISTER_POLICY: Accept(objects=(error_frame("not permitted"),))
@@ -2319,8 +2336,10 @@ class SecurityNoteTest(unittest.TestCase):
         resolves an identity, reads its request object or touches a store.
         Both setters in `op_set_app_register_policy.go` ask `maySetPolicies`,
         which asks `ConfigureNodeStateAction` alone (the manager holds it
-        through mod/sys), before `newDelegate` resolves a delegate and
-        `writePolicyDelegate` clears or writes it.
+        through mod/sys), before they hand their own tree value to
+        `setPolicyDelegate`, which refuses `mode` before `newDelegate` resolves
+        a delegate and `writePolicyDelegate` clears or writes it. Neither
+        setter reads a mode: the grant request policy has none at the pin.
         """
         ops = self.ops()
         admin_action = "AdminManageAppsAction"
@@ -2367,20 +2386,32 @@ class SecurityNoteTest(unittest.TestCase):
                     register, grant = src.split(
                         "func (mod *Module) OpSetGrantRequestPolicy("
                     )
-                    grant, rest = grant.split("func writePolicyDelegate(")
+                    grant, shared = grant.split("func (mod *Module) setPolicyDelegate(")
+                    shared, rest = shared.split("func writePolicyDelegate(")
                     may = rest.split("func (mod *Module) maySetPolicies(")[1]
                     self.assertIn("ConfigureNodeStateAction", may)
                     self.assertNotIn(admin_action, may)
                     self.assertNotIn("mod.Manager()", may)
-                    for body in (register, grant):
+                    for body, value in (
+                        (register, "&mod.policy.AppRegister"),
+                        (grant, "&mod.policy.GrantRequest"),
+                    ):
+                        hand_over = f"mod.setPolicyDelegate(ctx, q, ch, args, {value})"
+                        self.assertIn(hand_over, body)
                         self.assertLess(
-                            body.index("mod.maySetPolicies("),
-                            body.index("mod.newDelegate("),
+                            body.index("mod.maySetPolicies("), body.index(hand_over)
                         )
-                        self.assertLess(
-                            body.index("mod.newDelegate("),
-                            body.index("writePolicyDelegate("),
-                        )
+                        self.assertIn("args opSetPolicyArgs", body)
+                    self.assertLess(
+                        shared.index('refuseRemovedArgs(q.QueryString(), "mode")'),
+                        shared.index("mod.newDelegate("),
+                    )
+                    self.assertLess(
+                        shared.index("mod.newDelegate("),
+                        shared.index("writePolicyDelegate("),
+                    )
+                    self.assertNotIn("args.Mode", src)
+                    self.assertNotIn("GrantRequestMode", src)
 
         doc = apphost_module.__doc__ or ""
         self.assertIn("mod.auth.admin_manage_apps_action", doc)
@@ -2455,10 +2486,12 @@ class SecurityNoteTest(unittest.TestCase):
                 "apphost.bind",
                 "apphost.register_handler",
                 "apphost.cancel",
+                "nodes.resolve_endpoints",
             ],
         )
         self.assertIn("Claimed: []string{gateAny}", defaults)
-        self.assertIn("AppRegister: policyconf.Setting{Mode: policyconf.RejectAll}", defaults)
+        self.assertIn("AppRegister:  policyconf.Setting{Mode: policyconf.RejectAll}", defaults)
+        self.assertIn("GrantRequest: policyconf.Setting{Mode: policyconf.RejectAll}", defaults)
         doc = " ".join((apphost_module.__doc__ or "").split())
         self.assertIn(
             "The defaults are `.spec`, `apphost.register`, `sys.register_manager` "
@@ -2512,11 +2545,14 @@ class SecurityNoteTest(unittest.TestCase):
             (f"{self.SRC}/config.go", 26, "Gate lists the ops a session may call"),
             (f"{self.SRC}/config.go", 41, "}"),
             (f"{self.SRC}/config.go", 43, "Policies holds the config value"),
-            (f"{self.SRC}/config.go", 47, "}"),
-            (f"{self.SRC}/config.go", 80, "Gate: Gate{"),
-            (f"{self.SRC}/config.go", 105, "},"),
-            (f"{self.SRC}/config.go", 107, "Policies: Policies{"),
-            (f"{self.SRC}/config.go", 109, "},"),
+            (f"{self.SRC}/config.go", 47, "GrantRequest policyconf.Setting"),
+            (f"{self.SRC}/config.go", 48, "}"),
+            (f"{self.SRC}/config.go", 85, "Gate: Gate{"),
+            (f"{self.SRC}/config.go", 108, '"nodes.resolve_endpoints",'),
+            (f"{self.SRC}/config.go", 111, "},"),
+            (f"{self.SRC}/config.go", 113, "Policies: Policies{"),
+            (f"{self.SRC}/config.go", 115, "GrantRequest: policyconf.Setting{Mode: policyconf.RejectAll}"),
+            (f"{self.SRC}/config.go", 116, "},"),
             ("mod/user/src/authorize_user_or_node.go", 12, "within apphost's gate"),
             ("mod/user/src/authorize_user_or_node.go", 13, "node-local grant or a signed contract"),
             ("mod/user/src/authorize_user_or_node.go", 17, "authorizeUserOrNode"),
@@ -2566,51 +2602,51 @@ class RegisterCitationTest(unittest.TestCase):
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 83, "}"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 202, "Add(RegisterDuration)"),
             (reference.ASTRALD, f"{self.SRC}/op_register.go", 141, "CreateAccessToken(guestID"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 15,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 14,
              "type opSetPolicyArgs struct"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 25, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 45, "q.AcceptRaw()"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 48,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 24, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 31, "q.AcceptRaw()"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 34,
              "mod.maySetPolicies(ctx, q.Caller())"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 49,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 35,
              "auth.ErrNotPermitted"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 50, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 58,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 36, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 66,
              "d, err := mod.newDelegate("),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 60,
-             "writePolicyDelegate(ctx, d, &mod.policy.AppRegister)"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 63,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 68,
+             "writePolicyDelegate(ctx, d, v)"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 71,
              "return ch.Send(astral.Err(err))"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 64, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 121, "if d == nil {"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 122,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 72, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 80, "if d == nil {"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 81,
              "return v.Clear(ctx)"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 123, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 131,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 82, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 90,
              "func (mod *Module) newDelegate"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 132,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 91,
              'name == "" && op == ""'),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 133, "return nil, nil"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 134, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 136,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 92, "return nil, nil"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 93, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 95,
              "mod.Dir.ResolveIdentity(name)"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 141,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 100,
              "the node cannot be its own delegate"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 145, "d.Validate()"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 146, "}"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 148,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 104, "d.Validate()"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 105, "}"),
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 107,
              "maySetPolicies reports whether caller may select a policy"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 153,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 112,
              "func (mod *Module) maySetPolicies("),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 154,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 113,
              "ConfigureNodeStateAction"),
-            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 155, "}"),
-            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 41,
+            (reference.ASTRALD, f"{self.SRC}/op_set_app_register_policy.go", 114, "}"),
+            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 36,
              "func (mod *Module) GetRegisterAppPolicy()"),
-            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 46,
+            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 41,
              "setting := mod.config.Policies.AppRegister"),
-            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 59, "return apphostmod.RejectAll"),
-            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 60, "}"),
+            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 54, "return apphostmod.RejectAll"),
+            (reference.ASTRALD, f"{self.SRC}/register_policy.go", 55, "}"),
             (reference.ASTRALD, "mod/apphost/register_policy.go", 27,
              "AcceptAll is the accept_all policy"),
             (reference.ASTRALD, "mod/apphost/register_policy.go", 34, "}, nil"),

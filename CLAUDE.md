@@ -13,10 +13,19 @@ the wire core's `Any`/nil behaviour stays as it is.
 Authorities, in precedence order: the live node, astral-go
 (`../astral-go/main` @ `1ec701ca`, the merge of astral-go pull request #180,
 which adds `Vfs` and `Evaluator` to `mod.apphost.register_request`), astrald
-(`e6d691c6`, master at the bump), astral-docs. The SDK supports the node at
-those revisions and no older one, so a claim about an earlier astrald or
-astral-go has no place in this tree. astrald `e6d691c6` requires astral-go
-`1ec701ca` (`go.mod:7`).
+(`6974d9e7`, the merge of astrald pull request #476, which gives all five
+admission policies a config value), astral-docs (`.ai/system` @ `87e6bf06`).
+The SDK supports the node at those revisions and no older one, so a claim about
+an earlier astrald or astral-go has no place in this tree. astrald `6974d9e7`
+requires astral-go `1ec701ca` (`go.mod:7`).
+
+**Each of the five admission policies decides in one order: a stored
+delegate, then its config value, then the code default `reject_all`**
+(design 11.13). `app_register` and `grant_request` are `policies` of
+`apphost.yaml`; `swarm_join`, `swarm_invite` and `contract_accept` are
+`policies` of `user.yaml`. The grant request policy has no mode, and the node
+answers `mode` on `apphost.set_grant_request_policy` with
+`unknown argument: mode`.
 
 **Every type is read at the pins.** `mod.objects.repository_info`'s `Kind`,
 `Children` and `Concurrent` were the one exception: they arrived in astrald

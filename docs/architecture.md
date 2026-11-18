@@ -16,8 +16,8 @@ document states the resolution, and the resolution is binding.
 |---|---|---|
 | 1 | Live node | `tcp:127.0.0.1:8625`, `unix:~/.apphost.sock`, alias `furry-bolt`, identity `03b2704948bb…ae1` |
 | 1 | astral-go | `/home/intern0/work/astralp2p/astral-go/main` @ `1ec701ca` (the merge of astral-go pull request #180, which adds `Vfs` and `Evaluator` to `mod.apphost.register_request`) |
-| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `e6d691c6` (master at the bump, the merge of astrald pull request #466; it requires astral-go `1ec701ca`, `go.mod:7`) — authoritative for session semantics the client never exercises |
-| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `645f3c0`, the commit `.ai/system` pins. The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
+| 2 | astrald server | `/home/intern0/work/astralp2p/astrald/master` @ `6974d9e7` (the merge of astrald pull request #476, all five admission policies take a config value; it requires astral-go `1ec701ca`, `go.mod:7`) — authoritative for session semantics the client never exercises |
+| 3 | astral-docs | `/home/intern0/work/astralp2p/astral-docs/master` @ `87e6bf06`, the commit `.ai/system` pins (the merge of astral-docs pull request #187). The Tier A corpus reads astral-docs at its own frozen `1d6787c` (`tests/vectors/README.md`) and does not move with this row. |
 | — | Legacy astral-py | `/home/intern0/work/astralp2p/astral-py/master` — **reference only, code discarded** |
 
 When 1 and 3 disagree, 1 wins and the disagreement is filed in §9. When astral-go
@@ -1566,6 +1566,7 @@ implementation step 0.
 | G-20 | `ObjectID.IsZero()` ignores `Size`, so `{Size:99, Hash:0}` serialises to 40 zero bytes, JSON-marshals to `""`, yet `String()` renders `data1gg…`. |
 | G-21 | There is no way to fetch a blueprint's schema from a node: `objects.blueprints` returns names only and `objects.get_blueprint` is absent from the live registry, even though astral-go's docs imply schema learning is possible. |
 | G-22 | A two-step mutually-recursive `RefSpec` pair installed directly into the registry still stack-overflows at construction; the depth guard only wraps I/O. |
+| G-23 | Two astrald comments at `6974d9e7` still say an unset user policy delegate accepts. `opSetSwarmPolicyArgs` reads "or the bundled accept-all for contract accept" (`mod/user/src/op_set_swarm_policy.go:15-17`). The `policy` field reads "an unset value selects accept-all" and names `GetSwarmJoinPolicy`, `GetSwarmInvitePolicy` and `GetContractAcceptPolicy`, so it claims accept-all for all three user policies (`mod/user/src/module.go:33-35`). The code applies `policies.swarm_join`, `policies.swarm_invite` and `policies.contract_accept`, each `reject_all` by default (`mod/user/src/swarm_policy.go:33-49,55-71,97-115`); this SDK follows the code and cites neither comment. It cites the clear branch for the user setters' empty-names behaviour (`mod/user/src/op_set_swarm_policy.go:65-71`). |
 
 ---
 
@@ -1881,8 +1882,9 @@ register policy does not see either field (`mod/apphost/src/op_register.go:271-2
 astral-go `1ec701ca`'s own output: both fields nil, both true, both false, and one of each.
 
 The range changes these facts elsewhere. `defaultConfig` is a function, and every gate line
-moves by seven (`mod/apphost/src/config.go:55-111`). The grant request policy refuses all when
-no mode is stored (`mod/apphost/src/register_policy.go:84-102`). The apphost census is eighteen
+moves by seven (`mod/apphost/src/config.go:55-111`). The grant request policy refuses all on a
+node nobody configured (`mod/apphost/src/register_policy.go:84-102` at `e6d691c6`; 11.13 states
+the rule at the next pin). The apphost census is eighteen
 `op_*.go` files: `apphost.withdraw_relay` asks `mod.auth.admin_manage_apps_action` and refuses a
 network origin, and it has no client here. An active contract also requires
 `withdrawn_at IS NULL` (`mod/auth/src/db.go:16-21`). A decision whose contract permits name
@@ -1915,3 +1917,42 @@ A caller that is the node is no longer refused `not permitted to discover`: it r
 `services.not_granted` naming the service (inferred from `mod/services/src/visibility.go:40-42,
 88-102`; the Tier C test that states it skips without `ASTRAL_TEST_ENDPOINT`, and no run
 set it).
+
+## 11.13 Sections 11.9 and 11.12 — every admission policy takes a config value (AMENDED, implemented)
+
+The astrald pin moves to `6974d9e7`, the merge of astrald pull request #476; astral-go stays at
+`1ec701ca`, which astrald `6974d9e7` still requires (`go.mod:7`). `.ai/system` pins astral-docs
+`87e6bf06`, the merge of astral-docs pull request #187, which documents the same change
+(`topics/node-policies.md`, *The five policies*).
+
+**Each of the five admission policies decides in one order: a stored delegate, then its config
+value, then the code default `reject_all`.** The app register and grant request policies read
+`policies.app_register` and `policies.grant_request` of `apphost.yaml`
+(`mod/apphost/src/config.go:43-48,113-116`); the swarm join, swarm invite and contract accept
+policies read `policies.swarm_join`, `policies.swarm_invite` and `policies.contract_accept` of
+`user.yaml` (`mod/user/src/config.go:25-39`). The getters are
+`mod/apphost/src/register_policy.go:36-55,86-105` and
+`mod/user/src/swarm_policy.go:33-49,55-71,97-115`. This supersedes two facts: 11.9's list of
+the policies with a config value, which named three, and 11.12's grant request rule. The
+contract accept policy no longer accepts every valid contract when no delegate is stored, so a
+node on the defaults answers `user.accept_contract` with `contract declined`.
+
+**The grant request policy has no mode.** `apphost.set_grant_request_policy` takes the delegate
+arguments of `apphost.set_app_register_policy`, shares its write path, and answers a query that
+names `mode` with `unknown argument: mode` (`mod/apphost/src/op_set_app_register_policy.go:45-76`,
+`mod/apphost/src/validate_permits.go:31-35`). No client in this SDK sent `mode`, and
+`astral.api.policy.setter_query` never builds it.
+
+The range changes these facts elsewhere. The default unclaimed gate list adds
+`nodes.resolve_endpoints` (`mod/apphost/src/config.go:82-84,108`), and every gate line moves by
+five or more. The manager also holds `mod.vfs.manage_action` and `mod.vfs.read_action` over every
+VFS of the node, in every node state (`mod/sys/src/authorizers.go:20-36`).
+`user.accept_membership` stores and activates the contract and indexes it before it sends the
+countersignature, and of concurrent invitations one commits and every other reads
+`node already claimed` (`mod/user/src/op_accept_membership.go:99-121`).
+
+**Amendment: the docstrings of `astral.api.policy`, `astral.api.apphost`, `astral.api.user` and
+`astral.api.sys` state the five-policy rule and the facts above at `6974d9e7`.** No wire type and
+no client method changed. Every citation into a file the range changed was re-read, and
+`tests/test_api_policy.py`, `tests/test_api_apphost.py`, `tests/test_api_user.py` and
+`tests/test_api_sys.py` read each one at the pin. No node was run against.
