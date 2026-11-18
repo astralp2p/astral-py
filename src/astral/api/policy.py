@@ -38,7 +38,7 @@ that reason: a module client is a bound set of ops and this module has none.
 op declares `Identity string`, `Operation string` and `Timeout
 astral.Duration`, and reads both names empty as a clear of the stored delegate
 (`mod/apphost/src/op_set_app_register_policy.go:14-24` and
-`mod/user/src/op_set_swarm_policy.go:14-25` at astrald `6974d9e7`). The two
+`mod/user/src/op_set_swarm_policy.go:65-71` at astrald `6974d9e7`). The two
 apphost setters share `opSetPolicyArgs` and one write path, which answers a
 query naming `mode` with `unknown argument: mode` before it writes anything
 (`mod/apphost/src/op_set_app_register_policy.go:30,45,61-64`,

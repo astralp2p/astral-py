@@ -235,8 +235,8 @@ class CitationTest(unittest.TestCase):
         ("mod/apphost/src/op_set_app_register_policy.go", 64): "}",
         ("mod/apphost/src/validate_permits.go", 31): "func refuseRemovedArgs(",
         ("mod/apphost/src/validate_permits.go", 35): "query.ErrUnknownArgument, name",
-        ("mod/user/src/op_set_swarm_policy.go", 14): "type opSetSwarmPolicyArgs struct",
-        ("mod/user/src/op_set_swarm_policy.go", 25): "}",
+        ("mod/user/src/op_set_swarm_policy.go", 65): 'args.Identity == "" && args.Operation == ""',
+        ("mod/user/src/op_set_swarm_policy.go", 71): "}",
     }
 
     def assert_lands(self, repo: str, anchors: dict) -> None:
